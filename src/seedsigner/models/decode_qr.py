@@ -91,6 +91,9 @@ class DecodeQR:
             elif self.qr_type == QRType.SIGN_MESSAGE:
                 self.decoder = SignMessageQrDecoder() # Single Segment sign message request
 
+            elif self.qr_type == QRType.SIGN_REQUEST__SEVENF:
+                self.decoder = SevenFSignRequestQrDecoder() # Single Segment 7F sign request (demo format)
+
             elif self.qr_type == QRType.WALLET__SPECTER:
                 self.decoder = SpecterWalletQrDecoder() # Specter Desktop Wallet Export decoder
 
@@ -295,7 +298,12 @@ class DecodeQR:
     @property
     def is_sign_message(self):
         return self.qr_type == QRType.SIGN_MESSAGE
-        
+
+
+    @property
+    def is_sign_request_sevenf(self):
+        return self.qr_type == QRType.SIGN_REQUEST__SEVENF
+
 
     @property
     def is_wallet_descriptor(self):
@@ -393,6 +401,10 @@ class DecodeQR:
             # message signing
             elif s.startswith("signmessage"):
                 return QRType.SIGN_MESSAGE
+
+            # 7F sign request (Phase 1 demo format only, see SevenFSignRequestQrDecoder)
+            elif s.startswith(SevenFSignRequestQrDecoder.PREFIX):
+                return QRType.SIGN_REQUEST__SEVENF
 
             # config data
             if s.startswith("settings::"):
@@ -988,6 +1000,66 @@ class SignMessageQrDecoder(BaseSingleFrameQrDecoder):
 
     def get_qr_data(self) -> dict:
         return dict(derivation_path=self.derivation_path, message=self.message)
+
+
+
+class SevenFSignRequestQrDecoder(BaseSingleFrameQrDecoder):
+    """
+        Decodes a single-frame demo QR carrying a mocked 7F sign-request payload.
+
+        Phase 1 (UI-walkthrough demo) stand-in only. The real 7F sign envelope is
+        CBOR/UR, not this ad hoc JSON text format — see
+        docs/7f-integration/qr-envelope-ur-types.md in the diy-seedsigner repo.
+    """
+    PREFIX = "sevenf-sign-request:"
+
+    def __init__(self):
+        super().__init__()
+        self.operation = None
+        self.network = None
+        self.layer = None
+        self.amount = None
+        self.counterparty = None
+        self.derivation_path = None
+
+
+    def add(self, segment, qr_type=QRType.SIGN_REQUEST__SEVENF):
+        """
+            Expected QR data format:
+
+            sevenf-sign-request:{json payload}
+
+            where the JSON payload has keys: operation, network, layer,
+            derivation_path, and (when applicable to the operation) amount and
+            counterparty.
+        """
+        try:
+            payload = json.loads(segment[len(self.PREFIX):])
+            self.operation = payload["operation"]
+            self.network = payload["network"]
+            self.layer = payload["layer"]
+            self.derivation_path = payload["derivation_path"]
+            self.amount = payload.get("amount")
+            self.counterparty = payload.get("counterparty")
+        except (ValueError, KeyError) as e:
+            logger.info(f"7F sign request: could not parse payload: {e}")
+            return DecodeQRStatus.INVALID
+
+        self.complete = True
+        self.collected_segments = 1
+
+        return DecodeQRStatus.COMPLETE
+
+
+    def get_qr_data(self) -> dict:
+        return dict(
+            operation=self.operation,
+            network=self.network,
+            layer=self.layer,
+            derivation_path=self.derivation_path,
+            amount=self.amount,
+            counterparty=self.counterparty,
+        )
 
 
 

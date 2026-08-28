@@ -24,6 +24,11 @@ class QRType:
 
     SIGN_MESSAGE = "sign_message"
 
+    # 7F integration (Phase 1 UI-walkthrough demo format only; the real envelope is
+    # CBOR/UR, see docs/7f-integration/qr-envelope-ur-types.md in the diy-seedsigner
+    # repo). See docs/7f-integration/README.md there for the overall design.
+    SIGN_REQUEST__SEVENF = "sign_request__sevenf"
+
     WALLET__SPECTER = "wallet__specter"
     WALLET__UR = "wallet__ur"
     WALLET__CONFIGFILE = "wallet__configfile"

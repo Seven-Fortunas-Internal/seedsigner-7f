@@ -530,6 +530,7 @@ class SeedOptionsView(View):
     EXPORT_XPUB = ButtonOption("Export xpub")
     EXPLORER = ButtonOption("Address explorer")
     SIGN_MESSAGE = ButtonOption("Sign message")
+    SEVENF = ButtonOption("7F signing (demo)", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")
@@ -580,7 +581,10 @@ class SeedOptionsView(View):
 
         if self.settings.get_value(SettingsConstants.SETTING__MESSAGE_SIGNING) == SettingsConstants.OPTION__ENABLED:
             button_data.append(self.SIGN_MESSAGE)
-        
+
+        if self.settings.get_value(SettingsConstants.SETTING__SEVENF_ENABLED) == SettingsConstants.OPTION__ENABLED:
+            button_data.append(self.SEVENF)
+
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)
 
@@ -613,6 +617,10 @@ class SeedOptionsView(View):
             self.controller.sign_message_data = dict(seed=self.seed)
             self.controller.resume_main_flow = Controller.FLOW__SIGN_MESSAGE
             return Destination(ScanView)
+
+        elif button_data[selected_menu_num] == self.SEVENF:
+            from seedsigner.views.seven_fortunas_views import SevenFOptionsView
+            return Destination(SevenFOptionsView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.BACKUP:
             return Destination(SeedBackupView, view_args=dict(seed=self.seed))

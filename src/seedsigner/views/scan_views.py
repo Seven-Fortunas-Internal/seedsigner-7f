@@ -156,7 +156,20 @@ class ScanView(View):
                         message=qr_data["message"],
                     )
                 )
-            
+
+            elif self.decoder.is_sign_request_sevenf:
+                from seedsigner.views.seven_fortunas_views import SevenFSignStartView
+                # Usually `sevenf_data["seed"]` was already stashed by SevenFOptionsView
+                # before we got here; but this generic ScanView is also reachable
+                # directly (e.g. from MainMenuView's Scan button) with no seed loaded
+                # yet at all, so `sevenf_data` may still be None here.
+                self.controller.sevenf_data = {
+                    **(self.controller.sevenf_data or {}),
+                    **self.decoder.get_qr_data(),
+                }
+
+                return Destination(SevenFSignStartView, skip_current_view=True)
+
             else:
                 return Destination(NotYetImplementedView)
 
@@ -197,6 +210,21 @@ class ScanWalletDescriptorView(ScanView):
     @property
     def is_valid_qr_type(self):
         return self.decoder.is_wallet_descriptor
+
+
+
+class ScanSevenFView(ScanView):
+    """
+        7F integration (Phase 1 UI-walkthrough demo). Scans the demo
+        `sevenf-sign-request:` JSON QR format only — not the real CBOR/UR envelope
+        (see docs/7f-integration/qr-envelope-ur-types.md in the diy-seedsigner repo).
+    """
+    instructions_text = _mft("Scan 7F sign request")
+    invalid_qr_type_message = _mft("Expected a 7F sign request")
+
+    @property
+    def is_valid_qr_type(self):
+        return self.decoder.is_sign_request_sevenf
 
 
 
