@@ -46,6 +46,25 @@ _REVIEW_FIELDS = [
 ]
 
 
+# Real-hardware finding (2026-08-28): this dev image's camera stack is the legacy
+# `picamera` (MMAL) API, which doesn't work at all against this kernel's
+# libcamera-only V4L2 nodes -- so ScanSevenFView (real QR scan) can't actually be
+# exercised here. Rather than block the walkthrough on that, the demo SIGN button
+# skips scanning entirely and hands SevenFSignStartView a synthetic, instructive
+# example sign-request directly. ScanSevenFView/the decoder are still real, tested
+# code (see tests/test_flows_seven_fortunas.py) for whenever a real camera (or the
+# real CBOR/UR envelope) is available -- this is a Phase 1 demo convenience, not a
+# replacement for that path.
+_DEMO_SIGN_REQUEST = dict(
+    operation="Transfer",
+    network="testnet",
+    layer="L1",
+    amount="42.0 7F",
+    counterparty="7fdemo1recipientexampleaddressxxxxxxxxxxxx",
+    derivation_path="m/7fchain/wallet/0'/falcon/v1/0'",
+)
+
+
 def _mock_derivation_path(seed: Seed) -> str:
     """
         PLACEHOLDER derivation path for the Phase 1 UI demo only. Real path
@@ -102,9 +121,8 @@ class SevenFOptionsView(View):
             return Destination(SevenFDerivationView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.SIGN:
-            from seedsigner.views.scan_views import ScanSevenFView
-            self.controller.sevenf_data = dict(seed=self.seed)
-            return Destination(ScanSevenFView)
+            self.controller.sevenf_data = dict(seed=self.seed, **_DEMO_SIGN_REQUEST)
+            return Destination(SevenFSignStartView)
 
 
 

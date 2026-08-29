@@ -101,16 +101,16 @@ class TestSevenFFlows(FlowTest):
 
     def test_sevenf_sign_flow(self):
         """
-            SeedOptionsView -> SevenFOptionsView -> ScanSevenFView ->
-            SevenFSignStartView -> SevenFConfirmPayloadView (paged) ->
-            SevenFConfirmAddressView -> SevenFSignedQRView -> MainMenuView.
+            SeedOptionsView -> SevenFOptionsView -> SevenFSignStartView (redirect,
+            synthetic demo payload -- no camera/scan needed, see _DEMO_SIGN_REQUEST) ->
+            SevenFConfirmPayloadView (paged) -> SevenFConfirmAddressView ->
+            SevenFSignedQRView -> MainMenuView.
         """
         self.settings.set_value(SettingsConstants.SETTING__SEVENF_ENABLED, SettingsConstants.OPTION__ENABLED)
 
         self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
             FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF),
             FlowStep(sevenf_views.SevenFOptionsView, button_data_selection=sevenf_views.SevenFOptionsView.SIGN),
-            FlowStep(scan_views.ScanSevenFView, before_run=load_sign_request_into_decoder),
             FlowStep(sevenf_views.SevenFSignStartView, is_redirect=True),
             FlowStep(sevenf_views.SevenFConfirmPayloadView, screen_return_value=0),  # Operation (1/3)
             FlowStep(sevenf_views.SevenFConfirmPayloadView, screen_return_value=0),  # Network / Layer (2/3)
@@ -129,23 +129,20 @@ class TestSevenFFlows(FlowTest):
             A sign request with no amount/counterparty should page through only the
             fields it actually carries (Operation, Network / Layer) -- never a blank
             or misleading "Amount / Counterparty" page.
+
+            The demo SIGN button always uses the fixed _DEMO_SIGN_REQUEST (which does
+            carry amount/counterparty), so this exercises the field-skipping logic
+            directly against SevenFConfirmPayloadView/SevenFSignStartView rather than
+            through a button-driven flow.
         """
         self.settings.set_value(SettingsConstants.SETTING__SEVENF_ENABLED, SettingsConstants.OPTION__ENABLED)
+        seed = self.seed_fixture()
+        self.controller.sevenf_data = dict(seed=seed, **NO_AMOUNT_SIGN_REQUEST)
 
-        self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
-            FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF),
-            FlowStep(sevenf_views.SevenFOptionsView, button_data_selection=sevenf_views.SevenFOptionsView.SIGN),
-            FlowStep(
-                scan_views.ScanSevenFView,
-                before_run=lambda view: load_sign_request_into_decoder(view, NO_AMOUNT_SIGN_REQUEST),
-            ),
-            FlowStep(sevenf_views.SevenFSignStartView, is_redirect=True),
-            FlowStep(sevenf_views.SevenFConfirmPayloadView, screen_return_value=0),  # Operation (1/2)
-            FlowStep(sevenf_views.SevenFConfirmPayloadView, screen_return_value=0),  # Network / Layer (2/2)
-            FlowStep(sevenf_views.SevenFConfirmAddressView, screen_return_value=0),
-            FlowStep(sevenf_views.SevenFSignedQRView, screen_return_value=0),
-            FlowStep(MainMenuView),
-        ])
+        sevenf_views.SevenFSignStartView()  # normalizes controller.sevenf_data in place
+        payload_view = sevenf_views.SevenFConfirmPayloadView(page_num=0)
+
+        assert [label for label, _value in payload_view.fields] == ["Operation", "Network / Layer"]
 
 
     def test_sevenf_confirm_payload_back_button_navigation(self):
@@ -161,7 +158,6 @@ class TestSevenFFlows(FlowTest):
         self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
             FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF),
             FlowStep(sevenf_views.SevenFOptionsView, button_data_selection=sevenf_views.SevenFOptionsView.SIGN),
-            FlowStep(scan_views.ScanSevenFView, before_run=load_sign_request_into_decoder),
             FlowStep(sevenf_views.SevenFSignStartView, is_redirect=True),
             FlowStep(sevenf_views.SevenFConfirmPayloadView, screen_return_value=0),  # page 1/3 -> Next
             FlowStep(sevenf_views.SevenFConfirmPayloadView, screen_return_value=RET_CODE__BACK_BUTTON),  # page 2/3 -> Back
@@ -170,6 +166,24 @@ class TestSevenFFlows(FlowTest):
         ])
 
         assert self.controller.sevenf_data is None
+
+
+    def test_scan_sevenf_view_is_valid_qr_type(self):
+        """
+            ScanSevenFView isn't reachable from the demo SIGN button anymore (see
+            _DEMO_SIGN_REQUEST), but it's still real, working code for whenever a real
+            camera or the real CBOR/UR envelope is wired up -- keep it covered
+            directly.
+        """
+        seed = self.seed_fixture()
+        self.controller.sevenf_data = dict(seed=seed)
+
+        view = scan_views.ScanSevenFView()
+        assert view.is_valid_qr_type is False  # nothing decoded yet
+
+        load_sign_request_into_decoder(view)
+        assert view.is_valid_qr_type is True
+        assert view.decoder.get_qr_data()["operation"] == DEFAULT_SIGN_REQUEST["operation"]
 
 
     def test_sevenf_sign_request_scanned_with_no_seed_loaded(self):

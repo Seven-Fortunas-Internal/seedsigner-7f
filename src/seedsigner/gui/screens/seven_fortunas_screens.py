@@ -18,6 +18,38 @@ from seedsigner.gui.components import FormattedAddress, GUIConstants, IconTextLi
 from .screen import ButtonListScreen, ButtonOption
 
 
+# Real-hardware finding (240x240 HAT, 2026-08-28): IconTextLine's auto_line_break
+# only ever breaks *between* words (on spaces) -- it can't break a single long
+# unbroken run of characters. 7F derivation paths and addresses are exactly that:
+# long slash-delimited or alphanumeric runs with no spaces, meaningfully longer than
+# the short bip32 paths (e.g. "m/84'/0'/0'/0/0") this component was designed around.
+# Left unwrapped, a long value overflows the screen width -- and, worse, inflates
+# IconTextLine's internal centering-offset math (`max_textarea_width`) enough to go
+# negative, which clips the *label* too (confirmed on-device: "derivation path"
+# rendered as "rivation path" for a 40-char L2 path). Breaking long words onto two
+# lines ourselves, at a '/' boundary near the midpoint, avoids both problems.
+_MAX_UNBROKEN_VALUE_CHARS = 24
+
+def _wrap_long_value_for_display(text: str) -> str:
+    def wrap_word(word: str) -> str:
+        if len(word) <= _MAX_UNBROKEN_VALUE_CHARS:
+            return word
+        mid = len(word) // 2
+        left_slash = word.rfind("/", 0, mid)
+        right_slash = word.find("/", mid)
+        if left_slash == -1 and right_slash == -1:
+            break_at = mid
+        elif left_slash == -1:
+            break_at = right_slash
+        elif right_slash == -1:
+            break_at = left_slash + 1
+        else:
+            break_at = (left_slash + 1) if (mid - left_slash) <= (right_slash - mid) else right_slash
+        return word[:break_at] + "\n" + word[break_at:]
+
+    return " ".join(wrap_word(word) for word in text.split(" "))
+
+
 
 @dataclass
 class SevenFAddressScreen(ButtonListScreen):
@@ -40,8 +72,9 @@ class SevenFAddressScreen(ButtonListScreen):
             icon_name=SeedSignerIconConstants.DERIVATION,
             icon_color=GUIConstants.INFO_COLOR,
             label_text=_("derivation path"),
-            value_text=self.derivation_path,
+            value_text=_wrap_long_value_for_display(self.derivation_path),
             is_text_centered=True,
+            auto_line_break=True,
             screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,
         )
         self.components.append(derivation_path_display)
@@ -89,8 +122,9 @@ class SevenFReviewFieldScreen(ButtonListScreen):
             icon_name=self.icon_name,
             icon_color=GUIConstants.INFO_COLOR,
             label_text=self.label_text,
-            value_text=self.value_text,
+            value_text=_wrap_long_value_for_display(self.value_text),
             is_text_centered=True,
+            auto_line_break=True,
             screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,
         )
         self.components.append(value_display)
@@ -118,8 +152,9 @@ class SevenFConfirmSignScreen(ButtonListScreen):
             icon_name=SeedSignerIconConstants.DERIVATION,
             icon_color=GUIConstants.INFO_COLOR,
             label_text=_("derivation path"),
-            value_text=self.derivation_path,
+            value_text=_wrap_long_value_for_display(self.derivation_path),
             is_text_centered=True,
+            auto_line_break=True,
             screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,
         )
         self.components.append(derivation_path_display)
