@@ -81,6 +81,7 @@ class BackgroundImportThread(BaseThread):
         time_import('seedsigner.views.seed_views')
         time_import('seedsigner.views.tools_views')
         time_import('seedsigner.views.settings_views')
+        time_import('seedsigner.views.multichain_views')
 
 
 
@@ -123,6 +124,10 @@ class Controller(Singleton):
     address_explorer_data: dict = None
 
     sign_message_data: dict = None
+
+    # Multi-chain (Phase 1 UI-walkthrough demo; mocked data, no real crypto yet).
+    # See docs/multi-chain/README.md in the diy-seedsigner repo.
+    multichain_data: dict = None
     # TODO: end refactor section
 
     # Destination placeholder for when we need to jump out to a side flow but intend to
@@ -303,6 +308,7 @@ class Controller(Singleton):
                     self.psbt = None
                     self.psbt_parser = None
                     self.psbt_seed = None
+                    self.multichain_data = None
                 
                 logger.info(f"\nback_stack: {self.back_stack}")
 
