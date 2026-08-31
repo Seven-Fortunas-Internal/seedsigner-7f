@@ -170,6 +170,11 @@ class EvmPlugin:
 
         token = KNOWN_TOKENS.get((tx.chain_id, tx.to_checksum_address))
         token_label = token.symbol if token else f"Unknown token ({tx.to_checksum_address})"
+        token_field = ReviewField(
+            "Token", token_label,
+            is_warning=token is None,
+            warning_detail="" if token else "Unrecognized contract -- verify independently.",
+        )
 
         if tx.value != 0:
             # Self-validation gap this closes: transfer()/approve() calldata carries
@@ -180,18 +185,22 @@ class EvmPlugin:
             fields.append(ReviewField(
                 "Value (native ETH)", f"{format_units(tx.value, 18)} ETH",
                 is_warning=True,
-                warning_detail="This transaction also sends native ETH alongside the "
-                                "token call -- unusual for a plain transfer/approve. "
-                                "Confirm this is expected before signing.",
+                warning_detail="Sends ETH alongside the token call -- unusual. "
+                                "Confirm this is expected.",
             ))
 
         if call.function == "transfer":
             fields.append(ReviewField("Operation", "Token Transfer"))
-            fields.append(self._amount_field(call.amount, token, token_label))
+            # Always its own field -- for a known token this is just the symbol; for
+            # an unknown one it's the contract address, which must be checkable on
+            # its own line, not only buried inside a warning sentence (a real
+            # overflow bug on this exact screen, caught by screenshot rendering).
+            fields.append(token_field)
+            fields.append(self._amount_field(call.amount, token))
             fields.append(ReviewField("To", call.recipient_or_spender))
         else:  # "approve"
             fields.append(ReviewField("Operation", "Token Approval"))
-            fields.append(ReviewField("Token", token_label))
+            fields.append(token_field)
             fields.append(ReviewField("Spender", call.recipient_or_spender))
             if call.is_unlimited_approval:
                 # Anti-scam research: unlimited approvals are the single largest
@@ -199,11 +208,15 @@ class EvmPlugin:
                 fields.append(ReviewField(
                     "Amount", "UNLIMITED",
                     is_warning=True,
-                    warning_detail=f"Grants the spender permission to move ALL your "
-                                    f"{token_label}, forever, until revoked.",
+                    # Doesn't repeat token_label here -- "Token" is already its own
+                    # field, and for an unrecognized contract that label can be a
+                    # full address, long enough to overflow this screen (a real bug
+                    # caught by screenshot rendering -- see _amount_field's warning).
+                    warning_detail="Grants the spender permission to move ALL of "
+                                    "this token, forever, until revoked.",
                 ))
             else:
-                fields.append(self._amount_field(call.amount, token, token_label))
+                fields.append(self._amount_field(call.amount, token))
 
         fields.append(ReviewField(
             "First-time address", "Not seen before on this device",
@@ -235,18 +248,18 @@ class EvmPlugin:
         return call
 
     @staticmethod
-    def _amount_field(raw_amount: int, token, token_label: str) -> ReviewField:
+    def _amount_field(raw_amount: int, token) -> ReviewField:
         if token:
             return ReviewField("Amount", f"{format_units(raw_amount, token.decimals)} {token.symbol}")
         # No bundled decimals/symbol for this contract -- show the raw amount rather
         # than guess at a decimals value (docs/multi-chain/README.md: a token's
-        # decimals aren't recoverable from calldata alone).
+        # decimals aren't recoverable from calldata alone). The contract address
+        # itself is already its own "Token" field -- not repeated here.
         return ReviewField(
             "Amount", f"{raw_amount} (raw units)",
             is_warning=True,
-            warning_detail=f"Unrecognized token contract -- verify {token_label}'s "
-                            "symbol and decimals independently before trusting this "
-                            "amount.",
+            warning_detail="Unrecognized token -- verify its symbol and decimals "
+                            "independently before trusting this amount.",
         )
 
     def _parse_permit_demo(self, payload: bytes) -> ParsedRequest:

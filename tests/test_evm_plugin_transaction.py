@@ -107,6 +107,37 @@ def test_native_value_alongside_erc20_call_is_flagged():
     assert value_field.value == "0.001 ETH"
 
 
+def test_unrecognized_token_contract_flags_token_field_and_keeps_address_out_of_warning_text():
+    """A known-token transfer shows the address inline in a warning sentence used to
+    overflow this screen (a real bug caught by screenshot rendering) -- fixed by
+    giving the token contract its own field, flagged, with a short warning that
+    doesn't repeat the address."""
+    unknown_contract = "0x7F1A2e3d4C5B6a7988776655443322112233eEDC"
+    payload = _unsigned_payload({
+        **BASE_TX, "to": unknown_contract,
+        "data": _erc20_transfer_calldata(SOME_ADDRESS, 1_000_000)})
+    plugin = ChainRegistry.get("evm")
+
+    parsed = plugin.parse_sign_request(payload)
+    by_label = {f.label: f for f in parsed.review_fields}
+
+    assert by_label["Token"].is_warning is True
+    assert unknown_contract in by_label["Token"].value
+    # The address must not also be repeated inside another field's warning text.
+    assert unknown_contract not in by_label["Amount"].warning_detail
+
+
+def test_known_token_contract_does_not_flag_token_field():
+    payload = _unsigned_payload({
+        **BASE_TX, "data": _erc20_transfer_calldata(SOME_ADDRESS, 1_000_000)})
+    plugin = ChainRegistry.get("evm")
+
+    parsed = plugin.parse_sign_request(payload)
+    token_field = next(f for f in parsed.review_fields if f.label == "Token")
+    assert token_field.is_warning is False
+    assert token_field.value == "USDC"
+
+
 def test_zero_value_erc20_call_has_no_value_field():
     payload = _unsigned_payload({
         **BASE_TX, "value": 0, "data": _erc20_transfer_calldata(SOME_ADDRESS, 1)})
