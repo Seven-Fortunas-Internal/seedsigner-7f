@@ -5,4 +5,7 @@ Pillow==10.3.0
 pycryptodome==3.23.0
 pyzbar @ git+https://github.com/seedsigner/pyzbar.git@c3c237821c6a20b17953efe59b90df0b514a1c03
 qrcode==8.0
+# Canonical RLP codec (Ethereum Foundation) for EIP-1559 transaction decode/encode
+# (chains/evm/transaction.py). Pure Python (py3-none-any wheel) -- no ARM build risk.
+rlp==5.0.0
 urtypes @ git+https://github.com/selfcustody/urtypes.git@7fb280eab3b3563dfc57d2733b0bf5cbc0a96a6a

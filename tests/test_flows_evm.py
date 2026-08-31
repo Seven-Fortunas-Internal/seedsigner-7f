@@ -96,14 +96,15 @@ class TestEvmFlows(FlowTest):
     def test_evm_sign_flow_transfer(self):
         """ SeedOptionsView -> ... -> EvmSignSelectView -> EvmSignStartView (redirect)
             -> EvmConfirmPayloadView (paged) -> EvmConfirmAddressView ->
-            EvmSignedQRView -> MainMenuView. Ordinary transfer: 4 review fields
-            (Operation, Network, Amount, To) + first-time-address warning. """
+            EvmSignedQRView -> MainMenuView. Ordinary transfer (rollout Phase 4: a
+            real RLP-encoded EIP-1559 transaction, really signed): 4 review fields
+            (Network, Operation, Amount, To) + first-time-address warning. """
         self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
             FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.SIGN),
             FlowStep(evm_views.EvmSignSelectView, screen_return_value=0),  # "Ordinary transfer"
             FlowStep(evm_views.EvmSignStartView, is_redirect=True),
-            FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Operation (1/5)
-            FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Network (2/5)
+            FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Network (1/5)
+            FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Operation (2/5)
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Amount (3/5)
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # To (4/5)
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # First-time address warning (5/5)
@@ -128,6 +129,68 @@ class TestEvmFlows(FlowTest):
         amount_field = next(f for f in parsed.review_fields if f.label == "Amount")
         assert amount_field.is_warning is True
         assert amount_field.value == "UNLIMITED"
+
+
+    def test_evm_transfer_scenario_review_fields_are_real(self):
+        """ The transfer demo is a real RLP-encoded EIP-1559 transaction (rollout
+            Phase 4) -- confirms the review fields show the real decoded amount/
+            recipient, not placeholder text. """
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, _DEMO_TO_ADDRESS
+
+        plugin = ChainRegistry.get("evm")
+        parsed = plugin.parse_sign_request(DEMO_SCENARIOS["transfer"])
+        by_label = {f.label: f.value for f in parsed.review_fields}
+
+        assert by_label["Operation"] == "Transfer"
+        assert by_label["Amount"] == "0.05 ETH"
+        assert by_label["To"] == _DEMO_TO_ADDRESS
+        assert by_label["Network"] == "Optimism Sepolia (testnet)"
+
+
+    def test_evm_approve_scenario_resolves_known_usdc_token(self):
+        """ approve_unlimited's contract address is Circle's real Optimism Sepolia
+            USDC address (constants.KNOWN_TOKENS) -- confirms the token symbol
+            resolves from that table rather than showing a raw/unknown-token
+            warning. """
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+
+        plugin = ChainRegistry.get("evm")
+        parsed = plugin.parse_sign_request(DEMO_SCENARIOS["approve_unlimited"])
+        by_label = {f.label: f.value for f in parsed.review_fields}
+
+        assert by_label["Token"] == "USDC"
+
+
+    def test_evm_sign_produces_real_recoverable_signature(self):
+        """ End-to-end rollout Phase 4 check: signing the transfer demo scenario with
+            a known seed produces a real ECDSA signature that recovers to the address
+            derived for that same seed/path -- not just screen navigation. """
+        from eth_keys import keys as eth_keys
+
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
+        from seedsigner.chains.evm.transaction import UnsignedEip1559Transaction
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+        path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+        payload = DEMO_SCENARIOS["transfer"]
+
+        address = plugin.derive_address(seed.seed_bytes, path).address
+        signature = plugin.sign(seed.seed_bytes, path, payload)
+
+        assert len(signature.signature_bytes) == 65
+        r = int.from_bytes(signature.signature_bytes[:32], "big")
+        s = int.from_bytes(signature.signature_bytes[32:64], "big")
+        y_parity = signature.signature_bytes[64]
+
+        msg_hash = UnsignedEip1559Transaction(payload).signing_hash()
+        recovered = eth_keys.Signature(vrs=(y_parity, r, s)).recover_public_key_from_msg_hash(
+            msg_hash).to_checksum_address()
+
+        assert recovered == address
 
 
     def test_evm_sign_flow_permit_flags_offchain_warning(self):

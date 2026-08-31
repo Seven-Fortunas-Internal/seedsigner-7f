@@ -213,12 +213,20 @@ class EvmSignStartView(View):
 
         from seedsigner.chains import ChainRegistry
         plugin = ChainRegistry.get("evm")
-        parsed = plugin.parse_sign_request(DEMO_SCENARIOS[scenario_key])
+        payload = DEMO_SCENARIOS[scenario_key]
+        parsed = plugin.parse_sign_request(payload)
+
+        # Derivation path is a wallet-side choice, not part of the signed payload
+        # itself (a real transaction/permit carries no such field) -- the view layer
+        # owns it, same as EvmAddressView already does. Account 0 / index 0 for this
+        # demo menu; a real scanned request would let the operator pick an account.
+        derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
 
         self.controller.multichain_data = dict(
             seed=seed,
             chain_id="evm",
-            derivation_path=parsed.derivation_path,
+            derivation_path=derivation_path,
+            payload=payload,
             fields=parsed.review_fields,
         )
 
@@ -301,15 +309,17 @@ class EvmConfirmAddressView(View):
 
 
 class EvmSignedQRView(View):
-    """ Displays a FAKE signature as a QR code. os.urandom output via EvmPlugin.sign(),
-        not real ECDSA -- there is no crypto core wired up yet. """
+    """ Real signature for the transfer/approve_unlimited demo scenarios (real
+        RLP-encoded transactions, signed for real -- see chains/evm/plugin.py); the
+        permit scenario still gets a FAKE os.urandom signature, since permit signing
+        itself is still Phase 1 (see plugin.py's module docstring). """
     def __init__(self):
         super().__init__()
         from seedsigner.chains import ChainRegistry
 
         data = self.controller.multichain_data
         plugin = ChainRegistry.get("evm")
-        signature = plugin.sign(data["seed"].seed_bytes, data["derivation_path"], payload=b"")
+        signature = plugin.sign(data["seed"].seed_bytes, data["derivation_path"], payload=data["payload"])
         self.encoded_signature = plugin.encode_response(signature).decode()
 
 

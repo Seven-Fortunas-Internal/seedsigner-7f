@@ -44,13 +44,18 @@ def private_key_to_checksum_address(private_key: bytes) -> str:
     public_key.compressed = False
     uncompressed = public_key.sec()  # 65 bytes: 0x04 prefix + 32-byte X + 32-byte Y
     address_bytes = keccak256(uncompressed[1:])[-20:]
-    return _to_checksum_address(address_bytes)
+    return address_bytes_to_checksum(address_bytes)
 
 
-def _to_checksum_address(address_bytes: bytes) -> str:
+def address_bytes_to_checksum(address_bytes: bytes) -> str:
     """EIP-55: uppercase each hex digit of the address whose corresponding nibble in
     keccak256(lowercase hex address) is >= 8. A mixed-case typo-detection encoding,
-    not a security boundary on its own -- callers still compare full addresses."""
+    not a security boundary on its own -- callers still compare full addresses.
+    Public: also used to display a 20-byte address recovered from raw transaction/
+    calldata bytes (chains/evm/transaction.py, chains/evm/erc20.py), not just one
+    derived from a private key."""
+    if len(address_bytes) != 20:
+        raise ValueError(f"Ethereum address must be 20 bytes, got {len(address_bytes)}")
     hex_address = address_bytes.hex()
     digest_hex = keccak256(hex_address.encode()).hex()
     return "0x" + "".join(
