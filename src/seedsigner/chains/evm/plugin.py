@@ -1,11 +1,12 @@
 """
-    EVM chain plugin -- Phase 1 (UI-walkthrough demo): mocked address derivation and
-    signing, real review-field logic. Matches the 7F work's own Phase 1 scope (see
-    docs/7f-integration/README.md's "Phased rollout") -- no real BIP-32/secp256k1/
-    Keccak-256 derivation yet, no real RLP/ABI transaction parsing yet. That's
-    deliberate: this phase exists to get the actual review screens in front of a
-    reviewer on real hardware before any backend work is invested, per the
-    no-blind-signing principle.
+    EVM chain plugin. Rollout Phase 2 (see docs/multi-chain/evm-test-plan.md): address
+    derivation and the low-level signing primitive are now real -- BIP-32/secp256k1 HD
+    derivation and Keccak-256/EIP-55 checksum addresses (chains/evm/crypto.py, cross-
+    verified against eth_account/eth_keys in tests/test_evm_crypto.py). Sign-request
+    *parsing* is still Phase 1: the three demo scenarios below are hand-built JSON, not
+    real RLP/ABI transaction bytes, and sign() still produces a placeholder signature
+    rather than signing a real recomputed transaction hash -- that's rollout Phase 4
+    (real RLP/ABI parsing, self-validation, QR unsigned-tx-in/signed-tx-out loop).
 
     The three demo sign-request scenarios below aren't arbitrary -- they were chosen
     directly from docs/multi-chain/research/anti-scam-ux.md's findings: permit/
@@ -13,31 +14,16 @@
     thefts, so the review-field/warning logic here is the real design under test, even
     though the underlying transaction data is fake.
 """
-import hashlib
 import json
 import os
 
 from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signature
 
 from .constants import NETWORKS_BY_ID
+from .crypto import derive_private_key, private_key_to_checksum_address
 
-# Standard Ethereum BIP-44 path: m/44'/60'/{account}'/0/{index}. Real for the address
-# path shape; the *derivation math* (secp256k1 HD + Keccak-256) is not implemented in
-# Phase 1 -- see derive_address() below.
+# Standard Ethereum BIP-44 path: m/44'/60'/{account}'/0/{index}.
 DERIVATION_PATH_TEMPLATE = "m/44'/60'/{account}'/0/{index}"
-
-
-def _mock_evm_address(seed_bytes: bytes, path: str) -> str:
-    """
-        Deterministic PLACEHOLDER address for the Phase 1 UI demo only -- NOT a real
-        Ethereum address (real derivation is secp256k1 pubkey -> Keccak-256 -> last 20
-        bytes -> EIP-55 checksum casing, none of which is implemented yet). Same
-        pattern as the 7F work's _mock_sevenf_address: deterministic per (seed, path)
-        so re-visiting the same screen shows a stable value, matching what a real
-        address would do.
-    """
-    digest = hashlib.sha256(seed_bytes + path.encode()).hexdigest()
-    return "0x" + digest[:40]
 
 
 # Demo sign-request payloads, pre-serialized as JSON bytes to keep parse_sign_request's
@@ -85,9 +71,13 @@ class EvmPlugin:
     display_name = "Ethereum / EVM"
 
     def derive_address(self, seed_bytes: bytes, path: str) -> Address:
+        # seed_bytes already has any BIP-39 passphrase mixed in (Seed.seed_bytes) --
+        # honored as-is, the standard behavior for EVM (see crypto.py's module
+        # docstring for why this differs from the paused 7F work's refusal).
+        private_key = derive_private_key(seed_bytes, path)
         return Address(
             path=path,
-            address=_mock_evm_address(seed_bytes, path),
+            address=private_key_to_checksum_address(private_key),
             network_name="",  # caller (view layer) knows which network was selected
         )
 

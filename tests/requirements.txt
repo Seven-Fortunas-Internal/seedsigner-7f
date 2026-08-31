@@ -1,3 +1,8 @@
 coverage==7.6.12
 pytest==7.4.2
 pytest-cov==4.1.0
+# Reference Ethereum implementations, test-only -- cross-verify
+# seedsigner.chains.evm.crypto (test_evm_crypto.py) against the same libraries
+# web3.py itself uses. Never shipped on-device.
+eth-account==0.14.0
+eth-keys==0.8.0

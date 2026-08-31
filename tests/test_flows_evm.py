@@ -33,9 +33,11 @@ ENTER_EVM_OPTIONS_STEPS = ENTER_SEED_OPTIONS_STEPS + [
 
 class TestEvmFlows(FlowTest):
     """
-        Multi-chain Phase 1 UI-walkthrough demo flows: EVM address display and
-        sign-request review/sign, both against mocked data. See
-        docs/multi-chain/README.md in the diy-seedsigner repo.
+        EVM address display (rollout Phase 2 -- real BIP-32/secp256k1/Keccak-256
+        derivation, see chains/evm/crypto.py and test_evm_crypto.py for the
+        cross-verified crypto-level tests) and sign-request review/sign flows (still
+        Phase 1 -- mocked JSON payloads, real signing is rollout Phase 4). See
+        docs/multi-chain/README.md and docs/multi-chain/evm-test-plan.md.
     """
 
     def setup_method(self):
@@ -73,8 +75,9 @@ class TestEvmFlows(FlowTest):
 
     def test_evm_address_is_deterministic_per_derivation_path(self):
         """
-            The Phase 1 mocked address is a placeholder, but it should still be
-            deterministic per (seed, path) -- a real address would be too.
+            Real derivation (rollout Phase 2) -- deterministic per (seed, path), and
+            different paths must not collide. Cross-verification against eth_account
+            lives in test_evm_crypto.py; this checks the plugin-level contract.
         """
         from seedsigner.chains import ChainRegistry
         seed = self.seed_fixture()
