@@ -15,9 +15,8 @@
     job (keeps the on-device signing primitive narrow, per the wallet-survey finding
     in docs/multi-chain/README.md).
 """
-import rlp
-
 from .crypto import address_bytes_to_checksum, keccak256
+from .rlp_codec import RlpDecodingError, rlp_decode
 
 TX_TYPE_EIP1559 = 0x02
 _UNSIGNED_FIELD_COUNT = 9
@@ -44,8 +43,8 @@ class UnsignedEip1559Transaction:
         self.raw_unsigned_payload = raw_unsigned_payload
 
         try:
-            fields = rlp.decode(raw_unsigned_payload[1:], strict=True)
-        except Exception as e:
+            fields = rlp_decode(raw_unsigned_payload[1:], strict=True)
+        except RlpDecodingError as e:
             raise MalformedTransactionError(f"RLP decode failed: {e}") from e
 
         if not isinstance(fields, list) or len(fields) != _UNSIGNED_FIELD_COUNT:

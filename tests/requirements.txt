@@ -6,3 +6,12 @@ pytest-cov==4.1.0
 # web3.py itself uses. Never shipped on-device.
 eth-account==0.14.0
 eth-keys==0.8.0
+# Transitive dependency of eth-account (via eth-keyfile) -- needs the `Crypto`
+# namespace specifically, separate from and in addition to the app's own
+# pycryptodomex (`Cryptodome` namespace) dependency in requirements.txt. The two
+# coexist fine (different top-level import names, same underlying project).
+pycryptodome==3.23.0
+# Reference RLP implementation, test-only -- cross-verify
+# seedsigner.chains.evm.rlp_codec (test_evm_rlp_codec.py) against it. Never shipped
+# on-device (see requirements.txt's note on why we don't use it there).
+rlp==5.0.0

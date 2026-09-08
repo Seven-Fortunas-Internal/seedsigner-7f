@@ -34,6 +34,7 @@ from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signatur
 from .constants import KNOWN_TOKENS, NETWORKS_BY_CHAIN_ID, NETWORKS_BY_ID
 from .crypto import derive_private_key, private_key_to_checksum_address, sign_hash_recoverable
 from .erc20 import UINT256_MAX, decode_erc20_call
+from .rlp_codec import rlp_encode
 from .transaction import TX_TYPE_EIP1559, MalformedTransactionError, UnsignedEip1559Transaction
 from .units import format_units
 
@@ -49,8 +50,6 @@ def _rlp_encode_unsigned_tx(chain_id, nonce, max_priority_fee, max_fee, gas_limi
     """Builds a real, well-formed unsigned EIP-1559 payload for the demo scenarios --
     same wire format a real companion tool would produce, so the demo menu exercises
     the exact same decode/sign path a real scan would (see module docstring)."""
-    import rlp as _rlp
-
     def _uint(n: int) -> bytes:
         return n.to_bytes((n.bit_length() + 7) // 8, "big") if n else b""
 
@@ -58,7 +57,7 @@ def _rlp_encode_unsigned_tx(chain_id, nonce, max_priority_fee, max_fee, gas_limi
         _uint(chain_id), _uint(nonce), _uint(max_priority_fee), _uint(max_fee),
         _uint(gas_limit), bytes.fromhex(to_hex[2:]), _uint(value), data, [],
     ]
-    return bytes([TX_TYPE_EIP1559]) + _rlp.encode(fields)
+    return bytes([TX_TYPE_EIP1559]) + rlp_encode(fields)
 
 
 def _erc20_calldata(selector: bytes, address_hex: str, amount: int) -> bytes:

@@ -1,11 +1,16 @@
 embit==0.8.0
 Pillow==10.3.0
-# Keccak-256 for EVM (chains/evm/crypto.py) -- has piwheels ARM wheels for this
-# hardware (armv7l/cp313), verified before pinning.
-pycryptodome==3.23.0
+# Keccak-256 for EVM (chains/evm/crypto.py) -- pinned to match the exact version
+# SeedSigner OS's own Buildroot config already has a ready-made package for
+# (package/python-pycryptodomex in SeedSigner/buildroot), not the latest available,
+# so a real device image doesn't need a new/bumped Buildroot package authored for
+# this. Also has piwheels ARM wheels for the dev-venv workflow.
+pycryptodomex==3.21.0
 pyzbar @ git+https://github.com/seedsigner/pyzbar.git@c3c237821c6a20b17953efe59b90df0b514a1c03
 qrcode==8.0
-# Canonical RLP codec (Ethereum Foundation) for EIP-1559 transaction decode/encode
-# (chains/evm/transaction.py). Pure Python (py3-none-any wheel) -- no ARM build risk.
-rlp==5.0.0
 urtypes @ git+https://github.com/selfcustody/urtypes.git@7fb280eab3b3563dfc57d2733b0bf5cbc0a96a6a
+# NOTE: no `rlp` dependency here -- chains/evm/rlp_codec.py is a small hand-rolled
+# RLP codec instead, specifically to avoid needing to author several new Buildroot
+# packages (rlp's transitive deps include a C extension and a Rust extension) for a
+# real SeedSigner OS image. `rlp` (the real PyPI package) stays a test-only
+# dependency (tests/requirements.txt) to cross-verify that codec.

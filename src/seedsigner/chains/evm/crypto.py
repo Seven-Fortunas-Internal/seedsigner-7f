@@ -8,8 +8,12 @@
       introduced; Ethereum uses the same curve, just a different address encoding and
       a recoverable (vs plain) signature.
     - Keccak-256 (Ethereum's hash, NOT the NIST-standardized SHA3-256 -- different
-      padding) comes from pycryptodome, which has prebuilt piwheels ARM wheels for
-      this hardware (verified before adding the dependency).
+      padding) comes from pycryptodomex (the `Cryptodome` import namespace, not
+      `Crypto`/pycryptodome -- chosen specifically because SeedSigner OS's Buildroot
+      config already has a ready-made `python-pycryptodomex` package; using the
+      plain `pycryptodome` variant would mean authoring that Buildroot package from
+      scratch for no functional benefit, since both are the same underlying project).
+      Verified: has prebuilt piwheels ARM wheels for the dev-venv workflow too.
 
     seed_bytes here is always Seed.seed_bytes -- which already has any BIP-39
     passphrase mixed in via bip39.mnemonic_to_seed(password=passphrase). Unlike the
@@ -19,7 +23,7 @@
     therefore correct, behavior -- verified below to produce byte-identical results
     to eth_account given the same mnemonic + passphrase (see tests/test_evm_crypto.py).
 """
-from Crypto.Hash import keccak
+from Cryptodome.Hash import keccak
 from embit.bip32 import HDKey
 from embit.ec import PrivateKey, secp256k1
 

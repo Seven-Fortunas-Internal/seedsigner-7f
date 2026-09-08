@@ -1,4 +1,4 @@
-from Crypto.Hash import keccak
+from Cryptodome.Hash import keccak
 
 from seedsigner.chains.evm.erc20 import (
     SELECTOR_APPROVE,
