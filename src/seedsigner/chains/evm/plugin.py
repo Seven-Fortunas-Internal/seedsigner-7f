@@ -65,9 +65,11 @@ def _erc20_calldata(selector: bytes, address_hex: str, amount: int) -> bytes:
     return selector + b"\x00" * 12 + bytes.fromhex(address_hex[2:]) + amount.to_bytes(32, "big")
 
 
-# Demo sign-request payloads. transfer/approve_unlimited are real RLP-encoded EIP-1559
-# transactions (fake field values, real wire format); permit is still Phase 1 JSON --
-# see module docstring for why.
+# Demo sign-request payloads. transfer/approve_unlimited/usdc_transfer are real
+# RLP-encoded EIP-1559 transactions (fake field values, real wire format); permit is
+# still Phase 1 JSON -- see module docstring for why. Each hardcodes nonce=0 or 1,
+# meaning it's only signable once per fresh (never-transacted) account -- see
+# docs/multi-chain/evm-hardware-walkthrough.md for how these get used for real.
 DEMO_SCENARIOS: dict[str, bytes] = {
     "transfer": _rlp_encode_unsigned_tx(
         chain_id=11155420, nonce=0, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
@@ -77,6 +79,17 @@ DEMO_SCENARIOS: dict[str, bytes] = {
         chain_id=11155420, nonce=1, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
         gas_limit=60_000, to_hex=_DEMO_USDC_OPTIMISM_SEPOLIA, value=0,
         data=_erc20_calldata(bytes.fromhex("095ea7b3"), _DEMO_APPROVE_SPENDER, UINT256_MAX),
+    ),
+    "usdc_transfer": _rlp_encode_unsigned_tx(
+        # nonce=0 -- a real ERC-20 token send, meant to be run on its own fresh
+        # account (see the walkthrough doc) rather than needing to follow "transfer"
+        # in a fixed sequence. It does NOT reuse "transfer"'s nonce-0 account: both
+        # scenarios independently assume nonce 0, so running this on an account
+        # that already ran "transfer" (now at nonce 1) will fail loudly with a
+        # nonce-too-low RPC error, not silently misbehave.
+        chain_id=11155420, nonce=0, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
+        gas_limit=60_000, to_hex=_DEMO_USDC_OPTIMISM_SEPOLIA, value=0,
+        data=_erc20_calldata(bytes.fromhex("a9059cbb"), _DEMO_TO_ADDRESS, 1_000_000),  # 1.0 USDC (6 decimals)
     ),
     "permit": json.dumps({
         "operation": "permit",

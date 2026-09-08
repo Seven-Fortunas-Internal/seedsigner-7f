@@ -193,6 +193,41 @@ class TestEvmFlows(FlowTest):
         assert recovered == address
 
 
+    def test_evm_usdc_transfer_scenario_is_real_and_signable(self):
+        """ usdc_transfer is a real ERC-20 transfer() call to Circle's real Optimism
+            Sepolia USDC contract -- confirms it decodes with a real resolved token
+            symbol (not an unknown-contract warning) and produces a real, recoverable
+            signature. """
+        from eth_keys import keys as eth_keys
+
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
+        from seedsigner.chains.evm.transaction import UnsignedEip1559Transaction
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+        path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+        payload = DEMO_SCENARIOS["usdc_transfer"]
+
+        parsed = plugin.parse_sign_request(payload)
+        by_label = {f.label: f for f in parsed.review_fields}
+        assert by_label["Token"].value == "USDC"
+        assert by_label["Token"].is_warning is False
+        assert by_label["Amount"].value == "1 USDC"
+
+        address = plugin.derive_address(seed.seed_bytes, path).address
+        signature = plugin.sign(seed.seed_bytes, path, payload)
+        assert len(signature.signature_bytes) == 65
+
+        r = int.from_bytes(signature.signature_bytes[:32], "big")
+        s = int.from_bytes(signature.signature_bytes[32:64], "big")
+        y_parity = signature.signature_bytes[64]
+        msg_hash = UnsignedEip1559Transaction(payload).signing_hash()
+        recovered = eth_keys.Signature(vrs=(y_parity, r, s)).recover_public_key_from_msg_hash(
+            msg_hash).to_checksum_address()
+        assert recovered == address
+
+
     def test_evm_sign_flow_permit_flags_offchain_warning(self):
         """ The permit scenario must flag the off-chain-signature nature explicitly --
             the single largest documented attack category per the anti-scam

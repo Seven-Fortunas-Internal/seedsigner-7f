@@ -33,6 +33,7 @@ from seedsigner.views.view import BackStackView, Destination, MainMenuView, Opti
 _SCENARIO_MENU = [
     ("transfer", "Ordinary transfer"),
     ("approve_unlimited", "Token approval (unlimited)"),
+    ("usdc_transfer", "USDC transfer"),
     ("permit", "Permit (off-chain signature)"),
 ]
 
