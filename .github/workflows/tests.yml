@@ -51,7 +51,7 @@ jobs:
             tests/requirements.txt
       - name: Install dependencies
         run: |
-          sudo apt-get install libzbar0
+          sudo apt-get install libzbar0 qrencode
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r tests/requirements.txt
           # requirements-l10n.txt is hash-locked (SeedSigner OS installs it
