@@ -32,4 +32,8 @@ class QRType:
     ACCOUNT__UR = "account__ur"
     BYTES__UR = "bytes__ur"
 
+    # ERC-4527 (see chains/evm/ur_types.py) -- the QR protocol MetaMask/Rabby/etc.
+    # already speak for QR-based hardware wallets.
+    EVM__ETH_SIGN_REQUEST_UR = "evm__eth_sign_request_ur"
+
     INVALID = "invalid"

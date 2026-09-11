@@ -21,13 +21,16 @@
 """
 from gettext import gettext as _
 
+from seedsigner.helpers.l10n import mark_for_translation as _mft
 from seedsigner.chains.base import ReviewField
 from seedsigner.chains.evm.constants import NETWORKS
 from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
+from seedsigner.chains.evm.ur_types import DATA_TYPE_TYPED_TRANSACTION, EthSignature
 from seedsigner.gui.components import SeedSignerIconConstants
 from seedsigner.gui.screens import DireWarningScreen, RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed
+from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, OptionDisabledView, View
 
 # BIP-32 non-hardened child index range -- same constraint SeedBIP85SelectChildIndexView
@@ -67,6 +70,7 @@ def _guard_multichain_enabled(view: View):
 ****************************************************************************"""
 class EvmOptionsView(View):
     ADDRESS = ButtonOption("Receive address")
+    SCAN = ButtonOption("Scan sign request")
     SIGN = ButtonOption("Sign message")
 
 
@@ -78,7 +82,7 @@ class EvmOptionsView(View):
 
     def run(self):
         from seedsigner.gui.screens.screen import ButtonListScreen
-        button_data = [self.ADDRESS, self.SIGN]
+        button_data = [self.ADDRESS, self.SCAN, self.SIGN]
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
@@ -92,6 +96,9 @@ class EvmOptionsView(View):
 
         if button_data[selected_menu_num] == self.ADDRESS:
             return Destination(EvmNetworkView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.SCAN:
+            return Destination(EvmScanSignRequestView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.SIGN:
             return Destination(EvmSignSelectView, view_args=dict(seed=self.seed))
@@ -243,10 +250,92 @@ class EvmAddressQRView(View):
 """****************************************************************************
     EVM Sign Views
 ****************************************************************************"""
+class EvmScanSignRequestView(ScanView):
+    """ Real free-form send: scans an ERC-4527 eth-sign-request QR -- what
+        MetaMask/Rabby/etc. actually produce -- instead of picking from the fixed
+        demo-scenario menu below. Reached with the seed already known (this is a
+        per-seed submenu item, unlike the top-level catch-all Scan button PSBT
+        uses, which has to ask which seed applies after scanning) -- overrides
+        _handle_complete_scan() rather than duplicating ScanView's shared
+        scan-screen scaffolding (see scan_views.py). """
+    instructions_text = _mft("Scan sign request")
+    invalid_qr_type_message = _mft("Expected an eth-sign-request QR (from MetaMask, Rabby, etc.)")
+
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+        _guard_multichain_enabled(self)
+
+
+    @property
+    def is_valid_qr_type(self):
+        return self.decoder.is_eth_sign_request
+
+
+    def _handle_complete_scan(self):
+        eth_sign_request = self.decoder.get_eth_sign_request()
+        if eth_sign_request is None:
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("Couldn't decode the scanned request.")))
+
+        if eth_sign_request.data_type != DATA_TYPE_TYPED_TRANSACTION:
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("Only real EIP-1559 transactions are supported today "
+                         "(request type {} isn't).").format(eth_sign_request.data_type)))
+
+        from seedsigner.chains import ChainRegistry
+        plugin = ChainRegistry.get("evm")
+        try:
+            parsed = plugin.parse_sign_request(eth_sign_request.sign_data)
+        except Exception as e:
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("Couldn't parse the transaction: {}").format(e)))
+
+        # Self-validation: this request itself names which derivation path/address
+        # it wants signed with (crypto-keypath) -- surface it as its own review
+        # field, not just inside EvmConfirmAddressView's final screen. Unlike the
+        # demo menu below (where the operator always picks the index), this path
+        # comes from untrusted external input.
+        fields = [ReviewField(label="Derivation Path", value=eth_sign_request.derivation_path)] + list(parsed.review_fields)
+
+        self.controller.multichain_data = dict(
+            seed=self.seed,
+            chain_id="evm",
+            derivation_path=eth_sign_request.derivation_path,
+            payload=eth_sign_request.sign_data,
+            fields=fields,
+            eth_sign_request=eth_sign_request,
+        )
+        return Destination(EvmConfirmPayloadView, view_args=dict(page_num=0), skip_current_view=True)
+
+
+
+class EvmUnsupportedSignRequestView(View):
+    def __init__(self, reason: str):
+        super().__init__()
+        self.reason = reason
+
+
+    def run(self):
+        self.run_screen(
+            DireWarningScreen,
+            title=_("Unsupported Request"),
+            show_back_button=False,
+            status_icon_name=SeedSignerIconConstants.ERROR,
+            status_headline=_("Can't Sign This Request"),
+            text=self.reason,
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
 class EvmSignSelectView(View):
-    """ Phase 1 stand-in for a real scan step: pick one of three demo sign-request
-        scenarios, chosen directly from the anti-scam research (see module
-        docstring) rather than one arbitrary example. """
+    """ Fixed demo-scenario menu, kept as a testing convenience now that
+        EvmScanSignRequestView above is the real, primary way to sign -- pick one
+        of three demo sign-request scenarios, chosen directly from the anti-scam
+        research (see module docstring) rather than one arbitrary example. """
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
@@ -375,8 +464,58 @@ class EvmConfirmAddressView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        # User clicked "Sign"
+        # User clicked "Sign". A real scanned request needs an eth-signature UR
+        # response (what MetaMask/etc. actually expect back); the demo-menu path
+        # keeps the existing plain-text EVM-DEMO-SIG: QR.
+        if self.controller.multichain_data.get("eth_sign_request") is not None:
+            return Destination(EvmSignedUrQRView)
         return Destination(EvmSignedQRView)
+
+
+
+class EvmSignedUrQRView(View):
+    """ Real ERC-4527 response: encodes the device's signature as an eth-signature
+        UR, matched back to the incoming request via its request_id (see
+        chains/evm/ur_types.py) -- what a real requester actually needs back, unlike
+        EvmSignedQRView's EVM-DEMO-SIG: plain text, which nothing outside
+        tools/broadcast_evm_demo.py understands. """
+    def __init__(self):
+        super().__init__()
+        from seedsigner.chains import ChainRegistry
+
+        data = self.controller.multichain_data
+        eth_sign_request = data["eth_sign_request"]
+        plugin = ChainRegistry.get("evm")
+        signature = plugin.sign(data["seed"].seed_bytes, data["derivation_path"], payload=data["payload"])
+
+        # request-id is optional on the request but required on the response --
+        # generate one in the rare case a requester omitted it, so correlation is
+        # still possible even though this specific requester didn't ask for it.
+        import os
+        request_id = eth_sign_request.request_id or os.urandom(16)
+
+        self.eth_signature = EthSignature(request_id=request_id, signature=signature.signature_bytes, origin="seedsigner")
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import UrEthSignatureQrEncoder
+        from seedsigner.models.settings import SettingsConstants
+
+        qr_encoder = UrEthSignatureQrEncoder(
+            eth_signature=self.eth_signature,
+            qr_density=self.settings.get_value(SettingsConstants.SETTING__QR_DENSITY),
+        )
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=qr_encoder,
+        )
+
+        # cleanup
+        self.controller.multichain_data = None
+
+        # Exiting/Canceling the QR display screen always returns Home
+        return Destination(MainMenuView, skip_current_view=True)
 
 
 

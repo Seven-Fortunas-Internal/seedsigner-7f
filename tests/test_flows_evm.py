@@ -367,6 +367,205 @@ class TestEvmFlows(FlowTest):
         assert address != plugin.derive_address(seed.seed_bytes, "m/44'/60'/0'/0/0").address
 
 
+    def test_evm_scan_sign_request_rejects_unsupported_data_type(self):
+        """ Self-validation: refuse a real-but-unsupported request type outright
+            (legacy pre-EIP-1559, EIP-712, raw message) rather than attempt to
+            mis-parse it -- same "refuse rather than guess" rule this codebase
+            applies everywhere else. """
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TRANSACTION
+
+        seed = self.seed_fixture()
+        view = evm_views.EvmScanSignRequestView(seed=seed)
+        legacy_request = EthSignRequest(
+            sign_data=b"\xf8I", data_type=DATA_TYPE_TRANSACTION, chain_id=1,
+            derivation_path="m/44'/60'/0'/0/0",
+        )
+        with patch.object(view.decoder, "get_eth_sign_request", return_value=legacy_request):
+            destination = view._handle_complete_scan()
+
+        assert destination.View_cls == evm_views.EvmUnsupportedSignRequestView
+        assert self.controller.multichain_data is None
+
+
+    def test_evm_scan_sign_request_rejects_undecodable_request(self):
+        """ get_eth_sign_request() returning None (malformed CBOR, wrong shape,
+            etc.) must not crash the flow. """
+        seed = self.seed_fixture()
+        view = evm_views.EvmScanSignRequestView(seed=seed)
+        with patch.object(view.decoder, "get_eth_sign_request", return_value=None):
+            destination = view._handle_complete_scan()
+
+        assert destination.View_cls == evm_views.EvmUnsupportedSignRequestView
+
+
+    def test_evm_scan_sign_request_populates_review_fields_with_derivation_path_first(self):
+        """ The requested derivation path is untrusted external input (unlike the
+            demo menu, which the operator always controls) -- confirms it's
+            surfaced as its own review field, ahead of the transaction's own
+            fields, not buried or omitted. """
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+
+        seed = self.seed_fixture()
+        view = evm_views.EvmScanSignRequestView(seed=seed)
+        real_request = EthSignRequest(
+            sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+            derivation_path="m/44'/60'/0'/0/1", request_id=b"\x02" * 16, origin="metamask",
+        )
+        with patch.object(view.decoder, "get_eth_sign_request", return_value=real_request):
+            destination = view._handle_complete_scan()
+
+        assert destination.View_cls == evm_views.EvmConfirmPayloadView
+        data = self.controller.multichain_data
+        assert data["derivation_path"] == "m/44'/60'/0'/0/1"
+        assert data["payload"] == DEMO_SCENARIOS["usdc_transfer"]
+        assert data["eth_sign_request"] is real_request
+        assert data["fields"][0].label == "Derivation Path"
+        assert data["fields"][0].value == "m/44'/60'/0'/0/1"
+        # And the transaction's own real fields still follow -- confirms this
+        # prepends, it doesn't replace, plugin.parse_sign_request()'s output.
+        assert any(f.label == "Token" for f in data["fields"][1:])
+
+
+    def test_evm_signed_ur_qr_view_produces_correlated_recoverable_signature(self):
+        """ End-to-end for the real ERC-4527 response: the produced eth-signature
+            (1) carries the *same* request_id as the request it answers (how a
+            real requester correlates response to request) and (2) is a real,
+            recoverable ECDSA signature for the address at the requested path --
+            not a demo/mocked one. """
+        from eth_keys import keys as eth_keys
+
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+        from seedsigner.chains.evm.transaction import UnsignedEip1559Transaction
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+        payload = DEMO_SCENARIOS["usdc_transfer"]
+        request_id = b"\x03" * 16
+
+        self.controller.multichain_data = dict(
+            seed=seed,
+            chain_id="evm",
+            derivation_path="m/44'/60'/0'/0/1",
+            payload=payload,
+            fields=[],
+            eth_sign_request=EthSignRequest(
+                sign_data=payload, data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+                derivation_path="m/44'/60'/0'/0/1", request_id=request_id,
+            ),
+        )
+
+        view = evm_views.EvmSignedUrQRView()
+        assert view.eth_signature.request_id == request_id
+        assert len(view.eth_signature.signature) == 65
+
+        address = plugin.derive_address(seed.seed_bytes, "m/44'/60'/0'/0/1").address
+        r = int.from_bytes(view.eth_signature.signature[:32], "big")
+        s = int.from_bytes(view.eth_signature.signature[32:64], "big")
+        y_parity = view.eth_signature.signature[64]
+        msg_hash = UnsignedEip1559Transaction(payload).signing_hash()
+        recovered = eth_keys.Signature(vrs=(y_parity, r, s)).recover_public_key_from_msg_hash(
+            msg_hash).to_checksum_address()
+        assert recovered == address
+
+
+    def test_evm_signed_ur_qr_view_generates_request_id_when_request_omitted_one(self):
+        """ request-id is optional on the request per the spec but required on the
+            response -- confirms the rare omitted case doesn't crash, and produces
+            *some* 16-byte id rather than None. """
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+
+        seed = self.seed_fixture()
+        payload = DEMO_SCENARIOS["usdc_transfer"]
+
+        self.controller.multichain_data = dict(
+            seed=seed, chain_id="evm", derivation_path="m/44'/60'/0'/0/0", payload=payload, fields=[],
+            eth_sign_request=EthSignRequest(
+                sign_data=payload, data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+                derivation_path="m/44'/60'/0'/0/0", request_id=None,
+            ),
+        )
+
+        view = evm_views.EvmSignedUrQRView()
+        assert view.eth_signature.request_id is not None
+        assert len(view.eth_signature.request_id) == 16
+
+
+    def test_evm_confirm_address_routes_to_ur_qr_view_for_scanned_requests_demo_qr_otherwise(self):
+        """ EvmConfirmAddressView's final "Sign" branch must route by what actually
+            answers the request correctly, not always the same QR type: a real
+            scanned request needs an eth-signature UR (what the requester expects
+            back); the demo menu keeps the plain-text EVM-DEMO-SIG: QR. """
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+
+        seed = self.seed_fixture()
+        payload = DEMO_SCENARIOS["usdc_transfer"]
+
+        # Scanned-request path
+        self.controller.multichain_data = dict(
+            seed=seed, chain_id="evm", derivation_path="m/44'/60'/0'/0/0", payload=payload, fields=[],
+            eth_sign_request=EthSignRequest(
+                sign_data=payload, data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+                derivation_path="m/44'/60'/0'/0/0", request_id=b"\x04" * 16,
+            ),
+        )
+        view = evm_views.EvmConfirmAddressView()
+        with patch.object(view, "run_screen", return_value=0):
+            destination = view.run()
+        assert destination.View_cls == evm_views.EvmSignedUrQRView
+
+        # Demo-menu path (no eth_sign_request key at all)
+        self.controller.multichain_data = dict(
+            seed=seed, chain_id="evm", derivation_path="m/44'/60'/0'/0/0", payload=payload, fields=[],
+        )
+        view = evm_views.EvmConfirmAddressView()
+        with patch.object(view, "run_screen", return_value=0):
+            destination = view.run()
+        assert destination.View_cls == evm_views.EvmSignedQRView
+
+
+    def test_decode_qr_recognizes_and_decodes_a_real_eth_sign_request_ur(self):
+        """ Confirms the actual QR-type detection regex and DecodeQR dispatch
+            (models/qr_type.py, models/decode_qr.py) work end to end with a real
+            UR-encoded string built the way a scanned QR frame actually arrives --
+            not just the ur_types.py-level unit tests in test_evm_ur_types.py, which
+            bypass DecodeQR entirely. """
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+        from seedsigner.helpers.ur2.ur import UR
+        from seedsigner.helpers.ur2.ur_encoder import UREncoder
+        from seedsigner.models.decode_qr import DecodeQR
+        from seedsigner.models.qr_type import QRType
+
+        payload = DEMO_SCENARIOS["usdc_transfer"]
+        eth_sign_request = EthSignRequest(
+            sign_data=payload, data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+            derivation_path="m/44'/60'/0'/0/1", request_id=b"\x05" * 16, origin="metamask",
+        )
+        ur = UR("eth-sign-request", eth_sign_request.to_cbor())
+        # max_fragment_len large enough that this small payload fits in a single QR
+        # frame -- exactly what a real device would produce for a request this size.
+        qr_string = UREncoder(ur=ur, max_fragment_len=800).next_part()
+
+        decoder = DecodeQR()
+        status = decoder.add_data(qr_string)
+
+        assert decoder.qr_type == QRType.EVM__ETH_SIGN_REQUEST_UR
+        assert decoder.is_eth_sign_request
+        assert decoder.complete
+
+        decoded = decoder.get_eth_sign_request()
+        assert decoded.sign_data == payload
+        assert decoded.derivation_path == "m/44'/60'/0'/0/1"
+        assert decoded.request_id == b"\x05" * 16
+        assert decoded.origin == "metamask"
+
+
     def test_evm_options_disabled_redirects(self):
         """ Direct-construction guard: EvmOptionsView itself refuses to run with the
             setting off, not just relying on SeedOptionsView hiding its button. """

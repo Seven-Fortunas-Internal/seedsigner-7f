@@ -17,6 +17,8 @@ from seedsigner.models.settings import SettingsConstants
 from urtypes.crypto import PSBT as UR_PSBT
 from urtypes.crypto import Account, HDKey, Output, Keypath, PathComponent, SCRIPT_EXPRESSION_TAG_MAP, CoinInfo
 
+from seedsigner.chains.evm.ur_types import EthSignature
+
 
 
 @dataclass
@@ -403,4 +405,20 @@ class UrPsbtQrEncoder(BaseFountainQrEncoder):
     def __post_init__(self):
         super().__post_init__()
         qr_ur_bytes = UR("crypto-psbt", UR_PSBT(self.psbt.serialize()).to_cbor())
+        self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)
+
+
+
+@dataclass
+class UrEthSignatureQrEncoder(BaseFountainQrEncoder):
+    """ ERC-4527 response to a scanned eth-sign-request (see
+        views/evm_views.py's EvmScanSignRequestView / EvmSignedUrQRView and
+        chains/evm/ur_types.py). Small payload (well under one QR frame), but
+        BaseFountainQrEncoder handles that the same as PSBT/xpub above -- no reason
+        for a separate static-only code path for this one type. """
+    eth_signature: EthSignature = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        qr_ur_bytes = UR("eth-signature", self.eth_signature.to_cbor())
         self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)
