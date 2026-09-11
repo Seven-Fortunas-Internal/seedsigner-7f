@@ -264,8 +264,8 @@ class TestEvmFlows(FlowTest):
 
     def test_multichain_option_disabled_hides_seed_options_button(self):
         """
-            With the demo feature off, SeedOptionsView shouldn't offer the
-            "Multi-chain (demo)" button at all.
+            With the "Other Blockchains" setting off, SeedOptionsView shouldn't offer
+            that button at all.
         """
         self.settings.set_value(SettingsConstants.SETTING__MULTICHAIN_ENABLED, SettingsConstants.OPTION__DISABLED)
         seed = self.seed_fixture()

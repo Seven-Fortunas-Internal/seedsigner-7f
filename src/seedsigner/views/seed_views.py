@@ -530,7 +530,7 @@ class SeedOptionsView(View):
     EXPORT_XPUB = ButtonOption("Export xpub")
     EXPLORER = ButtonOption("Address explorer")
     SIGN_MESSAGE = ButtonOption("Sign message")
-    MULTICHAIN = ButtonOption("Multi-chain (demo)", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
+    MULTICHAIN = ButtonOption("Other Blockchains", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")

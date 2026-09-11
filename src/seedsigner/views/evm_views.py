@@ -1,23 +1,23 @@
 """
-    Multi-chain (Phase 1 UI-walkthrough demo). Full View/Screen navigation flow for
-    EVM address display and sign-request review/sign, using placeholder addresses and
-    a fake signature -- NO real derivation, NO real ECDSA signing. Goal of this phase
-    is purely to put the actual review screens (including the anti-scam warnings) in
-    front of a reviewer before any backend work is invested. See
-    docs/multi-chain/README.md's "Architecture: chain-plugin model" and
-    docs/multi-chain/research/anti-scam-ux.md for why these specific fields/warnings
-    exist.
+    EVM chain UI: address display and sign-request review/sign. Real BIP-32/secp256k1
+    derivation, real EIP-1559 RLP decode, real ECDSA signing (see chains/evm/) -- the
+    review screens (including the anti-scam warnings) are the concrete no-blind-signing
+    mechanism, not a placeholder. See docs/multi-chain/README.md's "Architecture:
+    chain-plugin model", docs/multi-chain/research/anti-scam-ux.md for why these
+    specific fields/warnings exist, and docs/multi-chain/evm-first-class-plan.md for
+    what's still ahead (real ERC-4527 scan-and-sign, replacing the fixed
+    demo-scenario menu below).
 
     Follows the same file-pairing convention as the rest of this codebase
     (seed_views.py <-> seed_screens.py); see gui/screens/evm_screens.py for the paired
     Screen classes. Reached via multichain_views.MultiChainOptionsView, which is
     itself reached from SeedOptionsView behind Settings > Advanced >
-    "Multi-chain (demo)".
+    "Other Blockchains".
 
-    No real camera scan step in Phase 1 (matching the 7F work's own Phase 1 decision,
-    made after finding this dev hardware's camera stack doesn't work at all against a
-    libcamera-only kernel) -- sign requests are one of three synthetic demo scenarios
-    picked from a menu, not scanned.
+    Sign requests are still picked from a fixed demo-scenario menu, not scanned --
+    real camera-based scan-and-sign (ERC-4527) is planned (see the doc above) but not
+    yet built. The scenarios themselves are real, signable transactions (RLP-encoded,
+    really ECDSA-signed) even though the *source* of the request is a menu, not a scan.
 """
 from gettext import gettext as _
 
@@ -61,7 +61,7 @@ def _guard_multichain_enabled(view: View):
 ****************************************************************************"""
 class EvmOptionsView(View):
     ADDRESS = ButtonOption("Receive address")
-    SIGN = ButtonOption("Sign message (demo)")
+    SIGN = ButtonOption("Sign message")
 
 
     def __init__(self, seed: Seed):
@@ -76,7 +76,7 @@ class EvmOptionsView(View):
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title=_("EVM Chain (DEMO)"),
+            title=_("Ethereum / EVM"),
             is_button_text_centered=True,
             button_data=button_data,
         )
@@ -104,7 +104,7 @@ class EvmNetworkView(View):
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title=_("EVM Network (DEMO)"),
+            title=_("EVM Network"),
             is_button_text_centered=True,
             button_data=button_data,
         )
@@ -188,7 +188,7 @@ class EvmSignSelectView(View):
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title=_("Sign Request (DEMO)"),
+            title=_("Sign Request"),
             is_button_text_centered=True,
             button_data=button_data,
         )
@@ -202,7 +202,7 @@ class EvmSignSelectView(View):
 
 
 class EvmSignStartView(View):
-    """ Entry point for a (demo) sign request: parses the chosen scenario via the
+    """ Entry point for a menu-picked sign request: parses the chosen scenario via the
         EvmPlugin -- the same call path a real scanned request would go through --
         and stashes the result for the paged review. """
     def __init__(self, seed: Seed, scenario_key: str):
@@ -304,7 +304,7 @@ class EvmConfirmAddressView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        # User clicked "Sign (DEMO -- not real)"
+        # User clicked "Sign"
         return Destination(EvmSignedQRView)
 
 

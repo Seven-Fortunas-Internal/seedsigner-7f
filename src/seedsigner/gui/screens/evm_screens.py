@@ -1,8 +1,10 @@
 """
-    Multi-chain (Phase 1 UI-walkthrough demo). Screens for the EVM address-display and
-    sign-request review/sign flows. All data shown here is mocked/placeholder -- no
-    real derivation or ECDSA signing happens yet. See docs/multi-chain/README.md in
-    the diy-seedsigner repo for the full design and phased rollout plan.
+    Screens for the EVM address-display and sign-request review/sign flows. Real
+    derivation and real ECDSA signing (see chains/evm/) for every scenario except
+    `permit`, which stays a mocked signature deliberately -- its EIP-712 domain can't
+    be self-validated offline (see chains/evm/plugin.py's module docstring). See
+    docs/multi-chain/README.md and docs/multi-chain/evm-first-class-plan.md in the
+    diy-seedsigner repo for the full design and what's still ahead.
 
     Follows the same file-pairing convention as the rest of this codebase
     (seed_views.py <-> seed_screens.py, psbt_views.py <-> psbt_screens.py, etc.).
@@ -70,7 +72,7 @@ class EvmAddressScreen(ButtonListScreen):
         # 42-char EVM address needs 4 display lines (see class docstring), and vertical
         # space on a 240px screen is the binding constraint, not information to cut.
         # Still shown, still no-blind-signing-compliant, just more compact.
-        self.title = f"{self.network_name} Address (DEMO)"
+        self.title = f"{self.network_name} Address"
         self.is_bottom_list = True
         self.is_button_text_centered = True
         self.button_data = [ButtonOption("Export QR")]
@@ -154,17 +156,20 @@ class EvmReviewFieldScreen(ButtonListScreen):
 
 @dataclass
 class EvmConfirmSignScreen(ButtonListScreen):
-    """ Final review step before "signing": derivation path + the address the demo
-        signature would be attributed to. Deliberately labeled DEMO throughout so a
-        mocked signature can never be mistaken for a real one. """
+    """ Final review step before signing: derivation path + the address the signature
+        will be attributed to. Shared across every scenario, including `permit`
+        (still a mocked signature -- see module docstring) -- so this screen can't
+        claim "real" or "not real" for all cases; the per-field review pages already
+        flag permit's off-chain-signature nature explicitly (see EvmReviewFieldScreen
+        usage in evm_views.py), which is the right place for that distinction. """
     derivation_path: str = None
     address: str = None
 
     def __post_init__(self):
-        self.title = _("Confirm & Sign (DEMO)")
+        self.title = _("Confirm & Sign")
         self.is_bottom_list = True
         self.is_button_text_centered = True
-        self.button_data = [ButtonOption("Sign (DEMO — not real)")]
+        self.button_data = [ButtonOption("Sign")]
         super().__post_init__()
 
         derivation_path_display = IconTextLine(

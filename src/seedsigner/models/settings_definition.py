@@ -690,11 +690,12 @@ class SettingsDefinition:
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__DISABLED),
 
-        # Multi-chain (Phase 1 UI-walkthrough demo; mocked data, no real crypto).
-        # See docs/multi-chain/README.md in the diy-seedsigner repo.
+        # Multi-chain: non-Bitcoin chains (EVM today; Tron/7Fchain planned), each its
+        # own ChainRegistry-registered plugin. See docs/multi-chain/README.md and
+        # docs/multi-chain/evm-first-class-plan.md in the diy-seedsigner repo.
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__MULTICHAIN_ENABLED,
-                      display_name=_mft("Multi-chain (demo)"),
+                      display_name=_mft("Other Blockchains"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__DISABLED),
 
