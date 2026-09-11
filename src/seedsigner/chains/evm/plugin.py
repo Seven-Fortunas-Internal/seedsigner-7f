@@ -41,7 +41,7 @@ from .units import format_units
 # Standard Ethereum BIP-44 path: m/44'/60'/{account}'/0/{index}.
 DERIVATION_PATH_TEMPLATE = "m/44'/60'/{account}'/0/{index}"
 
-_DEMO_TO_ADDRESS = "0x4A3F9c8e1b2D7A6F5e0C9b8A7D6e5f4c3B2a1908"
+_DEMO_TO_ADDRESS = "0xbE7C7F2a6AC45ff26Cb8324728910Af34c2CD21F"  # operator's real MetaMask address (evm-hardware-walkthrough.md)
 # Circle's real Optimism mainnet USDC deployment -- same address already verified and
 # registered in constants.KNOWN_TOKENS, reused here rather than re-hardcoded.
 _DEMO_USDC_OPTIMISM = "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"
