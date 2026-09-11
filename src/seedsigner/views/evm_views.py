@@ -24,10 +24,16 @@ from gettext import gettext as _
 from seedsigner.chains.base import ReviewField
 from seedsigner.chains.evm.constants import NETWORKS
 from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
-from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
+from seedsigner.gui.components import SeedSignerIconConstants
+from seedsigner.gui.screens import DireWarningScreen, RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, OptionDisabledView, View
+
+# BIP-32 non-hardened child index range -- same constraint SeedBIP85SelectChildIndexView
+# already enforces for the same underlying reason (see gui/screens/evm_screens.py's
+# EvmSelectAddressIndexScreen docstring).
+_MAX_ADDRESS_INDEX = 2**31
 
 
 _SCENARIO_MENU = [
@@ -113,19 +119,83 @@ class EvmNetworkView(View):
             return Destination(BackStackView)
 
         network = NETWORKS[selected_menu_num]
-        return Destination(EvmAddressView, view_args=dict(seed=self.seed, network_id=network.network_id))
+        return Destination(EvmSelectAddressIndexView, view_args=dict(seed=self.seed, network_id=network.network_id))
+
+
+
+class EvmSelectAddressIndexView(View):
+    """ Shared index picker for both places that need one: deriving a receive
+        address (network_id set) and signing a menu-picked demo scenario
+        (scenario_key set) -- exactly one of the two is set, matching the
+        one-destination-in/one-destination-out shape every other forked step in
+        this codebase already uses (e.g. SeedBIP85SelectChildIndexView). """
+    def __init__(self, seed: Seed, network_id: str = None, scenario_key: str = None):
+        super().__init__()
+        self.seed = seed
+        self.network_id = network_id
+        self.scenario_key = scenario_key
+
+
+    def run(self):
+        from seedsigner.gui.screens.evm_screens import EvmSelectAddressIndexScreen
+        ret = self.run_screen(EvmSelectAddressIndexScreen)
+
+        if ret == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if not ret or not 0 <= int(ret) < _MAX_ADDRESS_INDEX:
+            return Destination(
+                EvmInvalidAddressIndexView,
+                view_args=dict(seed=self.seed, network_id=self.network_id, scenario_key=self.scenario_key),
+                skip_current_view=True,
+            )
+
+        address_index = int(ret)
+        if self.network_id is not None:
+            return Destination(EvmAddressView, view_args=dict(
+                seed=self.seed, network_id=self.network_id, address_index=address_index))
+        else:
+            return Destination(EvmSignStartView, view_args=dict(
+                seed=self.seed, scenario_key=self.scenario_key, address_index=address_index))
+
+
+
+class EvmInvalidAddressIndexView(View):
+    def __init__(self, seed: Seed, network_id: str = None, scenario_key: str = None):
+        super().__init__()
+        self.seed = seed
+        self.network_id = network_id
+        self.scenario_key = scenario_key
+
+
+    def run(self):
+        self.run_screen(
+            DireWarningScreen,
+            title=_("Index Error"),
+            show_back_button=False,
+            status_icon_name=SeedSignerIconConstants.ERROR,
+            status_headline=_("Invalid Address Index"),
+            text=_("Address index must be between 0 and 2^31-1."),
+            button_data=[ButtonOption("Try again")],
+        )
+
+        return Destination(
+            EvmSelectAddressIndexView,
+            view_args=dict(seed=self.seed, network_id=self.network_id, scenario_key=self.scenario_key),
+            skip_current_view=True,
+        )
 
 
 
 class EvmAddressView(View):
-    def __init__(self, seed: Seed, network_id: str):
+    def __init__(self, seed: Seed, network_id: str, address_index: int):
         super().__init__()
         from seedsigner.chains import ChainRegistry
         from seedsigner.chains.evm.constants import NETWORKS_BY_ID
 
         self.seed = seed
         self.network = NETWORKS_BY_ID[network_id]
-        self.derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+        self.derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=address_index)
         address = ChainRegistry.get("evm").derive_address(seed.seed_bytes, self.derivation_path)
         self.address = address.address
 
@@ -197,7 +267,7 @@ class EvmSignSelectView(View):
             return Destination(BackStackView)
 
         scenario_key, _label = _SCENARIO_MENU[selected_menu_num]
-        return Destination(EvmSignStartView, view_args=dict(seed=self.seed, scenario_key=scenario_key))
+        return Destination(EvmSelectAddressIndexView, view_args=dict(seed=self.seed, scenario_key=scenario_key))
 
 
 
@@ -205,7 +275,7 @@ class EvmSignStartView(View):
     """ Entry point for a menu-picked sign request: parses the chosen scenario via the
         EvmPlugin -- the same call path a real scanned request would go through --
         and stashes the result for the paged review. """
-    def __init__(self, seed: Seed, scenario_key: str):
+    def __init__(self, seed: Seed, scenario_key: str, address_index: int):
         super().__init__()
         self.seed = seed
 
@@ -219,9 +289,10 @@ class EvmSignStartView(View):
 
         # Derivation path is a wallet-side choice, not part of the signed payload
         # itself (a real transaction/permit carries no such field) -- the view layer
-        # owns it, same as EvmAddressView already does. Account 0 / index 0 for this
-        # demo menu; a real scanned request would let the operator pick an account.
-        derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+        # owns it, same as EvmAddressView already does. Account 0, operator-picked
+        # index (see EvmSelectAddressIndexView) -- a real scanned ERC-4527 request
+        # would eventually let the incoming crypto-keypath name this instead.
+        derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=address_index)
 
         self.controller.multichain_data = dict(
             seed=seed,

@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from gettext import gettext as _
 
 from seedsigner.gui.components import FormattedAddress, GUIConstants, IconTextLine, SeedSignerIconConstants
+from seedsigner.gui.keyboard import Keyboard
 
-from .screen import ButtonListScreen, ButtonOption
+from .screen import ButtonListScreen, ButtonOption, KeyboardScreen
 
 
 # Real-hardware finding from the 7F work (240x240 HAT, 2026-08-28, see
@@ -46,6 +47,27 @@ def _wrap_long_value_for_display(text: str) -> str:
         return word[:break_at] + "\n" + word[break_at:]
 
     return " ".join(wrap_word(word) for word in text.split(" "))
+
+
+
+@dataclass
+class EvmSelectAddressIndexScreen(KeyboardScreen):
+    """ Same interaction pattern as SeedBIP85SelectChildIndexScreen (digits-only
+        keypad, save-to-continue) -- not a shared base class, since the two screens'
+        valid ranges/purposes differ, but no reason to invent a new pattern for the
+        same shape of problem (picking a BIP-32 non-hardened child index, 0 to
+        2**31-1, the same underlying constraint both features share). """
+    def __post_init__(self):
+        self.title = _("EVM Address Index")
+        self.user_input = ""
+
+        self.rows = 3
+        self.cols = 5
+        self.keys_charset = "0123456789"
+        self.show_save_button = True
+        self.custom_additional_keys = [Keyboard.KEY_BACKSPACE_5]
+
+        super().__post_init__()
 
 
 

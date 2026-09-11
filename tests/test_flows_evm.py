@@ -62,11 +62,15 @@ class TestEvmFlows(FlowTest):
     def test_evm_address_flow(self):
         """
             SeedOptionsView -> MultiChainOptionsView -> EvmOptionsView ->
-            EvmNetworkView -> EvmAddressView -> EvmAddressQRView -> MainMenuView.
+            EvmNetworkView -> EvmSelectAddressIndexView -> EvmAddressView ->
+            EvmAddressQRView -> MainMenuView. Non-zero index (1) deliberately, to
+            prove the picker's value actually flows through to derivation, not
+            just that the screen appears.
         """
         self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
             FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.ADDRESS),
             FlowStep(evm_views.EvmNetworkView, screen_return_value=1),  # "Base"
+            FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="1"),
             FlowStep(evm_views.EvmAddressView, screen_return_value=0),  # "Export QR"
             FlowStep(evm_views.EvmAddressQRView, screen_return_value=0),
             FlowStep(MainMenuView),
@@ -94,21 +98,23 @@ class TestEvmFlows(FlowTest):
 
 
     def test_evm_sign_flow_transfer(self):
-        """ SeedOptionsView -> ... -> EvmSignSelectView -> EvmSignStartView (redirect)
-            -> EvmConfirmPayloadView (paged) -> EvmConfirmAddressView ->
-            EvmSignedQRView -> MainMenuView. Ordinary transfer (rollout Phase 4: a
-            real RLP-encoded EIP-1559 transaction, really signed): 4 review fields
-            (Network, Operation, Amount, To) + first-time-address warning. """
+        """ SeedOptionsView -> ... -> EvmSignSelectView -> EvmSelectAddressIndexView
+            -> EvmSignStartView (redirect) -> EvmConfirmPayloadView (paged) ->
+            EvmConfirmAddressView -> EvmSignedQRView -> MainMenuView. Ordinary
+            transfer (rollout Phase 4: a real RLP-encoded EIP-1559 transaction,
+            really signed): 4 review fields (Network, Operation, Amount, To) +
+            first-time-address warning. """
         self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
             FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.SIGN),
             FlowStep(evm_views.EvmSignSelectView, screen_return_value=0),  # "Ordinary transfer"
+            FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="0"),
             FlowStep(evm_views.EvmSignStartView, is_redirect=True),
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Network (1/5)
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Operation (2/5)
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # Amount (3/5)
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # To (4/5)
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # First-time address warning (5/5)
-            FlowStep(evm_views.EvmConfirmAddressView, screen_return_value=0),  # Sign (DEMO)
+            FlowStep(evm_views.EvmConfirmAddressView, screen_return_value=0),  # Sign
             FlowStep(evm_views.EvmSignedQRView, screen_return_value=0),
             FlowStep(MainMenuView),
         ])
@@ -247,16 +253,19 @@ class TestEvmFlows(FlowTest):
             Backing out of a later page should return to the previous review page;
             backing out of the first page should abandon the flow and, per
             BackStackView's normal "pop current + previous" semantics, land back on
-            EvmSignSelectView -- mirroring the 7F work's SevenFConfirmPayloadView.
+            EvmSelectAddressIndexView (EvmSignStartView is a skip_current_view
+            redirect, so it never occupies its own back-stack entry) -- mirroring
+            the 7F work's SevenFConfirmPayloadView.
         """
         self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
             FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.SIGN),
             FlowStep(evm_views.EvmSignSelectView, screen_return_value=0),
+            FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="0"),
             FlowStep(evm_views.EvmSignStartView, is_redirect=True),
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=0),  # page 1 -> Next
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=RET_CODE__BACK_BUTTON),  # page 2 -> Back
             FlowStep(evm_views.EvmConfirmPayloadView, screen_return_value=RET_CODE__BACK_BUTTON),  # page 1 -> Back, abandons flow
-            FlowStep(evm_views.EvmSignSelectView),
+            FlowStep(evm_views.EvmSelectAddressIndexView),
         ])
 
         assert self.controller.multichain_data is None
@@ -276,6 +285,86 @@ class TestEvmFlows(FlowTest):
 
         button_data = mock_run_screen.call_args.kwargs["button_data"]
         assert seed_views.SeedOptionsView.MULTICHAIN not in button_data
+
+
+    def test_evm_select_address_index_view_rejects_out_of_range(self):
+        """ Direct-construction check: an out-of-range typed index routes to the
+            invalid-index error view rather than crashing or silently clamping --
+            same contract as SeedBIP85SelectChildIndexView's own range check. """
+        seed = self.seed_fixture()
+        view = evm_views.EvmSelectAddressIndexView(seed=seed, network_id="optimism")
+        with patch.object(view, "run_screen", return_value=str(2**31)):
+            destination = view.run()
+        assert destination.View_cls == evm_views.EvmInvalidAddressIndexView
+
+
+    def test_evm_select_address_index_view_accepts_boundary_values(self):
+        """ 0 and 2**31-1 are the valid boundary values (BIP-32 non-hardened child
+            index range) -- confirms the check is `< 2**31`, not `<= 2**31`. """
+        seed = self.seed_fixture()
+
+        view = evm_views.EvmSelectAddressIndexView(seed=seed, network_id="optimism")
+        with patch.object(view, "run_screen", return_value="0"):
+            destination = view.run()
+        assert destination.View_cls == evm_views.EvmAddressView
+        assert destination.view_args["address_index"] == 0
+
+        view = evm_views.EvmSelectAddressIndexView(seed=seed, network_id="optimism")
+        with patch.object(view, "run_screen", return_value=str(2**31 - 1)):
+            destination = view.run()
+        assert destination.View_cls == evm_views.EvmAddressView
+        assert destination.view_args["address_index"] == 2**31 - 1
+
+
+    def test_evm_address_view_uses_the_selected_index(self):
+        """ Wiring check: EvmAddressView must actually derive from the index it was
+            given, not silently fall back to 0 -- the exact gap this feature fixes
+            (previously hardcoded to account=0, index=0 in both the address and
+            sign flows). """
+        from seedsigner.chains import ChainRegistry
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+
+        view = evm_views.EvmAddressView(seed=seed, network_id="optimism", address_index=1)
+        assert view.derivation_path == "m/44'/60'/0'/0/1"
+        assert view.address == plugin.derive_address(seed.seed_bytes, "m/44'/60'/0'/0/1").address
+        # And it's genuinely a different address than index 0 would give.
+        assert view.address != plugin.derive_address(seed.seed_bytes, "m/44'/60'/0'/0/0").address
+
+
+    def test_evm_sign_at_nonzero_index_recovers_to_that_index_address(self):
+        """ Same recoverable-signature check as test_evm_sign_produces_real_recoverable_signature,
+            but through EvmSignStartView with a non-default index -- confirms the
+            picker's value actually reaches the derivation path used for signing,
+            not just for address display. """
+        from eth_keys import keys as eth_keys
+
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+        from seedsigner.chains.evm.transaction import UnsignedEip1559Transaction
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+
+        view = evm_views.EvmSignStartView(seed=seed, scenario_key="transfer", address_index=1)
+        assert self.controller.multichain_data["derivation_path"] == "m/44'/60'/0'/0/1"
+
+        address = plugin.derive_address(seed.seed_bytes, "m/44'/60'/0'/0/1").address
+        payload = DEMO_SCENARIOS["transfer"]
+        signature = plugin.sign(seed.seed_bytes, "m/44'/60'/0'/0/1", payload)
+
+        r = int.from_bytes(signature.signature_bytes[:32], "big")
+        s = int.from_bytes(signature.signature_bytes[32:64], "big")
+        y_parity = signature.signature_bytes[64]
+        msg_hash = UnsignedEip1559Transaction(payload).signing_hash()
+        recovered = eth_keys.Signature(vrs=(y_parity, r, s)).recover_public_key_from_msg_hash(
+            msg_hash).to_checksum_address()
+
+        assert recovered == address
+        # And it's genuinely not the index-0 address -- a weaker test could pass
+        # by accident if signing silently ignored the index entirely.
+        assert address != plugin.derive_address(seed.seed_bytes, "m/44'/60'/0'/0/0").address
 
 
     def test_evm_options_disabled_redirects(self):
