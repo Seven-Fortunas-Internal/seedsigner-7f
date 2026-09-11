@@ -42,7 +42,9 @@ from .units import format_units
 DERIVATION_PATH_TEMPLATE = "m/44'/60'/{account}'/0/{index}"
 
 _DEMO_TO_ADDRESS = "0x4A3F9c8e1b2D7A6F5e0C9b8A7D6e5f4c3B2a1908"
-_DEMO_USDC_OPTIMISM_SEPOLIA = "0x5fd84259d66Cd46123540766Be93DFE6D43130D7"
+# Circle's real Optimism mainnet USDC deployment -- same address already verified and
+# registered in constants.KNOWN_TOKENS, reused here rather than re-hardcoded.
+_DEMO_USDC_OPTIMISM = "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"
 _DEMO_APPROVE_SPENDER = "0x7F1A2e3d4C5B6a7988776655443322112233eEDC"
 
 
@@ -71,12 +73,19 @@ def _erc20_calldata(selector: bytes, address_hex: str, amount: int) -> bytes:
 # docs/multi-chain/evm-hardware-walkthrough.md for how these get used for real.
 DEMO_SCENARIOS: dict[str, bytes] = {
     "transfer": _rlp_encode_unsigned_tx(
-        chain_id=11155420, nonce=0, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
+        chain_id=10, nonce=0, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
         gas_limit=21_000, to_hex=_DEMO_TO_ADDRESS, value=50_000_000_000_000_000, data=b"",
     ),
     "approve_unlimited": _rlp_encode_unsigned_tx(
-        chain_id=11155420, nonce=1, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
-        gas_limit=60_000, to_hex=_DEMO_USDC_OPTIMISM_SEPOLIA, value=0,
+        # _DEMO_APPROVE_SPENDER is a fabricated address, not anyone's real contract --
+        # this scenario exists to exercise the anti-scam "Amount: UNLIMITED" warning
+        # field below (is_warning=True), not to be broadcast for real. Unlike
+        # transfer/usdc_transfer (recoverable: worst case moves funds to an address
+        # you control after editing _DEMO_TO_ADDRESS), a real unlimited approval to
+        # this address would let it drain USDC from the signing account indefinitely.
+        # Do not broadcast this one against a funded mainnet account.
+        chain_id=10, nonce=1, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
+        gas_limit=60_000, to_hex=_DEMO_USDC_OPTIMISM, value=0,
         data=_erc20_calldata(bytes.fromhex("095ea7b3"), _DEMO_APPROVE_SPENDER, UINT256_MAX),
     ),
     "usdc_transfer": _rlp_encode_unsigned_tx(
@@ -86,13 +95,13 @@ DEMO_SCENARIOS: dict[str, bytes] = {
         # scenarios independently assume nonce 0, so running this on an account
         # that already ran "transfer" (now at nonce 1) will fail loudly with a
         # nonce-too-low RPC error, not silently misbehave.
-        chain_id=11155420, nonce=0, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
-        gas_limit=60_000, to_hex=_DEMO_USDC_OPTIMISM_SEPOLIA, value=0,
+        chain_id=10, nonce=0, max_priority_fee=1_000_000_000, max_fee=2_000_000_000,
+        gas_limit=60_000, to_hex=_DEMO_USDC_OPTIMISM, value=0,
         data=_erc20_calldata(bytes.fromhex("a9059cbb"), _DEMO_TO_ADDRESS, 1_000_000),  # 1.0 USDC (6 decimals)
     ),
     "permit": json.dumps({
         "operation": "permit",
-        "network_id": "optimism-sepolia",
+        "network_id": "optimism",
         "token_symbol": "USDC",
         "counterparty": "0x99887766554433221100ffeeddccbbaa9988776",
         "amount": "1,000,000 USDC",

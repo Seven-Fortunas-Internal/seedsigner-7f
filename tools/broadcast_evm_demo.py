@@ -2,7 +2,10 @@
 """
     Companion tool -- takes a signature produced by one of SeedSigner's real EVM demo
     sign scenarios (chains/evm/plugin.py's DEMO_SCENARIOS) and broadcasts it to
-    Optimism Sepolia.
+    Optimism mainnet (chain id 10) by default -- these scenarios move real funds,
+    see docs/multi-chain/evm-hardware-walkthrough.md. Optimism Sepolia is also
+    supported (RPC_URLS/EXPLORER_TX_URLS below) for scenarios built against that
+    chain id instead.
 
     NEVER touches a private key -- the whole point of the airgapped device is that
     the key never leaves it. This script only combines a signature the device
@@ -34,9 +37,11 @@ from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
 from seedsigner.chains.evm.transaction import UnsignedEip1559Transaction
 
 RPC_URLS = {
+    10: "https://mainnet.optimism.io",
     11_155_420: "https://sepolia.optimism.io",
 }
 EXPLORER_TX_URLS = {
+    10: "https://optimistic.etherscan.io/tx/",
     11_155_420: "https://sepolia-optimism.etherscan.io/tx/",
 }
 

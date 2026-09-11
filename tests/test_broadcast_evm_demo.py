@@ -54,7 +54,7 @@ def test_build_signed_tx_matches_eth_account_reference_byte_for_byte(scenario):
     reference_raw_tx, (r, s, y_parity) = _reference_signed_tx(scenario)
     ours, chain_id = broadcast_tool.build_signed_tx(scenario, r, s, y_parity)
     assert ours == reference_raw_tx
-    assert chain_id == 11_155_420
+    assert chain_id == 10
 
 
 def test_build_signed_tx_rejects_non_broadcastable_scenario():

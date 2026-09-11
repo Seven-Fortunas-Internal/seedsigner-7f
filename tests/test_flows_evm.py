@@ -145,11 +145,11 @@ class TestEvmFlows(FlowTest):
         assert by_label["Operation"] == "Transfer"
         assert by_label["Amount"] == "0.05 ETH"
         assert by_label["To"] == _DEMO_TO_ADDRESS
-        assert by_label["Network"] == "Optimism Sepolia (testnet)"
+        assert by_label["Network"] == "Optimism"
 
 
     def test_evm_approve_scenario_resolves_known_usdc_token(self):
-        """ approve_unlimited's contract address is Circle's real Optimism Sepolia
+        """ approve_unlimited's contract address is Circle's real Optimism mainnet
             USDC address (constants.KNOWN_TOKENS) -- confirms the token symbol
             resolves from that table rather than showing a raw/unknown-token
             warning. """
@@ -195,7 +195,7 @@ class TestEvmFlows(FlowTest):
 
     def test_evm_usdc_transfer_scenario_is_real_and_signable(self):
         """ usdc_transfer is a real ERC-20 transfer() call to Circle's real Optimism
-            Sepolia USDC contract -- confirms it decodes with a real resolved token
+            mainnet USDC contract -- confirms it decodes with a real resolved token
             symbol (not an unknown-contract warning) and produces a real, recoverable
             signature. """
         from eth_keys import keys as eth_keys
