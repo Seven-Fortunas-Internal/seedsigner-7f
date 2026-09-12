@@ -17,7 +17,7 @@ from seedsigner.models.settings import SettingsConstants
 from urtypes.crypto import PSBT as UR_PSBT
 from urtypes.crypto import Account, HDKey, Output, Keypath, PathComponent, SCRIPT_EXPRESSION_TAG_MAP, CoinInfo
 
-from seedsigner.chains.evm.ur_types import EthSignature
+from seedsigner.chains.evm.ur_types import EthSignature, build_account_hdkey_cbor
 
 
 
@@ -421,4 +421,23 @@ class UrEthSignatureQrEncoder(BaseFountainQrEncoder):
     def __post_init__(self):
         super().__post_init__()
         qr_ur_bytes = UR("eth-signature", self.eth_signature.to_cbor())
+        self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)
+
+
+
+@dataclass
+class UrEvmConnectQrEncoder(BaseFountainQrEncoder):
+    """ ERC-4527 "Connect" QR (plan Phase 2's deferred half, see
+        views/evm_views.py's EvmConnectQRView): a crypto-hdkey UR exporting the
+        account-level public key, what a real requester scans to import a
+        Keystone-compatible watch-only account. Unlike UrEthSignatureQrEncoder
+        above, this one is built from the raw seed bytes, not a pre-built payload
+        -- see chains/evm/ur_types.py's build_account_hdkey_cbor for why only
+        key/chain_code/origin are set. """
+    seed_bytes: bytes = None
+    account: int = 0
+
+    def __post_init__(self):
+        super().__post_init__()
+        qr_ur_bytes = UR("crypto-hdkey", build_account_hdkey_cbor(self.seed_bytes, self.account))
         self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)

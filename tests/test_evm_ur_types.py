@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from seedsigner.helpers.ur2.ur import UR
 from seedsigner.helpers.ur2.ur_decoder import URDecoder
 from seedsigner.helpers.ur2.ur_encoder import UREncoder
-from seedsigner.chains.evm.ur_types import EthSignRequest, EthSignature, DATA_TYPE_TRANSACTION
+from seedsigner.chains.evm.ur_types import EthSignRequest, EthSignature, DATA_TYPE_TRANSACTION, build_account_hdkey_cbor
 
 
 # From KeystoneHQ/keystone-sdk-base packages/ur-registry-eth/__tests__/EthSignRequest.test.ts
@@ -34,6 +34,16 @@ REFERENCE_SIGN_REQUEST_ID = bytes.fromhex("9b1deb4d3b7d4bad9bdd2b0d7b3dcb6d")
 REFERENCE_SIGNATURE_UR = "ur:eth-signature/otadtpdagdndcawmgtfrkigrpmndutdnbtkgfssbjnaohdfptywtosrftahprdctrkbegylogdghjkbafhflamfwlohghtpsseaozorsimnybbtnnbiynlckenbtfmeeamsabnaeoxasjkwswfkekiieckhpecckssptndzelnwfecylbwaxisjeihkkjkjyjljtihdwlkamiy"
 REFERENCE_SIGNATURE_BYTES = bytes.fromhex("d4f0a7bcd95bba1fbb1051885054730e3f47064288575aacc102fbbf6a9a14daa066991e360d3e3406c20c00a40973eff37c7d641e5b351ec4a99bfe86f335f713")
 REFERENCE_SIGNATURE_ID = bytes.fromhex("9b1deb4d3b7d4bad9bdd2b0d7b3dcb6d")
+
+# From KeystoneHQ/Keystone-developer-hub's research/ethereum-qr-data-protocol.md
+# ("Crypto-HDKey Example"): a real Keystone-produced account-level (M/44'/60'/0')
+# extended public key, master fingerprint cfc23f3f. This is the "Connect" QR shape
+# build_account_hdkey_cbor() targets -- only key/chain_code/origin are set, no
+# use_info/parent_fingerprint/depth (see chains/evm/ur_types.py's module docstring).
+REFERENCE_ACCOUNT_HDKEY_CBOR = bytes.fromhex("A303582103DA1A04CC1509CD716E215F1C8A3D1530A6B4EFDACB04D1641EAA117342EFA4B1045820FDCA62CADED4C32CD914A3CEF84529504BC534C721997E196BE421162F3EB81D06D90130A20186182CF5183CF500F5021ACFC23F3F")
+REFERENCE_ACCOUNT_HDKEY_PUBKEY = bytes.fromhex("03da1a04cc1509cd716e215f1c8a3d1530a6b4efdacb04d1641eaa117342efa4b1")
+REFERENCE_ACCOUNT_HDKEY_CHAIN_CODE = bytes.fromhex("fdca62caded4c32cd914a3cef84529504bc534c721997e196be421162f3eb81d")
+REFERENCE_ACCOUNT_HDKEY_FINGERPRINT = bytes.fromhex("cfc23f3f")
 
 
 def _decode_ur(ur_string: str) -> UR:
@@ -122,3 +132,63 @@ def test_eth_sign_request_optional_fields_omitted_when_absent():
     assert decoded.request_id is None
     assert decoded.address is None
     assert decoded.origin is None
+
+
+def test_decodes_real_reference_account_hdkey():
+    """ Confirms `urtypes.crypto.HDKey` (generic, not homegrown here) parses a real
+        Keystone-produced ETH account-hdkey correctly, and -- the part that actually
+        matters for interop -- that the real example sets only key/chain_code/origin,
+        nothing else. This is the target shape build_account_hdkey_cbor() below must
+        match; if a real requester ever starts expecting more, this test is the one
+        that should catch the mismatch. """
+    from urtypes.crypto import HDKey as UrHDKey
+
+    hd = UrHDKey.from_cbor(REFERENCE_ACCOUNT_HDKEY_CBOR)
+
+    assert hd.key == REFERENCE_ACCOUNT_HDKEY_PUBKEY
+    assert hd.chain_code == REFERENCE_ACCOUNT_HDKEY_CHAIN_CODE
+    assert [(c.index, c.hardened) for c in hd.origin.components] == [(44, True), (60, True), (0, True)]
+    assert hd.origin.source_fingerprint == REFERENCE_ACCOUNT_HDKEY_FINGERPRINT
+    assert hd.origin.depth is None
+    assert hd.use_info is None
+    assert hd.parent_fingerprint is None
+
+
+def test_build_account_hdkey_cbor_matches_real_shape_and_embit_directly():
+    """ Two things at once, both required for real interop: (1) our own encoder's
+        output has the exact same field shape as the real reference example above
+        (no extra/missing top-level keys), and (2) the key/chain_code/fingerprint it
+        produces for a given seed are cross-verified against embit's own BIP-32
+        derivation directly, not just "decodes back to itself". """
+    from embit.bip32 import HDKey as Bip32HDKey
+    from urtypes.crypto import HDKey as UrHDKey
+
+    seed_bytes = b"\x07" * 64
+    cbor = build_account_hdkey_cbor(seed_bytes, account=0)
+    hd = UrHDKey.from_cbor(cbor)
+
+    root = Bip32HDKey.from_seed(seed_bytes)
+    account_pub = root.derive("m/44'/60'/0'").to_public()
+
+    assert hd.key == account_pub.sec()
+    assert hd.chain_code == account_pub.chain_code
+    assert hd.origin.source_fingerprint == root.my_fingerprint
+    assert [(c.index, c.hardened) for c in hd.origin.components] == [(44, True), (60, True), (0, True)]
+    # Same absent-field shape as the real reference vector -- not this codebase's
+    # own fuller Bitcoin UrXpubQrEncoder shape (which also sets parent_fingerprint).
+    assert hd.origin.depth is None
+    assert hd.use_info is None
+    assert hd.parent_fingerprint is None
+
+
+def test_build_account_hdkey_cbor_uses_the_requested_account():
+    """ A non-zero account must actually change the derivation path and the
+        resulting key -- not just be accepted and ignored. """
+    from urtypes.crypto import HDKey as UrHDKey
+
+    seed_bytes = b"\x09" * 64
+    account_0 = UrHDKey.from_cbor(build_account_hdkey_cbor(seed_bytes, account=0))
+    account_1 = UrHDKey.from_cbor(build_account_hdkey_cbor(seed_bytes, account=1))
+
+    assert [(c.index, c.hardened) for c in account_1.origin.components] == [(44, True), (60, True), (1, True)]
+    assert account_0.key != account_1.key

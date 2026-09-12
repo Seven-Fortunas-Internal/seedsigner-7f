@@ -25,10 +25,27 @@
       - request-id (key 1, both types) is tag-wrapped with CBOR tag 37 (UUID), as a
         raw 16-byte string -- no dedicated urtypes type for a bare UUID, handled
         inline here.
+
+    build_account_hdkey_cbor() below (the plan's "Export Connect QR", see
+    views/evm_views.py's EvmConnectQRView) is encode-only and reuses
+    `urtypes.crypto.HDKey` as-is -- no new registry class needed, unlike
+    eth-sign-request/eth-signature above, since crypto-hdkey (tag 303) is already a
+    generic Blockchain Commons type this codebase's own Bitcoin xpub export already
+    uses (models/encode_qr.py's UrXpubQrEncoder). The one thing worth getting right
+    is *which* fields to populate: cross-verified against a real Keystone-produced
+    ETH account-hdkey example (KeystoneHQ/Keystone-developer-hub's
+    research/ethereum-qr-data-protocol.md), decoded byte-for-byte in
+    tests/test_evm_ur_types.py, that real example sets only key/chain_code/origin --
+    no use_info (SLIP-44 coin type), no parent_fingerprint, no depth. Matched here
+    rather than following UrXpubQrEncoder's fuller Bitcoin shape (which does set
+    parent_fingerprint) -- matching real interop matters more than matching this
+    codebase's own other UR usage, the same call already made for
+    eth-sign-request/eth-signature's omitted `depth` above.
 """
+from embit.bip32 import HDKey as Bip32HDKey
 from urtypes import RegistryItem, RegistryType
 from urtypes.cbor import DataItem, Tagging
-from urtypes.crypto import Keypath, PathComponent
+from urtypes.crypto import HDKey as UrHDKey, Keypath, PathComponent
 
 
 ETH_SIGN_REQUEST = RegistryType("eth-sign-request", None)
@@ -165,3 +182,40 @@ class EthSignature(RegistryItem):
         signature = map[2]
         origin = map.get(3)
         return cls(request_id, signature, origin)
+
+
+# Account-level prefix of plugin.py's DERIVATION_PATH_TEMPLATE ("m/44'/60'/{account}'/0/{index}")
+# -- duplicated as a bare constant rather than imported, matching this module's existing
+# mirror-don't-import stance on path handling (see _path_to_keypath above).
+_ACCOUNT_PATH_TEMPLATE = "m/44'/60'/{account}'"
+
+
+def build_account_hdkey_cbor(seed_bytes: bytes, account: int = 0) -> bytes:
+    """ Builds the CBOR body for a crypto-hdkey UR exporting the account-level
+        (m/44'/60'/{account}') extended *public* key -- the "Connect" QR a real
+        requester (MetaMask/Rabby/etc.) scans to import a Keystone-compatible
+        watch-only account, after which it derives whichever change/index address
+        it needs on its own, without a further QR round-trip. Deliberately
+        different from every other derivation in this module/plugin.py, which
+        always goes to a full m/44'/60'/{account}'/0/{index} leaf and returns a
+        private key or address -- this is the one place an *account-level public*
+        key leaves the device, by design (a watch-only export, not a signing one).
+
+        seed_bytes already has any BIP-39 passphrase mixed in (Seed.seed_bytes),
+        same as chains/evm/crypto.py's derive_private_key -- honored here for the
+        same reason (see crypto.py's module docstring). """
+    root = Bip32HDKey.from_seed(seed_bytes)
+    account_node = root.derive(_ACCOUNT_PATH_TEMPLATE.format(account=account))
+    account_pub = account_node.to_public()
+
+    origin = Keypath(
+        [PathComponent(44, True), PathComponent(60, True), PathComponent(account, True)],
+        root.my_fingerprint,
+        None,  # depth omitted -- see module docstring: matches the real reference example
+    )
+    ur_hdkey = UrHDKey({
+        "key": account_pub.sec(),
+        "chain_code": account_pub.chain_code,
+        "origin": origin,
+    })
+    return ur_hdkey.to_cbor()

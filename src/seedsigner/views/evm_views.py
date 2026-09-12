@@ -69,7 +69,7 @@ def _guard_multichain_enabled(view: View):
     EVM Address Display Views
 ****************************************************************************"""
 class EvmOptionsView(View):
-    ADDRESS = ButtonOption("Receive address")
+    ADDRESS = ButtonOption("Address / Connect")
     SCAN = ButtonOption("Scan sign request")
     SIGN = ButtonOption("Sign message")
 
@@ -219,7 +219,11 @@ class EvmAddressView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        # User clicked "Export QR"
+        # Button order fixed in EvmAddressScreen.__post_init__: 0 = "Export Address
+        # QR", 1 = "Export Connect QR".
+        if selected_menu_num == 1:
+            return Destination(EvmConnectQRView, view_args=dict(seed=self.seed))
+
         return Destination(EvmAddressQRView, view_args=dict(address=self.address))
 
 
@@ -243,6 +247,40 @@ class EvmAddressQRView(View):
         # Exiting/Canceling the QR display screen always returns Home, same
         # convention used throughout the codebase (ToolsAddressExplorerAddressView,
         # SeedSignMessageSignedMessageQRView, the 7F work's SevenFAddressQRView).
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
+class EvmConnectQRView(View):
+    """ Plan Phase 2's deferred "Export Connect QR": a crypto-hdkey UR for the
+        account-level (m/44'/60'/0') public key, what a real requester
+        (MetaMask/Rabby/etc.) scans to import this device as a Keystone-compatible
+        watch-only account -- after which *it* derives whichever change/index
+        address it needs, without a further QR round-trip. Always account 0, same
+        single-account convention DERIVATION_PATH_TEMPLATE.format(account=0, ...)
+        already uses everywhere else in this module. """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import UrEvmConnectQrEncoder
+        from seedsigner.models.settings import SettingsConstants
+        qr_encoder = UrEvmConnectQrEncoder(
+            seed_bytes=self.seed.seed_bytes,
+            account=0,
+            qr_density=self.settings.get_value(SettingsConstants.SETTING__QR_DENSITY),
+        )
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=qr_encoder,
+        )
+
+        # Exiting/Canceling the QR display screen always returns Home, same
+        # convention as EvmAddressQRView/EvmSignedUrQRView above.
         return Destination(MainMenuView, skip_current_view=True)
 
 

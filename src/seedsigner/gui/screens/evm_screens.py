@@ -97,7 +97,13 @@ class EvmAddressScreen(ButtonListScreen):
         self.title = f"{self.network_name} Address"
         self.is_bottom_list = True
         self.is_button_text_centered = True
-        self.button_data = [ButtonOption("Export QR")]
+        # Two export paths (plan Phase 2's merged Connect/Receive screen): the plain
+        # address (today's GenericStaticQrEncoder, unchanged) for a counterparty who
+        # just needs a destination to send to, and Connect (crypto-hdkey) for a
+        # wallet app (MetaMask/Rabby/etc.) importing this device as a
+        # Keystone-compatible signer -- see EvmAddressView.run()'s dispatch below and
+        # models/encode_qr.py's UrEvmConnectQrEncoder.
+        self.button_data = [ButtonOption("Export Address QR"), ButtonOption("Export Connect QR")]
         super().__post_init__()
 
         derivation_path_display = IconTextLine(

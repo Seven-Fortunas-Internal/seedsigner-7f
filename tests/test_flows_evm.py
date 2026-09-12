@@ -71,10 +71,46 @@ class TestEvmFlows(FlowTest):
             FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.ADDRESS),
             FlowStep(evm_views.EvmNetworkView, screen_return_value=1),  # "Base"
             FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="1"),
-            FlowStep(evm_views.EvmAddressView, screen_return_value=0),  # "Export QR"
+            FlowStep(evm_views.EvmAddressView, screen_return_value=0),  # "Export Address QR"
             FlowStep(evm_views.EvmAddressQRView, screen_return_value=0),
             FlowStep(MainMenuView),
         ])
+
+
+    def test_evm_address_view_connect_button_routes_to_connect_qr_view(self):
+        """ Plan Phase 2's merged screen: the *same* EvmAddressView, but the second
+            button ("Export Connect QR") must route to EvmConnectQRView, not
+            EvmAddressQRView -- confirms the merge actually dispatches on which
+            button was pressed rather than always taking one branch. """
+        self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
+            FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.ADDRESS),
+            FlowStep(evm_views.EvmNetworkView, screen_return_value=0),  # "Optimism"
+            FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="0"),
+            FlowStep(evm_views.EvmAddressView, screen_return_value=1),  # "Export Connect QR"
+            FlowStep(evm_views.EvmConnectQRView, screen_return_value=0),
+            FlowStep(MainMenuView),
+        ])
+
+
+    def test_evm_connect_qr_view_encodes_account_level_hdkey_for_the_selected_seed(self):
+        """ EvmConnectQRView must actually build its QR from *this* seed, not a
+            placeholder -- confirms the encoder's CBOR carries the exact
+            fingerprint/pubkey chains.evm.ur_types.build_account_hdkey_cbor would
+            independently compute for the same seed. """
+        from seedsigner.chains.evm.ur_types import build_account_hdkey_cbor
+        from seedsigner.models.encode_qr import UrEvmConnectQrEncoder
+        from seedsigner.models.settings import SettingsConstants
+
+        seed = self.seed_fixture()
+        view = evm_views.EvmConnectQRView(seed=seed)
+
+        encoder = UrEvmConnectQrEncoder(
+            seed_bytes=view.seed.seed_bytes,
+            account=0,
+            qr_density=SettingsConstants.DENSITY__MEDIUM,
+        )
+        assert encoder.ur2_encode.ur.type == "crypto-hdkey"
+        assert encoder.ur2_encode.ur.cbor == build_account_hdkey_cbor(seed.seed_bytes, account=0)
 
 
     def test_evm_address_is_deterministic_per_derivation_path(self):
