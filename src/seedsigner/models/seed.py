@@ -49,8 +49,15 @@ class Seed:
         try:
             self.seed_bytes = bip39.mnemonic_to_seed(self.mnemonic_str, password=self._passphrase, wordlist=self.wordlist)
         except Exception as e:
-            logger.info(repr(e), exc_info=True)
-            raise InvalidSeedException(repr(e))
+            # embit's bip39.mnemonic_to_bytes() raises ValueError("Word '<word>' is
+            # not in the dictionary") for an unrecognized word -- repr(e)/exc_info
+            # would put that literal word (part of the user's secret recovery
+            # phrase) into the on-device log file, and onto the crash screen too if
+            # this exception were ever left uncaught (Controller.handle_exception
+            # logs and displays any exception's message). Log/raise only the
+            # exception's type, never its message content.
+            logger.info("Seed generation failed: %s", type(e).__name__)
+            raise InvalidSeedException(f"Invalid mnemonic or passphrase ({type(e).__name__})") from e
 
 
     @property
@@ -164,10 +171,18 @@ class Seed:
         return bip85.derive_mnemonic(root, bip85_num_words, bip85_index)
         
 
-    ### override operators    
+    ### override operators
     def __eq__(self, other):
         if isinstance(other, Seed):
-            return self.seed_bytes == other.seed_bytes
+            # Constant-time comparison of secret seed material. Not a live threat
+            # here -- this only ever runs locally, in-process, comparing seeds
+            # already loaded onto this same airgapped device (e.g.
+            # SeedStorage.finalize_pending_seed()'s dedup check) with no attacker
+            # able to observe comparison timing -- but hmac.compare_digest costs
+            # nothing over `==` and removes the question entirely.
+            if self.seed_bytes is None or other.seed_bytes is None:
+                return self.seed_bytes is other.seed_bytes
+            return hmac.compare_digest(self.seed_bytes, other.seed_bytes)
         return False
 
 

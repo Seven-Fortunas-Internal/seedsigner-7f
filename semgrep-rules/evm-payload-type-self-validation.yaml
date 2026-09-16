@@ -1,0 +1,83 @@
+rules:
+  - id: evm-payload-type-self-validation
+    languages: [python]
+    severity: HIGH
+    message: >
+      A `sign_data`/payload byte-string read off a decoded/scanned object
+      (e.g. an EthSignRequest straight from external CBOR) is parsed or
+      handed off for signing (`parse_sign_request(...)`, or a `payload=...`
+      entry in the multichain hand-off dict) without first being checked by
+      `is_real_transaction_payload(...)` in this function. This violates the
+      codebase's self-validation rule (chains/evm/plugin.py,
+      docs/multi-chain/README.md): a scanned request's `data_type` field is
+      just as attacker-controlled as every other field and could claim "real
+      transaction" while `sign_data` is actually shaped like the still-mocked
+      permit JSON -- silently accepted by parse_sign_request()/sign(),
+      showing fully attacker-authored review content and returning a
+      signature that isn't tied to the key at all. Check the actual payload
+      bytes with `is_real_transaction_payload(<payload>)` before parsing or
+      signing it, rather than trusting the claimed `data_type` label.
+    metadata:
+      category: security
+      confidence: MEDIUM
+      references:
+        - src/seedsigner/chains/evm/plugin.py (is_real_transaction_payload)
+      subcategory:
+        - vuln
+      technology:
+        - python
+    paths:
+      include:
+        - "**/src/seedsigner/chains/evm/*.py"
+        - "**/src/seedsigner/views/evm_views.py"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: dict(..., payload=$PAYLOAD, ...)
+              - metavariable-pattern:
+                  metavariable: $PAYLOAD
+                  pattern: $OBJ.sign_data
+              - pattern-not-inside:
+                  pattern-either:
+                    - pattern: |
+                        $CHECKER.is_real_transaction_payload($PAYLOAD)
+                        ...
+                        $VAR = dict(..., payload=$PAYLOAD, ...)
+                    - pattern: |
+                        is_real_transaction_payload($PAYLOAD)
+                        ...
+                        $VAR = dict(..., payload=$PAYLOAD, ...)
+                    - pattern: |
+                        if not $CHECKER.is_real_transaction_payload($PAYLOAD):
+                            ...
+                        ...
+                        $VAR = dict(..., payload=$PAYLOAD, ...)
+          - patterns:
+              - pattern: $PLUGIN.parse_sign_request($PAYLOAD)
+              - metavariable-pattern:
+                  metavariable: $PAYLOAD
+                  pattern: $OBJ.sign_data
+              - pattern-not-inside:
+                  pattern-either:
+                    - pattern: |
+                        $CHECKER.is_real_transaction_payload($PAYLOAD)
+                        ...
+                        $PLUGIN.parse_sign_request($PAYLOAD)
+                    - pattern: |
+                        is_real_transaction_payload($PAYLOAD)
+                        ...
+                        $PLUGIN.parse_sign_request($PAYLOAD)
+                    - pattern: |
+                        if not $CHECKER.is_real_transaction_payload($PAYLOAD):
+                            ...
+                        ...
+                        $PLUGIN.parse_sign_request($PAYLOAD)
+                    - pattern: |
+                        if not $CHECKER.is_real_transaction_payload($PAYLOAD):
+                            ...
+                        ...
+                        try:
+                            $VAR = $PLUGIN.parse_sign_request($PAYLOAD)
+                            ...
+                        except $EXC:
+                            ...

@@ -15,3 +15,8 @@ pycryptodome==3.23.0
 # seedsigner.chains.evm.rlp_codec (test_evm_rlp_codec.py) against it. Never shipped
 # on-device (see requirements.txt's note on why we don't use it there).
 rlp==5.0.0
+# Property-based testing, test-only -- generates adversarial/edge-case inputs for
+# the hand-rolled binary codecs (rlp_codec.py, crypto.py's EIP-55 checksum,
+# ur_types.py's BIP-32 path <-> Keypath conversion) beyond the fixed reference
+# vectors above. Never shipped on-device.
+hypothesis==6.168.0

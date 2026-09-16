@@ -11,10 +11,21 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import pytest
+from hypothesis import given, settings, strategies as st
+from urtypes.cbor import DataItem
+
 from seedsigner.helpers.ur2.ur import UR
 from seedsigner.helpers.ur2.ur_decoder import URDecoder
 from seedsigner.helpers.ur2.ur_encoder import UREncoder
-from seedsigner.chains.evm.ur_types import EthSignRequest, EthSignature, DATA_TYPE_TRANSACTION, build_account_hdkey_cbor
+from seedsigner.chains.evm.ur_types import (
+    EthSignRequest,
+    EthSignature,
+    DATA_TYPE_TRANSACTION,
+    build_account_hdkey_cbor,
+    _keypath_to_path,
+    _path_to_keypath,
+)
 
 
 # From KeystoneHQ/keystone-sdk-base packages/ur-registry-eth/__tests__/EthSignRequest.test.ts
@@ -134,6 +145,101 @@ def test_eth_sign_request_optional_fields_omitted_when_absent():
     assert decoded.origin is None
 
 
+# --- Mutation-testing-driven regression tests -----------------------------------
+#
+# Added after running mutmut against ur_types.py -- each closes a real gap a
+# surviving mutant exposed that the tests above (including the property-based
+# ones) didn't catch. See the mutation-testing report for full mutant diffs.
+
+def test_eth_sign_request_stores_the_given_address_before_any_round_trip():
+    """Closes a real gap: a mutant that made __init__ always set
+    `self.address = None` (ignoring the constructor argument) survived
+    test_eth_sign_request_round_trips_through_our_own_encoder above, because
+    that test only compares the round-tripped value back against `req.address`
+    -- itself already broken by the same bug, so both sides matched. This test
+    checks the constructed object directly against the literal value passed
+    in, which the round-trip comparison alone can't do."""
+    expected_address = bytes.fromhex("be7c7f2a6ac45ff26cb8324728910af34c2cd21f")
+    req = EthSignRequest(
+        sign_data=b"\x02", data_type=4, chain_id=10, derivation_path="m/44'/60'/0'/0/0",
+        address=expected_address,
+    )
+    assert req.address == expected_address
+
+
+@pytest.mark.parametrize("registry_item_cls", [EthSignRequest, EthSignature])
+def test_from_data_item_accepts_a_request_id_that_is_not_tag_wrapped(registry_item_cls):
+    """Closes a real gap: a mutant changed `v.map if isinstance(v, DataItem) else v`
+    to always take the `.map` branch regardless of the isinstance check. Every
+    existing test only ever exercises this with a real CBOR-tag-37-wrapped
+    request-id (decode_tagging() in urtypes' own decoder always produces a
+    DataItem for a tagged value), so the `else v` branch -- which exists
+    specifically to tolerate a non-conformant/attacker-crafted request that
+    sends request-id as a bare 16-byte string, no tag wrapper at all -- was
+    never hit by anything. Calls from_data_item() directly (bypassing CBOR
+    encode/decode) with a plain-bytes field 1 to exercise exactly that branch:
+    must return the raw bytes, not crash trying to call .map on a bytes
+    object."""
+    raw_request_id = b"\x09" * 16
+    fields = {1: raw_request_id, 2: b"\x00" * 65}
+    if registry_item_cls is EthSignRequest:
+        fields.update({
+            3: 4, 4: 10,
+            5: DataItem(304, _path_to_keypath("m/44'/60'/0'/0/0").to_data_item()),
+        })
+
+    item = registry_item_cls.from_data_item(fields)
+    assert item.request_id == raw_request_id
+
+
+def test_path_to_keypath_does_not_drop_a_real_component_when_path_has_no_m_prefix():
+    """Closes a real gap: a mutant changed `if parts and parts[0].lower() == "m"`
+    to `if parts or parts[0].lower() == "m"` -- since `parts` is non-empty for
+    any real path, `or` short-circuits and the first component is *always*
+    stripped, even when it isn't "m". Every existing test/property only ever
+    passes paths that do start with "m/", where stripping the first component
+    happens to be correct either way, so the mutant was invisible to them. A
+    path without the "m" prefix is valid BIP-32 notation this function's own
+    docstring doesn't rule out -- confirms all 5 real components survive, not 4."""
+    keypath = _path_to_keypath("44'/60'/0'/0/1")
+    assert [(c.index, c.hardened) for c in keypath.components] == [
+        (44, True), (60, True), (0, True), (0, False), (1, False)]
+
+
+def test_path_to_keypath_ignores_a_trailing_slash():
+    """Closes a real gap: a mutant changed the empty-segment filter
+    `[p for p in parts if p != ""]` to filter for a string ("XXXX") that never
+    occurs, effectively disabling it. A trailing slash (or a doubled "//")
+    produces an empty-string segment in derivation_path.split("/") -- confirms
+    it's silently dropped rather than reaching `int("")` and raising."""
+    keypath = _path_to_keypath("m/44'/60'/0'/0/1/")
+    assert [(c.index, c.hardened) for c in keypath.components] == [
+        (44, True), (60, True), (0, True), (0, False), (1, False)]
+
+
+def test_path_to_keypath_threads_the_source_fingerprint_argument_through():
+    """Closes a real gap: a mutant hardcoded the Keypath's source_fingerprint to
+    None regardless of what was passed in. Every call site in this codebase
+    only ever uses the default (None), so no existing test caught a mutant that
+    ignored a non-default value entirely."""
+    fingerprint = b"\x01\x02\x03\x04"
+    keypath = _path_to_keypath("m/44'/60'/0'/0/0", source_fingerprint=fingerprint)
+    assert keypath.source_fingerprint == fingerprint
+
+
+def test_build_account_hdkey_cbor_defaults_to_account_zero():
+    """Closes a real gap: a mutant changed the `account: int = 0` default to
+    `= 1`. Every existing test always passes `account=` explicitly, so the
+    default value itself was never checked."""
+    from urtypes.crypto import HDKey as UrHDKey
+
+    seed_bytes = b"\x0a" * 64
+    cbor_with_default = build_account_hdkey_cbor(seed_bytes)
+    cbor_explicit_zero = build_account_hdkey_cbor(seed_bytes, account=0)
+
+    assert UrHDKey.from_cbor(cbor_with_default).key == UrHDKey.from_cbor(cbor_explicit_zero).key
+
+
 def test_decodes_real_reference_account_hdkey():
     """ Confirms `urtypes.crypto.HDKey` (generic, not homegrown here) parses a real
         Keystone-produced ETH account-hdkey correctly, and -- the part that actually
@@ -192,3 +298,97 @@ def test_build_account_hdkey_cbor_uses_the_requested_account():
 
     assert [(c.index, c.hardened) for c in account_1.origin.components] == [(44, True), (60, True), (1, True)]
     assert account_0.key != account_1.key
+
+
+# --- Property-based tests (Hypothesis) -----------------------------------------
+#
+# The fixed tests above cross-verify _path_to_keypath/_keypath_to_path only via
+# whatever paths appear in the reference UR vectors (m/44'/1'/1'/0/1, m/44'/60'/.../..)
+# and the one round-trip case (m/44'/60'/0'/0/1). The real input domain is any
+# BIP-32 path string this codebase's own DERIVATION_PATH_TEMPLATE can produce on
+# the encode side, and -- more importantly for security -- any Keypath an attacker
+# can put in a scanned eth-sign-request's CBOR on the decode side
+# (EthSignRequest.from_data_item -> _keypath_to_path, fully untrusted input per
+# this module's own docstring). Properties below cover both directions across the
+# whole valid index/hardened space, not just the fixed vectors.
+
+# BIP-32 non-hardened index bound PathComponent itself enforces (MSB must be clear).
+_MAX_INDEX = 2**31 - 1
+
+_path_components = st.lists(
+    st.tuples(st.integers(min_value=0, max_value=_MAX_INDEX), st.booleans()),
+    min_size=1, max_size=6,
+)
+
+
+def _components_to_canonical_path(components) -> str:
+    return "m/" + "/".join(f"{idx}'" if hardened else str(idx) for idx, hardened in components)
+
+
+@given(components=_path_components)
+@settings(max_examples=300)
+def test_property_path_to_keypath_round_trips_for_canonical_paths(components):
+    """decode(encode(x)) == x for the canonical "m/44'/60'/0'/0/1"-style string
+    shape this codebase itself always produces (DERIVATION_PATH_TEMPLATE,
+    _ACCOUNT_PATH_TEMPLATE) -- across arbitrary component counts, indices up to
+    the real BIP-32 bound, and hardened/non-hardened mixes, not just one fixed
+    path."""
+    path = _components_to_canonical_path(components)
+    assert _keypath_to_path(_path_to_keypath(path)) == path
+
+
+@given(components=_path_components)
+@settings(max_examples=300)
+def test_property_keypath_to_path_round_trips_for_arbitrary_keypaths(components):
+    """The security-relevant direction: a Keypath built directly from
+    attacker-controlled (index, hardened) pairs -- simulating what
+    EthSignRequest.from_data_item hands _keypath_to_path after decoding untrusted
+    CBOR, bypassing string parsing entirely -- must convert to a path string and
+    back to the exact same components, never crash, and never silently drop or
+    reorder a component."""
+    keypath = _path_to_keypath(_components_to_canonical_path(components))
+    path_string = _keypath_to_path(keypath)
+    round_tripped = _path_to_keypath(path_string)
+
+    assert [(c.index, c.hardened) for c in round_tripped.components] == components
+
+
+@given(
+    components=st.lists(
+        st.tuples(st.integers(min_value=0, max_value=_MAX_INDEX), st.booleans()),
+        min_size=0, max_size=8,
+    ),
+    hardened_suffix=st.sampled_from(["'", "h", "H"]),
+)
+@settings(max_examples=200)
+def test_property_hardened_suffix_variants_parse_to_the_same_hardened_flag(components, hardened_suffix):
+    """"'"/"h"/"H" are all valid hardened-marker spellings per BIP-32 -- confirms
+    _path_to_keypath treats them identically (not just the "'" spelling the fixed
+    vectors happen to use), including the edge case of zero components (bare "m")."""
+    parts = [f"{idx}{hardened_suffix if hardened else ''}" for idx, hardened in components]
+    path = "m/" + "/".join(parts) if parts else "m"
+
+    keypath = _path_to_keypath(path)
+    assert [(c.index, c.hardened) for c in keypath.components] == components
+
+
+@given(seed_bytes=st.binary(min_size=64, max_size=64), account=st.integers(min_value=0, max_value=_MAX_INDEX))
+@settings(max_examples=25)
+def test_property_build_account_hdkey_cbor_matches_embit_for_arbitrary_seed_and_account(seed_bytes, account):
+    """Oracle property extending the two fixed tests above (one seed, accounts 0/1
+    only) to arbitrary 64-byte seeds and any valid hardened account index: the
+    exported key/chain_code/origin must always match embit's own direct BIP-32
+    derivation, and the CBOR must always round-trip through urtypes' own decoder."""
+    from embit.bip32 import HDKey as Bip32HDKey
+    from urtypes.crypto import HDKey as UrHDKey
+
+    cbor = build_account_hdkey_cbor(seed_bytes, account=account)
+    hd = UrHDKey.from_cbor(cbor)
+
+    root = Bip32HDKey.from_seed(seed_bytes)
+    account_pub = root.derive(f"m/44'/60'/{account}'").to_public()
+
+    assert hd.key == account_pub.sec()
+    assert hd.chain_code == account_pub.chain_code
+    assert hd.origin.source_fingerprint == root.my_fingerprint
+    assert [(c.index, c.hardened) for c in hd.origin.components] == [(44, True), (60, True), (account, True)]

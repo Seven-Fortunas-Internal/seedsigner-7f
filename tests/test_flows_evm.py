@@ -112,6 +112,12 @@ class TestEvmFlows(FlowTest):
         assert encoder.ur2_encode.ur.type == "crypto-hdkey"
         assert encoder.ur2_encode.ur.cbor == build_account_hdkey_cbor(seed.seed_bytes, account=0)
 
+        # Zeroize-audit regression: seed_bytes is only needed to build the CBOR
+        # above; the encoder must drop its own reference afterward rather than
+        # keeping the raw seed alive as a live attribute for the whole QR-display
+        # session (see encode_qr.py's UrEvmConnectQrEncoder.__post_init__).
+        assert encoder.seed_bytes is None
+
 
     def test_evm_address_is_deterministic_per_derivation_path(self):
         """

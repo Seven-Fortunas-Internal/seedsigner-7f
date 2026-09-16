@@ -10,8 +10,9 @@
 """
 import rlp as reference_rlp
 import pytest
+from hypothesis import given, settings, strategies as st
 
-from seedsigner.chains.evm.rlp_codec import RlpDecodingError, rlp_decode, rlp_encode
+from seedsigner.chains.evm.rlp_codec import RlpDecodingError, _MAX_DEPTH, rlp_decode, rlp_encode
 
 
 # --- Cross-verification against the reference `rlp` package ---
@@ -172,3 +173,90 @@ def test_decode_accepts_realistic_eip1559_access_list_nesting():
 
     encoded = rlp_encode(top_level_fields)
     assert rlp_decode(encoded) == top_level_fields
+
+
+# --- Property-based tests (Hypothesis) -----------------------------------------
+#
+# The fixed cases/vectors above are the ones this module's own history and the RLP
+# spec call out; the properties below generate inputs neither a human nor a fixed
+# vector list would think to try, targeting exactly the two things that matter for
+# a hand-rolled codec sitting on the signing path: (1) encode/decode is a true
+# inverse of the reference `rlp` package on *arbitrary* well-formed input, not just
+# the ENCODE_CASES sample, and (2) rlp_decode() never lets an adversarial byte
+# string escape as anything other than RlpDecodingError -- no RecursionError,
+# IndexError, MemoryError, etc., since decode() runs directly on untrusted,
+# attacker-supplied transaction bytes (see module docstring).
+
+def _rlp_items(max_depth: int):
+    """Bounded-depth strategy for RlpItem (bytes | list[RlpItem]). Depth is capped
+    well under _MAX_DEPTH so these trees exercise legitimate round-trips, not the
+    depth-rejection path (already covered by
+    test_decode_rejects_deeply_nested_list_instead_of_recursion_error above)."""
+    leaf = st.binary(max_size=40)
+    if max_depth <= 0:
+        return leaf
+    return st.one_of(leaf, st.lists(_rlp_items(max_depth - 1), max_size=4))
+
+
+rlp_item_strategy = _rlp_items(max_depth=min(6, _MAX_DEPTH - 1))
+
+
+@given(item=rlp_item_strategy)
+@settings(max_examples=300)
+def test_property_round_trip_arbitrary_items(item):
+    """decode(encode(x)) == x for arbitrary bytes/nested-list shapes, not just the
+    fixed ENCODE_CASES sample."""
+    assert rlp_decode(rlp_encode(item)) == item
+
+
+@given(item=rlp_item_strategy)
+@settings(max_examples=300)
+def test_property_encode_matches_reference_on_arbitrary_items(item):
+    """Oracle property: our encoder must byte-for-byte match the reference `rlp`
+    package on arbitrary generated input, extending the fixed ENCODE_CASES
+    cross-verification to the whole input space Hypothesis can reach."""
+    assert rlp_encode(item) == reference_rlp.encode(item)
+
+
+@given(item=rlp_item_strategy)
+@settings(max_examples=300)
+def test_property_decode_matches_reference_on_arbitrary_items(item):
+    encoded = reference_rlp.encode(item)
+    assert rlp_decode(encoded) == reference_rlp.decode(encoded)
+
+
+@given(data=st.binary(max_size=300))
+@settings(max_examples=500)
+def test_property_decode_never_crashes_on_arbitrary_bytes(data):
+    """The core 'never crashes on adversarial input' property for a codec that
+    parses untrusted, attacker-supplied signing-request bytes: rlp_decode() on any
+    byte string must either succeed or raise RlpDecodingError -- never an
+    unhandled RecursionError/IndexError/MemoryError/etc. that would bypass every
+    MalformedTransactionError/RlpDecodingError handler upstream (transaction.py,
+    plugin.py) and crash the signing flow instead of cleanly refusing to sign."""
+    try:
+        rlp_decode(data)
+    except RlpDecodingError:
+        pass
+
+
+@given(data=st.binary(max_size=300))
+@settings(max_examples=500)
+def test_property_non_strict_decode_never_crashes_on_arbitrary_bytes(data):
+    """Same crash-safety property for strict=False (accepts trailing bytes) -- the
+    other mode _decode_one/_decode_list_payload must stay safe under, even though
+    this codebase's own call sites always use strict=True."""
+    try:
+        rlp_decode(data, strict=False)
+    except RlpDecodingError:
+        pass
+
+
+@given(item=rlp_item_strategy)
+@settings(max_examples=200)
+def test_property_reencoding_a_decoded_item_is_idempotent(item):
+    """encode(decode(encode(x))) == encode(x): re-serializing a value round-tripped
+    through our own decoder always reproduces the same canonical bytes."""
+    encoded = rlp_encode(item)
+    decoded = rlp_decode(encoded)
+    assert rlp_encode(decoded) == encoded

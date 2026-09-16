@@ -14,8 +14,11 @@ import pytest
 from embit.bip39 import mnemonic_to_seed
 from eth_account import Account
 from eth_keys import keys as eth_keys
+from eth_utils import to_checksum_address as reference_to_checksum_address
+from hypothesis import given, settings, strategies as st
 
 from seedsigner.chains.evm.crypto import (
+    address_bytes_to_checksum,
     derive_private_key,
     keccak256,
     private_key_to_checksum_address,
@@ -108,3 +111,103 @@ def test_sign_hash_recoverable_matches_eth_keys_and_recovers_correct_address():
 def test_sign_hash_recoverable_rejects_wrong_length_hash():
     with pytest.raises(ValueError):
         sign_hash_recoverable(b"\x01" * 32, b"too short")
+
+
+# --- Property-based tests (Hypothesis): address_bytes_to_checksum (EIP-55) -----
+#
+# The fixed test above (test_checksum_address_matches_eth_account) only exercises
+# whatever address a single fixed mnemonic/path derives. EIP-55 casing is a pure
+# function of the 20 raw address bytes, so the real input space here is "any 20
+# bytes" -- including this codebase's own second call site (recovering a checksum
+# address from raw transaction/calldata bytes, chains/evm/transaction.py and
+# chains/evm/erc20.py), which is attacker-controlled, not derived from a key at
+# all. Properties below cover that whole space, not just key-derived addresses.
+
+@given(address_bytes=st.binary(min_size=20, max_size=20))
+@settings(max_examples=300)
+def test_property_checksum_matches_eth_utils_reference(address_bytes):
+    """Oracle property: byte-for-byte identical to eth_utils' own EIP-55
+    implementation (what eth_account/web3.py use) for arbitrary 20-byte input, not
+    just addresses this codebase happens to derive from a key."""
+    assert address_bytes_to_checksum(address_bytes) == reference_to_checksum_address(address_bytes)
+
+
+@given(address_bytes=st.binary(min_size=20, max_size=20))
+@settings(max_examples=300)
+def test_property_checksum_is_case_insensitively_the_same_address(address_bytes):
+    """The checksum casing must never change which address it denotes: lower-casing
+    the result must always reproduce the plain lowercase hex encoding of the same
+    bytes."""
+    checksummed = address_bytes_to_checksum(address_bytes)
+    assert checksummed.lower() == "0x" + address_bytes.hex()
+    assert len(checksummed) == 42
+    assert checksummed.startswith("0x")
+
+
+@given(address_bytes=st.binary(min_size=20, max_size=20))
+@settings(max_examples=300)
+def test_property_checksum_is_idempotent_on_reparsed_bytes(address_bytes):
+    """Idempotence: re-deriving the checksum from the exact same bytes (as a caller
+    would after round-tripping through hex) always reproduces the identical
+    string -- the casing decision doesn't depend on anything but the 20 bytes."""
+    first = address_bytes_to_checksum(address_bytes)
+    reparsed_bytes = bytes.fromhex(first[2:].lower())
+    assert address_bytes_to_checksum(reparsed_bytes) == first
+
+
+@given(address_bytes=st.binary(max_size=64).filter(lambda b: len(b) != 20))
+@settings(max_examples=100)
+def test_property_checksum_rejects_any_non_20_byte_input(address_bytes):
+    """Boundary property: every length other than exactly 20 bytes must be refused
+    outright, not silently truncated/padded -- callers rely on this to catch a
+    malformed upstream address before it's ever displayed or signed against."""
+    with pytest.raises(ValueError):
+        address_bytes_to_checksum(address_bytes)
+
+
+"""
+    Zeroize-audit / constant-time-analysis regressions (see trailofbits:zeroize-audit
+    and trailofbits:constant-time-analysis skill reports). Python `bytes` can't be
+    zeroized in place, so what's testable is narrower: an error path involving key
+    material must never embed the actual secret bytes in its exception message
+    (that message is logged and, if ever uncaught, shown on the device's crash
+    screen -- see Controller.handle_exception).
+"""
+
+# A private key value that's easy to recognize in a failure message if it ever
+# leaked -- distinct from all-zeros/all-ones edge cases secp256k1 itself rejects.
+_MARKER_KEY_32 = bytes.fromhex("ab" * 32)
+
+
+def test_sign_hash_recoverable_wrong_length_key_does_not_leak_it_in_error():
+    """Length checks happen before any use of the key material; the resulting
+    error must be a static, key-independent message."""
+    too_short_key = _MARKER_KEY_32[:16]
+
+    with pytest.raises(ValueError) as exc_info:
+        sign_hash_recoverable(too_short_key, b"\x00" * 32)
+
+    assert too_short_key.hex() not in str(exc_info.value)
+    assert "ab" * 16 not in str(exc_info.value)
+
+
+def test_sign_hash_recoverable_wrong_length_hash_does_not_leak_key_in_error():
+    """The msg_hash length check in sign_hash_recoverable() itself fires first --
+    confirms the private key is never touched (let alone echoed) on this path."""
+    with pytest.raises(ValueError) as exc_info:
+        sign_hash_recoverable(_MARKER_KEY_32, b"\x00" * 16)
+
+    assert "msg_hash must be 32 bytes" == str(exc_info.value)
+    assert _MARKER_KEY_32.hex() not in str(exc_info.value)
+
+
+def test_private_key_to_checksum_address_invalid_key_does_not_leak_it_in_error():
+    """embit's PrivateKey() rejects a wrong-length secret with a static message --
+    confirms it never echoes the actual (marker) bytes it was given."""
+    too_long_key = _MARKER_KEY_32 + b"\x00"
+
+    with pytest.raises(Exception) as exc_info:
+        private_key_to_checksum_address(too_long_key)
+
+    assert too_long_key.hex() not in str(exc_info.value)
+    assert "ab" * 16 not in str(exc_info.value)

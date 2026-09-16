@@ -441,3 +441,13 @@ class UrEvmConnectQrEncoder(BaseFountainQrEncoder):
         super().__post_init__()
         qr_ur_bytes = UR("crypto-hdkey", build_account_hdkey_cbor(self.seed_bytes, self.account))
         self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)
+        # Narrow scope: seed_bytes is only needed to build qr_ur_bytes above --
+        # nothing below this point (or in QRDisplayScreen, which holds this encoder
+        # for as long as the QR is on screen) reads it again. Drop this object's
+        # own reference now rather than keeping a second, unnecessary live pointer
+        # to the raw seed alive for the whole QR-display session. This doesn't
+        # zeroize the underlying bytes (they're immutable, and models.seed.Seed
+        # keeps its own reference alive for the whole active-seed session
+        # regardless) -- it only avoids this encoder adding its own copy of that
+        # exposure window on top.
+        self.seed_bytes = None

@@ -1,11 +1,37 @@
 import sys
+import types
 from dataclasses import dataclass
 from unittest.mock import MagicMock, Mock, patch
 from typing import Callable
 
 # Prevent importing modules w/Raspi hardware dependencies.
 # These must precede any SeedSigner imports.
-sys.modules['numpy'] = MagicMock()  # numpy is only in the Raspi requirements; not needed for tests. But is imported in BackgroundImportThread.
+#
+# numpy is only in the Raspi requirements, not needed for tests -- but IS
+# imported (just imported, no attributes ever touched) by
+# Controller.BackgroundImportThread via time_import('numpy'). A plain
+# MagicMock() used to stand in for the whole module, but that breaks any code
+# that later does `import numpy.random` or `isinstance(x, numpy.ndarray)` --
+# notably Hypothesis's own entropy management (hypothesis/internal/entropy.py),
+# which does both unconditionally whenever "numpy" is truthy in sys.modules,
+# triggered by any property-based test that happens to run in the same pytest
+# session as this module. A MagicMock has no __path__ (so `numpy.random` isn't
+# a real submodule, "'numpy' is not a package") and MagicMock attribute access
+# returns more MagicMocks (so `numpy.ndarray` isn't a real type,
+# "isinstance() arg 2 must be a type"). Build a minimal real stub instead: a
+# real (never-instantiated) `ndarray` type and a real `numpy.random` submodule
+# with the three callables Hypothesis's NumpyRandomWrapper expects -- enough
+# structure to satisfy every consumer above without needing actual numpy.
+_numpy_stub = types.ModuleType('numpy')
+_numpy_stub.ndarray = type('ndarray', (), {})
+_numpy_random_stub = types.ModuleType('numpy.random')
+_numpy_random_stub.seed = lambda *args, **kwargs: None
+_numpy_random_stub.get_state = lambda: None
+_numpy_random_stub.set_state = lambda state: None
+_numpy_stub.random = _numpy_random_stub
+
+sys.modules['numpy'] = _numpy_stub
+sys.modules['numpy.random'] = _numpy_random_stub
 sys.modules['seedsigner.gui.renderer'] = MagicMock()
 sys.modules['seedsigner.gui.screens.screensaver'] = MagicMock()
 sys.modules['seedsigner.gui.toast'] = MagicMock()

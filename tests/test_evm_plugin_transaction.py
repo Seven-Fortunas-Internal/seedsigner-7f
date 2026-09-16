@@ -28,6 +28,7 @@
 import rlp
 import pytest
 from eth_account import Account
+from eth_keys import keys as eth_keys
 
 from seedsigner.chains import ChainRegistry
 from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
@@ -230,3 +231,119 @@ def test_is_real_transaction_payload_accepts_a_real_eip1559_payload():
     payload = _unsigned_payload({**BASE_TX, "data": _erc20_transfer_calldata(SOME_ADDRESS, 1)})
 
     assert plugin.is_real_transaction_payload(payload) is True
+
+
+# --- Mutation-testing-driven regression tests -----------------------------------
+#
+# Added after running mutmut against validate_derivation_path(),
+# is_real_transaction_payload(), _require_recognized_erc20_call(), and sign() --
+# each test below corresponds to one or more mutants the existing suite above
+# didn't kill (see the mutation-testing report for full mutant diffs). Comments
+# name which real gap each one closes.
+
+def test_sign_refuses_a_malformed_transaction_with_the_decode_error_in_the_message():
+    """Closes a gap where sign()'s own MalformedTransactionError->ValueError
+    translation (`raise ValueError(f"Cannot sign: {e}") from e`) was never
+    exercised at all through sign() -- only parse_sign_request() had a malformed-
+    payload test. A mutant that replaced the message with `ValueError(None)`
+    survived because nothing called sign() with a truncated/malformed payload."""
+    plugin = ChainRegistry.get("evm")
+    path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+    malformed_payload = bytes([TX_TYPE_EIP1559]) + b"\xff\xff"  # not valid RLP
+
+    with pytest.raises(ValueError, match="Cannot sign:"):
+        plugin.sign(_seed_bytes(), path, malformed_payload)
+
+
+def test_sign_output_bytes_recover_the_correct_signing_address():
+    """Closes a gap in the byte assembly
+    `r.to_bytes(32, "big") + s.to_bytes(32, "big") + bytes([y_parity])` -- prior
+    coverage only asserted `len(signature_bytes) == 65`, which can't catch a
+    dropped/reordered field (a mutant removing the "big" byteorder argument
+    survived on this interpreter, since Python 3.11+ defaults to big-endian
+    anyway -- but the codebase's CI matrix also runs Python 3.10, where that
+    default doesn't exist and the omission raises TypeError instead; this test
+    pins the actual byte *values*, which is a stronger, version-independent
+    check). Recovers the signer's address from the raw signature bytes via
+    eth_keys and confirms it's the same address plugin.derive_address() reports
+    for this seed/path -- not just "some 65 bytes were returned"."""
+    payload = _unsigned_payload({**BASE_TX, "data": _erc20_transfer_calldata(SOME_ADDRESS, 1_000_000)})
+    plugin = ChainRegistry.get("evm")
+    path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+
+    signature = plugin.sign(_seed_bytes(), path, payload)
+    assert len(signature.signature_bytes) == 65
+    r_bytes, s_bytes, y_parity_byte = (
+        signature.signature_bytes[:32], signature.signature_bytes[32:64], signature.signature_bytes[64])
+
+    from seedsigner.chains.evm.transaction import UnsignedEip1559Transaction
+    tx = UnsignedEip1559Transaction(payload)
+    eth_sig = eth_keys.Signature(vrs=(y_parity_byte, int.from_bytes(r_bytes, "big"), int.from_bytes(s_bytes, "big")))
+    recovered_address = eth_sig.recover_public_key_from_msg_hash(tx.signing_hash()).to_checksum_address()
+
+    expected_address = plugin.derive_address(_seed_bytes(), path).address
+    assert recovered_address == expected_address
+
+
+def test_sign_on_the_permit_demo_payload_returns_a_real_length_fake_signature():
+    """Closes a gap where sign()'s still-mocked permit path
+    (`Signature(signature_bytes=os.urandom(65))`) was never called through
+    plugin.sign() at all -- mutants replacing it with `None`, `os.urandom(None)`
+    (a TypeError, not even a ValueError), and `os.urandom(66)` all survived
+    because no test exercised this branch. Doesn't (can't) pin the random bytes
+    themselves, but does confirm sign() actually returns a 65-byte Signature
+    for the permit demo shape rather than crashing or returning the wrong
+    length."""
+    plugin = ChainRegistry.get("evm")
+    path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+    permit_payload = DEMO_SCENARIOS["permit"]
+
+    signature = plugin.sign(_seed_bytes(), path, permit_payload)
+
+    assert signature.signature_bytes is not None
+    assert len(signature.signature_bytes) == 65
+
+
+def test_sign_and_parse_unrecognized_call_refusal_has_the_exact_expected_message():
+    """Closes a gap where several mutants corrupted the wording/casing of
+    _require_recognized_erc20_call()'s refusal message (both halves of the
+    f-string) and survived, since the existing tests above only matched the
+    substring "unrecognized contract call" (present, unmutated, in every
+    surviving variant)."""
+    payload = _unsigned_payload({**BASE_TX, "data": UNRECOGNIZED_CALLDATA})
+    plugin = ChainRegistry.get("evm")
+    path = DERIVATION_PATH_TEMPLATE.format(account=0, index=0)
+
+    expected_message = (
+        "Cannot sign: unrecognized contract call. This device only "
+        "understands plain ETH transfers and ERC-20 transfer/approve calls."
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        plugin.parse_sign_request(payload)
+    assert str(exc_info.value) == expected_message
+
+    with pytest.raises(ValueError) as exc_info:
+        plugin.sign(_seed_bytes(), path, payload)
+    assert str(exc_info.value) == expected_message
+
+
+def test_validate_derivation_path_refusal_names_the_expected_shape():
+    """Closes a gap where mutants corrupting the parenthetical guidance text in
+    validate_derivation_path()'s refusal message (the part explaining the
+    expected m/44'/60'/{account}'/0/{index} shape to the operator) survived --
+    the existing parametrized rejection test above only checks
+    `pytest.raises(ValueError)`, not the message content. Checks the exact full
+    message (not just a substring match) -- a substring/regex match alone still
+    passes against a mutant that wraps the guidance text in extra characters
+    without otherwise changing it."""
+    plugin = ChainRegistry.get("evm")
+    bad_path = "not/a/path"
+
+    with pytest.raises(ValueError) as exc_info:
+        plugin.validate_derivation_path(bad_path)
+
+    assert str(exc_info.value) == (
+        f"Cannot sign: {bad_path!r} is not a recognized Ethereum account path "
+        "(m/44'/60'/{account}'/0/{index}, account/index hardened/non-hardened as usual)."
+    )
