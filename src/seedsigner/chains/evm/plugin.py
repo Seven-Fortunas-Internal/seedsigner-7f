@@ -28,6 +28,7 @@
 """
 import json
 import os
+import re
 
 from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signature
 
@@ -40,6 +41,18 @@ from .units import format_units
 
 # Standard Ethereum BIP-44 path: m/44'/60'/{account}'/0/{index}.
 DERIVATION_PATH_TEMPLATE = "m/44'/60'/{account}'/0/{index}"
+
+# Matches exactly what DERIVATION_PATH_TEMPLATE produces: purpose=44' and coin_type=60'
+# hardened and literal (this plugin's own namespace, not just "some BIP-32 path"), any
+# hardened account, external chain (literal "0", never "1"/internal-change), and a
+# non-hardened index. Security-relevant, not just a format check -- see
+# validate_derivation_path() below.
+_DERIVATION_PATH_RE = re.compile(r"^m/44'/60'/\d+'/0/(\d+)$")
+
+# BIP-32 non-hardened child index range -- same bound views/evm_views.py's
+# EvmSelectAddressIndexView enforces for the operator-chosen index; must match here
+# too since a scanned request's index isn't operator-chosen (see the function below).
+_MAX_DERIVATION_INDEX = 2**31
 
 _DEMO_TO_ADDRESS = "0xbE7C7F2a6AC45ff26Cb8324728910Af34c2CD21F"  # operator's real MetaMask address (evm-hardware-walkthrough.md)
 # Circle's real Optimism mainnet USDC deployment -- same address already verified and
@@ -126,6 +139,21 @@ class EvmPlugin:
             address=private_key_to_checksum_address(private_key),
             network_name="",  # caller (view layer) knows which network was selected
         )
+
+    @staticmethod
+    def is_real_transaction_payload(payload: bytes) -> bool:
+        """True for a payload that actually dispatches to the real EIP-1559 path
+        below (the type-tag byte itself -- what parse_sign_request()/sign() below
+        actually branch on), not a separately-claimed label. views/evm_views.py's
+        EvmScanSignRequestView must call this before trusting an eth-sign-request's
+        own `data_type` field: `data_type` is just as attacker-controlled as every
+        other field on a scanned request, and could claim "real transaction" while
+        `sign_data` is actually shaped like the still-mocked/fake-signature permit
+        JSON below -- which parse_sign_request()/sign() would otherwise silently
+        accept, showing fully attacker-authored review content and returning a
+        signature that isn't tied to the key at all (os.urandom(65)), on what's
+        presented as the gated, "real" scan-and-sign flow."""
+        return payload[:1] == bytes([TX_TYPE_EIP1559])
 
     def parse_sign_request(self, payload: bytes) -> ParsedRequest:
         # The leading type byte distinguishes a real transaction from the still-mocked
@@ -269,6 +297,31 @@ class EvmPlugin:
         return call
 
     @staticmethod
+    def validate_derivation_path(path: str):
+        """Structural refusal for a derivation path outside this plugin's own
+        m/44'/60'/{account}'/0/{index} namespace -- called from sign() (see below)
+        so it's enforced on every real-signing path, not just relied on from a
+        caller. Without this, a scanned eth-sign-request's crypto-keypath (fully
+        attacker-controlled -- see chains/evm/ur_types.py's EthSignRequest, decoded
+        straight from external CBOR) could name ANY BIP-32 path on this seed, not
+        just an Ethereum account path -- e.g. a path this same seed also uses for
+        Bitcoin -- turning the free-form sign flow into a general-purpose signing
+        oracle over the whole seed rather than one scoped to EVM. The regex is
+        deliberately strict about *shape* (exact "44'/60'" purpose/coin-type,
+        literal external-chain "0", no extra components) and range (index below
+        _MAX_DERIVATION_INDEX), not just "looks like a BIP-32 path" -- displaying
+        the raw path string as a review field (views/evm_views.py's
+        EvmScanSignRequestView) is a helpful cross-check for an attentive operator,
+        but per this codebase's own self-validation rule it can't be the only
+        control."""
+        match = _DERIVATION_PATH_RE.match(path)
+        if not match or int(match.group(1)) >= _MAX_DERIVATION_INDEX:
+            raise ValueError(
+                f"Cannot sign: {path!r} is not a recognized Ethereum account path "
+                "(m/44'/60'/{account}'/0/{index}, account/index hardened/non-hardened as usual)."
+            )
+
+    @staticmethod
     def _amount_field(raw_amount: int, token) -> ReviewField:
         if token:
             return ReviewField("Amount", f"{format_units(raw_amount, token.decimals)} {token.symbol}")
@@ -323,6 +376,11 @@ class EvmPlugin:
 
     def sign(self, seed_bytes: bytes, path: str, payload: bytes) -> Signature:
         if payload[:1] == bytes([TX_TYPE_EIP1559]):
+            # Structural refusal for a path outside this plugin's own namespace --
+            # see validate_derivation_path()'s docstring. Checked before
+            # touching the payload at all: an attacker-chosen path is the more
+            # severe problem of the two, so refuse it first.
+            self.validate_derivation_path(path)
             try:
                 tx = UnsignedEip1559Transaction(payload)
             except MalformedTransactionError as e:

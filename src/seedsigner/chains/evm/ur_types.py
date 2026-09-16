@@ -115,35 +115,35 @@ class EthSignRequest(RegistryItem):
 
 
     def to_data_item(self):
-        map = {}
+        fields = {}
         if self.request_id is not None:
-            map[1] = Tagging(_UUID_TAG, self.request_id)
-        map[2] = self.sign_data
-        map[3] = self.data_type
-        map[4] = self.chain_id
-        map[5] = Tagging(Keypath.registry_type().tag, _path_to_keypath(self.derivation_path).to_data_item())
+            fields[1] = Tagging(_UUID_TAG, self.request_id)
+        fields[2] = self.sign_data
+        fields[3] = self.data_type
+        fields[4] = self.chain_id
+        fields[5] = Tagging(Keypath.registry_type().tag, _path_to_keypath(self.derivation_path).to_data_item())
         if self.address is not None:
-            map[6] = self.address
+            fields[6] = self.address
         if self.origin is not None:
-            map[7] = self.origin
-        return map
+            fields[7] = self.origin
+        return fields
 
 
     @classmethod
     def from_data_item(cls, item):
-        map = cls.mapping(item)
+        fields = cls.mapping(item)
 
         request_id = None
-        if 1 in map:
-            v = map[1]
+        if 1 in fields:
+            v = fields[1]
             request_id = v.map if isinstance(v, DataItem) else v
 
-        sign_data = map[2]
-        data_type = map[3]
-        chain_id = map[4]
-        derivation_path = _keypath_to_path(Keypath.from_data_item(map[5]))
-        address = map.get(6)
-        origin = map.get(7)
+        sign_data = fields[2]
+        data_type = fields[3]
+        chain_id = fields[4]
+        derivation_path = _keypath_to_path(Keypath.from_data_item(fields[5]))
+        address = fields.get(6)
+        origin = fields.get(7)
 
         return cls(sign_data, data_type, chain_id, derivation_path, request_id, address, origin)
 
@@ -165,22 +165,22 @@ class EthSignature(RegistryItem):
 
 
     def to_data_item(self):
-        map = {
+        fields = {
             1: Tagging(_UUID_TAG, self.request_id),
             2: self.signature,
         }
         if self.origin is not None:
-            map[3] = self.origin
-        return map
+            fields[3] = self.origin
+        return fields
 
 
     @classmethod
     def from_data_item(cls, item):
-        map = cls.mapping(item)
-        v = map[1]
+        fields = cls.mapping(item)
+        v = fields[1]
         request_id = v.map if isinstance(v, DataItem) else v
-        signature = map[2]
-        origin = map.get(3)
+        signature = fields[2]
+        origin = fields.get(3)
         return cls(request_id, signature, origin)
 
 

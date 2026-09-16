@@ -14,11 +14,14 @@
     itself reached from SeedOptionsView behind Settings > Advanced >
     "Other Blockchains".
 
-    Sign requests are still picked from a fixed demo-scenario menu, not scanned --
-    real camera-based scan-and-sign (ERC-4527) is planned (see the doc above) but not
-    yet built. The scenarios themselves are real, signable transactions (RLP-encoded,
-    really ECDSA-signed) even though the *source* of the request is a menu, not a scan.
+    Real camera-based scan-and-sign (ERC-4527) is built (EvmScanSignRequestView
+    below) and is the primary send path; the fixed demo-scenario menu
+    (EvmSignSelectView/EvmSignStartView) stays as a dev/testing convenience
+    alongside it, not the only way to sign.
 """
+import logging
+import os
+
 from gettext import gettext as _
 
 from seedsigner.helpers.l10n import mark_for_translation as _mft
@@ -32,6 +35,8 @@ from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, OptionDisabledView, View
+
+logger = logging.getLogger(__name__)
 
 # BIP-32 non-hardened child index range -- same constraint SeedBIP85SelectChildIndexView
 # already enforces for the same underlying reason (see gui/screens/evm_screens.py's
@@ -324,9 +329,38 @@ class EvmScanSignRequestView(ScanView):
 
         from seedsigner.chains import ChainRegistry
         plugin = ChainRegistry.get("evm")
+
+        # data_type above is just as attacker-controlled as every other field on a
+        # scanned request -- it could claim DATA_TYPE_TYPED_TRANSACTION while
+        # sign_data is actually shaped like the still-mocked permit JSON demo below,
+        # which parse_sign_request()/sign() would otherwise silently accept (see
+        # EvmPlugin.is_real_transaction_payload()'s docstring for the full failure
+        # mode this closes). Check the actual dispatch signal, not the claimed one.
+        if not plugin.is_real_transaction_payload(eth_sign_request.sign_data):
+            logger.warning("Refusing scanned sign request: data_type claimed a real "
+                            "transaction but sign_data's payload doesn't match")
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("The scanned request claims a real transaction but its "
+                         "payload doesn't match -- refusing rather than guess.")))
+
+        # Self-validation: crypto-keypath is fully attacker-controlled (it comes
+        # straight off the scanned CBOR) -- refuse anything outside this plugin's
+        # own m/44'/60'/{account}'/0/{index} namespace here, early and with a clear
+        # message, rather than letting an unrelated BIP-32 path (e.g. one this same
+        # seed also uses for Bitcoin) reach EvmConfirmAddressView/EvmSignedUrQRView.
+        # sign() re-validates this independently too (chains/evm/plugin.py) so it's
+        # never the *only* control, matching this codebase's existing
+        # not-just-relied-on-from-the-caller doctrine.
+        try:
+            plugin.validate_derivation_path(eth_sign_request.derivation_path)
+        except ValueError as e:
+            logger.warning("Refusing scanned sign request: %r", e)
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(reason=str(e)))
+
         try:
             parsed = plugin.parse_sign_request(eth_sign_request.sign_data)
         except Exception as e:
+            logger.warning("Couldn't parse scanned sign request: %r", e, exc_info=True)
             return Destination(EvmUnsupportedSignRequestView, view_args=dict(
                 reason=_("Couldn't parse the transaction: {}").format(e)))
 
@@ -529,7 +563,6 @@ class EvmSignedUrQRView(View):
         # request-id is optional on the request but required on the response --
         # generate one in the rare case a requester omitted it, so correlation is
         # still possible even though this specific requester didn't ask for it.
-        import os
         request_id = eth_sign_request.request_id or os.urandom(16)
 
         self.eth_signature = EthSignature(request_id=request_id, signature=signature.signature_bytes, origin="seedsigner")

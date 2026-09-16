@@ -423,6 +423,53 @@ class TestEvmFlows(FlowTest):
         assert self.controller.multichain_data is None
 
 
+    def test_evm_scan_sign_request_rejects_type_confused_payload(self):
+        """ The HIGH bug an adversarial code review found: a scanned request can
+            claim data_type=DATA_TYPE_TYPED_TRANSACTION (the only value this view
+            accepts) while sign_data is actually shaped like the still-mocked
+            permit JSON demo below -- which parse_sign_request()/sign() would
+            otherwise silently accept, showing fully attacker-authored review
+            content and a signature that's just random bytes, on what's presented
+            as the gated, real scan-and-sign flow. Must be refused before ever
+            reaching parse_sign_request(). """
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+
+        seed = self.seed_fixture()
+        view = evm_views.EvmScanSignRequestView(seed=seed)
+        type_confused_request = EthSignRequest(
+            sign_data=DEMO_SCENARIOS["permit"],  # not 0x02-prefixed -- not a real transaction
+            data_type=DATA_TYPE_TYPED_TRANSACTION,  # but claims to be one
+            chain_id=10, derivation_path="m/44'/60'/0'/0/0",
+        )
+        with patch.object(view.decoder, "get_eth_sign_request", return_value=type_confused_request):
+            destination = view._handle_complete_scan()
+
+        assert destination.View_cls == evm_views.EvmUnsupportedSignRequestView
+        assert self.controller.multichain_data is None
+
+
+    def test_evm_scan_sign_request_rejects_a_non_evm_derivation_path(self):
+        """ The CRITICAL bug an adversarial security review found: a scanned
+            request's derivation path is fully attacker-controlled -- must be
+            refused before EvmConfirmAddressView/EvmSignedUrQRView ever derive or
+            sign with it, not just displayed as a hard-to-verify string. """
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+
+        seed = self.seed_fixture()
+        view = evm_views.EvmScanSignRequestView(seed=seed)
+        cross_key_request = EthSignRequest(
+            sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION,
+            chain_id=10, derivation_path="m/84'/0'/0'/0/0",  # this seed's Bitcoin path, not EVM's
+        )
+        with patch.object(view.decoder, "get_eth_sign_request", return_value=cross_key_request):
+            destination = view._handle_complete_scan()
+
+        assert destination.View_cls == evm_views.EvmUnsupportedSignRequestView
+        assert self.controller.multichain_data is None
+
+
     def test_evm_scan_sign_request_rejects_undecodable_request(self):
         """ get_eth_sign_request() returning None (malformed CBOR, wrong shape,
             etc.) must not crash the flow. """
