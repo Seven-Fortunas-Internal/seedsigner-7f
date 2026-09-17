@@ -152,6 +152,26 @@ def test_known_token_contract_does_not_flag_token_field():
     assert token_field.value == "USDC"
 
 
+def test_wbtc_on_optimism_mainnet_is_recognized_with_correct_decimals():
+    """ WBTC's real Optimism mainnet contract, added to KNOWN_TOKENS for the
+        Optimism-mainnet interop test -- confirms both the address lookup (chain_id
+        10, not Sepolia's 11155420) and its 8-decimal formatting (not the usual
+        18-decimal ERC-20 default, and not USDC's 6). """
+    WBTC_OPTIMISM = "0x68f180fcCe6836688e9084f035309E29Bf0A2095"
+    payload = _unsigned_payload({
+        **BASE_TX, "chainId": 10, "to": WBTC_OPTIMISM,
+        "data": _erc20_transfer_calldata(SOME_ADDRESS, 150_000_000)})  # 1.5 WBTC (8 decimals)
+    plugin = ChainRegistry.get("evm")
+
+    parsed = plugin.parse_sign_request(payload)
+    by_label = {f.label: f for f in parsed.review_fields}
+
+    assert by_label["Network"].value == "Optimism"
+    assert by_label["Token"].is_warning is False
+    assert by_label["Token"].value == "WBTC"
+    assert by_label["Amount"].value == "1.5 WBTC"
+
+
 def test_zero_value_erc20_call_has_no_value_field():
     payload = _unsigned_payload({
         **BASE_TX, "value": 0, "data": _erc20_transfer_calldata(SOME_ADDRESS, 1)})

@@ -48,4 +48,11 @@ class KnownToken:
 KNOWN_TOKENS: dict[tuple[int, str], KnownToken] = {
     (10, "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"): KnownToken("USDC", 6),           # Optimism
     (11155420, "0x5fd84259d66Cd46123540766Be93DFE6D43130D7"): KnownToken("USDC", 6),      # Optimism Sepolia
+    # Wrapped BTC on Optimism (bridged from Ethereum mainnet's canonical WBTC via
+    # Optimism's standard token bridge, which preserves the origin token's decimals --
+    # https://optimistic.etherscan.io/token/0x68f180fcce6836688e9084f035309e29bf0a2095,
+    # cross-checked against CoinGecko's contract listing; 8 decimals matches WBTC's
+    # well-established convention everywhere, not the usual 18-decimal ERC-20 default).
+    # Address checksum-verified against this module's own address_bytes_to_checksum().
+    (10, "0x68f180fcCe6836688e9084f035309E29Bf0A2095"): KnownToken("WBTC", 8),           # Optimism
 }
