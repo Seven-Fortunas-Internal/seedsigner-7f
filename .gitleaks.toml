@@ -1,0 +1,20 @@
+title = "seedsigner-7f secret-scanning config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known, deliberately-accepted findings -- each verified and justified here, not silently exempted"
+regexes = [
+  # TEST_PRIVATE_KEY in tests/test_broadcast_evm_demo.py,
+  # tests/test_evm_transaction.py, tests/test_evm_plugin_transaction.py.
+  # A hand-picked test fixture used only in _reference_signed_tx-style
+  # helpers to build reference signatures for test assertions -- never
+  # touches the real signing/wallet code path. Independently verified,
+  # 2026-09-21: derives to address 0x2c7536E3605D9C16a7a3D7b1898e529396a65c23
+  # (via eth_account.Account.from_key), confirmed eth_getBalance == 0x0 on
+  # both Ethereum mainnet (eth.llamarpc.com) and Optimism
+  # (optimism-rpc.publicnode.com) -- genuinely zero value, not just
+  # assumed safe from its name.
+  '''0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318''',
+]
