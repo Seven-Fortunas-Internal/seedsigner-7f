@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class LogoScreen(BaseScreen):
     def __init__(self):
         super().__init__()
-        self.logo = load_image("logo_black_240.png")
+        self.logo = load_image("logo_black_240_7f.png")
 
         self.partners = [
             "hrf",
