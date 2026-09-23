@@ -1328,3 +1328,15 @@ class MainMenuScreen(LargeButtonScreen):
     title_font_size: int = 26
     show_back_button: bool = False
     show_power_button: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # Home has no back button, leaving the top-left corner of the nav bar
+        # empty; brand the 7F mark there. Nav bar is 48px tall, solid black --
+        # the badge asset is pre-flattened onto black so a plain unmasked
+        # paste (this class's own `self.paste_images` convention) renders
+        # correctly.
+        seven_f_badge = load_image("7f_badge_28.png")
+        badge_y = int((GUIConstants.TOP_NAV_HEIGHT - seven_f_badge.height) / 2)
+        self.paste_images.append((seven_f_badge, (GUIConstants.EDGE_PADDING, badge_y)))
