@@ -130,6 +130,14 @@ class Controller(Singleton):
     multichain_data: dict = None
     # TODO: end refactor section
 
+    # Boot-time chain selection (see docs/multi-chain/boot-chain-selection-plan.md):
+    # "bitcoin" or "evm", set once per power-on session by ChainChooserView.
+    # Deliberately declared OUTSIDE the flow-scoped attrs above -- MainMenuView's own
+    # reset block (below, in start()) wipes those on every Home visit, but this one
+    # must survive Home visits within the same session; only a real reboot (a fresh
+    # Controller instance) may clear it. None means "not yet chosen this session."
+    active_chain_id: str = None
+
     # Destination placeholder for when we need to jump out to a side flow but intend to
     # return navigation to the main flow (e.g. PSBT flow, load multisig descriptor,
     # then resume PSBT flow).
@@ -248,7 +256,7 @@ class Controller(Singleton):
             * initial_destination: The first View to run. If None, the MainMenuView is
             used. Only used by the test suite.
         """
-        from seedsigner.views import MainMenuView, BackStackView, RemoveMicroSDWarningView
+        from seedsigner.views import MainMenuView, BackStackView, RemoveMicroSDWarningView, ChainChooserView
         from seedsigner.views.screensaver import OpeningSplashView
         from seedsigner.gui.toast import RemoveSDCardToastManagerThread
 
@@ -290,6 +298,16 @@ class Controller(Singleton):
                 self.activate_toast(RemoveSDCardToastManagerThread())
             elif self.settings.get_value(SettingsConstants.SETTING__MICROSD_TOAST_TIMER) == SettingsConstants.MICROSD_TOAST_TIMER_FOREVER:
                 next_destination = Destination(RemoveMicroSDWarningView)
+
+            # Boot-time chain chooser: must be the LAST assignment in this block, after
+            # the microSD-toast-timer branch above, not before it -- that branch
+            # unconditionally overwrites next_destination, so checking active_chain_id
+            # first would let a device with MICROSD_TOAST_TIMER_FOREVER set silently
+            # skip the chooser for the entire session (found by adversarial review,
+            # see docs/multi-chain/boot-chain-selection-plan.md). Only fires on a true
+            # fresh boot (initial_destination is the test-suite-only override).
+            if self.active_chain_id is None and not initial_destination:
+                next_destination = Destination(ChainChooserView)
 
             while True:
                 # Destination(None) is a special case; render the Home screen

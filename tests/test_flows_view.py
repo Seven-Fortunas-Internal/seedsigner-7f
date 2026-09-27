@@ -8,7 +8,7 @@ from seedsigner.hardware.camera import CameraConnectionError
 from seedsigner.models.settings import Settings
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.tools_views import ToolsCalcFinalWordNumWordsView, ToolsMenuView
-from seedsigner.views.view import CameraConnectionErrorView, MainMenuView, NotYetImplementedView, PowerOptionsView, PowerOffView, RestartView, UnhandledExceptionView, View
+from seedsigner.views.view import CameraConnectionErrorView, ChainChooserView, MainMenuView, NotYetImplementedView, PowerOptionsView, PowerOffView, RestartView, UnhandledExceptionView, View
 
 
 
@@ -83,3 +83,50 @@ class TestViewFlows(FlowTest):
                 FlowStep(CameraConnectionErrorView),
                 FlowStep(MainMenuView),
             ])
+
+
+    def test_chain_chooser_bitcoin_selection_flow(self):
+        """
+        Selecting "Bitcoin" on ChainChooserView sets active_chain_id and lands on
+        MainMenuView -- see docs/multi-chain/boot-chain-selection-plan.md.
+        """
+        self.controller.active_chain_id = None
+        self.run_sequence([
+            FlowStep(ChainChooserView, button_data_selection=ChainChooserView.BITCOIN),
+            FlowStep(MainMenuView),
+        ])
+        assert self.controller.active_chain_id == "bitcoin"
+
+
+    def test_chain_chooser_evm_selection_flow(self):
+        """
+        Selecting "Ethereum / EVM" on ChainChooserView sets active_chain_id and lands
+        on MainMenuView.
+        """
+        self.controller.active_chain_id = None
+        self.run_sequence([
+            FlowStep(ChainChooserView, button_data_selection=ChainChooserView.EVM),
+            FlowStep(MainMenuView),
+        ])
+        assert self.controller.active_chain_id == "evm"
+
+
+    def test_chain_chooser_chains_to_microsd_forever_reminder(self):
+        """
+        Found by execution-stage adversarial review: since active_chain_id never
+        persists across a reboot, an operator with MICROSD_TOAST_TIMER_FOREVER enabled
+        would otherwise lose that reminder every single boot (Controller.start()'s own
+        one-time check always loses to the un-skippable chain chooser). ChainChooserView
+        must chain to RemoveMicroSDWarningView instead of going straight to MainMenuView
+        when that setting is active.
+        """
+        from seedsigner.models.settings import SettingsConstants
+        from seedsigner.views.view import RemoveMicroSDWarningView
+
+        self.controller.active_chain_id = None
+        self.settings.set_value(SettingsConstants.SETTING__MICROSD_TOAST_TIMER, SettingsConstants.MICROSD_TOAST_TIMER_FOREVER)
+        self.run_sequence([
+            FlowStep(ChainChooserView, button_data_selection=ChainChooserView.BITCOIN),
+            FlowStep(RemoveMicroSDWarningView),
+        ])
+        assert self.controller.active_chain_id == "bitcoin"

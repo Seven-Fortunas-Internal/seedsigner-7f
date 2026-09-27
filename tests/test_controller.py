@@ -1,9 +1,13 @@
+from unittest.mock import patch
+
 import pytest
 
 # Must import this before the Controller
 from base import BaseTest
 
-from seedsigner.controller import Controller
+from seedsigner.controller import Controller, StopFlowBasedTest
+from seedsigner.models.settings import SettingsConstants
+from seedsigner.views.view import ChainChooserView, MainMenuView, RemoveMicroSDWarningView
 
 
 class TestController(BaseTest):
@@ -79,3 +83,80 @@ class TestController(BaseTest):
         # ...get a new copy of the instance and confirm change
         controller = Controller.get_instance()
         assert controller.unverified_address == "123abc"
+
+
+    def _first_view_cls_from_start(self, controller, initial_destination=None):
+        """
+            Helper: runs Controller.start() but stops it after the very first
+            Destination._run_view() call, returning the View_cls that was about to
+            run. Used to test start()'s own destination-selection logic directly,
+            without going through the full FlowStep/run_sequence machinery (which
+            can't express "the default destination should be something other than
+            MainMenuView" -- its own initial_destination convenience shortcut is
+            keyed specifically off of MainMenuView).
+        """
+        captured = {}
+
+        def fake_run_view(destination, *args, **kwargs):
+            captured["View_cls"] = destination.View_cls
+            raise StopFlowBasedTest()
+
+        with patch("seedsigner.views.view.Destination._run_view", autospec=True, side_effect=fake_run_view):
+            controller.start(initial_destination=initial_destination)
+
+        return captured.get("View_cls")
+
+
+    def test_chain_chooser_shown_on_fresh_boot(self):
+        """
+            A fresh boot (active_chain_id unset, no test-only initial_destination
+            override) must route to ChainChooserView, not straight to MainMenuView --
+            see docs/multi-chain/boot-chain-selection-plan.md.
+        """
+        controller = Controller.get_instance()
+        controller.active_chain_id = None
+
+        assert self._first_view_cls_from_start(controller) == ChainChooserView
+
+
+    def test_no_chain_chooser_once_active_chain_id_is_set(self):
+        """ Once active_chain_id is set (any later Home visit this session), boot
+            straight to MainMenuView as before -- the chooser only ever fires once
+            per power-on session. """
+        controller = Controller.get_instance()
+        controller.active_chain_id = "bitcoin"
+
+        assert self._first_view_cls_from_start(controller) == MainMenuView
+
+
+    def test_chain_chooser_wins_over_microsd_forever_reminder(self):
+        """
+            Regression test for a real bug found by adversarial review before this
+            code was written: the MICROSD_TOAST_TIMER_FOREVER branch unconditionally
+            overwrites next_destination, which -- if checked before the chain-chooser
+            logic -- would let a device with that setting active silently skip the
+            chooser for the entire session. The chooser must win.
+        """
+        controller = Controller.get_instance()
+        controller.active_chain_id = None
+        controller.settings.set_value(SettingsConstants.SETTING__MICROSD_TOAST_TIMER, SettingsConstants.MICROSD_TOAST_TIMER_FOREVER)
+
+        assert self._first_view_cls_from_start(controller) == ChainChooserView
+
+
+    def test_microsd_forever_reminder_still_works_once_chain_is_chosen(self):
+        """ The microSD-forever reminder itself must still work normally once
+            active_chain_id is already set (i.e. this isn't a fresh boot) -- the
+            chain-chooser fix must not have broken this pre-existing feature. """
+        controller = Controller.get_instance()
+        controller.active_chain_id = "bitcoin"
+        controller.settings.set_value(SettingsConstants.SETTING__MICROSD_TOAST_TIMER, SettingsConstants.MICROSD_TOAST_TIMER_FOREVER)
+
+        assert self._first_view_cls_from_start(controller) == RemoveMicroSDWarningView
+
+
+    # Note: ChainChooserView's own button-selection behavior (does picking Bitcoin/EVM
+    # actually set active_chain_id and land on MainMenuView) is tested via
+    # run_sequence() in test_flows_view.py instead of here -- that needs FlowTest's
+    # full pytest lifecycle (setup_class's mock_microsd/LoadingScreenThread patching),
+    # which TestController (a plain BaseTest) doesn't have.

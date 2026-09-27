@@ -110,6 +110,16 @@ class BaseTest:
         Controller._instance = None
         Controller.configure_instance()
 
+        # Default every fresh Controller to Bitcoin mode (see
+        # docs/multi-chain/boot-chain-selection-plan.md): 52 of 81 existing
+        # run_sequence() calls start at MainMenuView with initial_destination=None,
+        # which would otherwise route to the new ChainChooserView instead of the
+        # expected first FlowStep. Set here (not just in setup_method()) because
+        # several tests call BaseTest.reset_controller() mid-test to simulate a fresh
+        # boot, bypassing setup_method() entirely. EVM-specific tests override this
+        # explicitly in their own setup.
+        Controller.get_instance().active_chain_id = "bitcoin"
+
 
     def setup_method(self):
         """ Guarantee a clean/default Controller, Settings, & MicroSD state for each test case """

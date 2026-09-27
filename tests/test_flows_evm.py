@@ -43,6 +43,10 @@ class TestEvmFlows(FlowTest):
     def setup_method(self):
         super().setup_method()
         self.settings.set_value(SettingsConstants.SETTING__MULTICHAIN_ENABLED, SettingsConstants.OPTION__ENABLED)
+        # Override BaseTest's "bitcoin" default (see docs/multi-chain/boot-chain-selection-plan.md) --
+        # not yet read by anything besides Controller.start()'s boot-time redirect, but
+        # set here so this test class is ready once the gating stories land.
+        self.controller.active_chain_id = "evm"
 
 
     def seed_fixture(self) -> Seed:

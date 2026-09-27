@@ -224,6 +224,58 @@ class MainMenuView(View):
 
 
 
+class ChainChooserView(View):
+    """
+        Boot-time-only chain selector -- the operator picks one blockchain per
+        power-on session, and Controller.active_chain_id then narrows every other
+        View's menu construction to just that chain for the rest of the session
+        (see docs/multi-chain/boot-chain-selection-plan.md in the diy-seedsigner
+        repo for the full design and the adversarial review that shaped it).
+
+        Deliberately hardcodes its two options rather than importing ChainRegistry:
+        this View runs on every single boot, and importing seedsigner.chains eagerly
+        loads the full EVM crypto stack (embit + pycryptodomex, ~66ms measured on a
+        dev machine, likely worse on the actual Pi Zero hardware) for every user,
+        including Bitcoin-only ones -- the same eager-import cost an earlier review
+        flagged as unacceptable for settings_definition.py's selection_options. A
+        future second non-Bitcoin chain means adding its option here too, a small,
+        accepted cost against that per-boot latency hit for everyone today.
+
+        No back button: chain selection isn't optional at this point in the boot
+        sequence, and there's nothing to back out to yet.
+    """
+    BITCOIN = ButtonOption("Bitcoin")
+    EVM = ButtonOption("Ethereum / EVM")
+
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        button_data = [self.BITCOIN, self.EVM]
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Choose Blockchain"),
+            show_back_button=False,
+            button_data=button_data,
+        )
+
+        if button_data[selected_menu_num] == self.BITCOIN:
+            self.controller.active_chain_id = "bitcoin"
+        elif button_data[selected_menu_num] == self.EVM:
+            self.controller.active_chain_id = "evm"
+
+        # Found by execution-stage adversarial review: Controller.start()'s own
+        # microSD-forever reminder is only ever checked once, before this chooser runs
+        # (and the ordering fix that makes the chooser un-skippable means that one-time
+        # check always loses to it). Since active_chain_id never persists across a
+        # reboot, an operator with this setting enabled would otherwise silently lose
+        # the reminder every single boot, not just once. Chain it here instead of
+        # dropping it.
+        if self.settings.get_value(SettingsConstants.SETTING__MICROSD_TOAST_TIMER) == SettingsConstants.MICROSD_TOAST_TIMER_FOREVER:
+            return Destination(RemoveMicroSDWarningView)
+
+        return Destination(MainMenuView, clear_history=True)
+
+
+
 class PowerOptionsView(View):
     RESET = ButtonOption("Restart", SeedSignerIconConstants.RESTART)
     POWER_OFF = ButtonOption("Power off", SeedSignerIconConstants.POWER)
