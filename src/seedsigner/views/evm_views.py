@@ -33,7 +33,7 @@ from seedsigner.chains.evm.constants import NETWORKS
 from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
 from seedsigner.chains.evm.ur_types import DATA_TYPE_TYPED_TRANSACTION, EthSignature, EthSignRequest
 from seedsigner.gui.components import FontAwesomeIconConstants, SeedSignerIconConstants
-from seedsigner.gui.screens import DireWarningScreen, RET_CODE__BACK_BUTTON
+from seedsigner.gui.screens import DireWarningScreen, LargeIconStatusScreen, RET_CODE__BACK_BUTTON, WarningScreen
 from seedsigner.gui.screens.screen import ButtonListScreen, ButtonOption
 from seedsigner.models.seed import Seed
 from seedsigner.models.settings import SettingsConstants
@@ -243,6 +243,71 @@ class EvmConnectQRView(View):
         # Exiting/Canceling the QR display screen always returns Home, same
         # convention as EvmAddressQRView/EvmSignedUrQRView above.
         return Destination(MainMenuView, skip_current_view=True)
+
+
+
+class EvmVerifyAddressStartView(View):
+    """ Reached from Home's Scan button (scan_views.py's is_evm_address branch) when
+        an EVM (0x...) address QR is scanned, in EVM mode. Checks each loaded seed
+        across a bounded index range for a match -- deliberately NOT Bitcoin's own
+        unbounded, background-threaded brute-force search
+        (seed_views.py's SeedAddressVerificationView): EVM derivation (secp256k1 +
+        Keccak-256) is fast enough that even `_VERIFY_INDEX_LIMIT` x (loaded seeds)
+        derivations complete synchronously, well within one screen render, so no
+        background thread/live-progress/skip-10/cancel UI is needed -- and an
+        unbounded loop with none of that UI would have no way to ever terminate on a
+        genuine non-match. See docs/multi-chain/tools-evm-address-explorer-and-verify-address-plan.md
+        for the "how far do we search" decision this bound represents. """
+    # Matches the common BIP-44 gap-limit convention most wallets already use as a
+    # default for when to stop looking for used receive addresses -- not tied to any
+    # actual on-chain gap-limit semantics for EVM (which has none; every EVM address
+    # is usable immediately, unlike Bitcoin's receive/change gap concept). Just a
+    # reasonable, explicit, documented bound rather than an arbitrary or unbounded one.
+    _VERIFY_INDEX_LIMIT = 20
+
+
+    def __init__(self, address: str):
+        super().__init__()
+        self.address = address
+
+        if guard_active_chain(self, "evm"):
+            return
+
+        from seedsigner.chains import ChainRegistry
+        plugin = ChainRegistry.get("evm")
+
+        self.matched_seed = None
+        self.matched_derivation_path = None
+        for seed in self.controller.storage.seeds:
+            for index in range(self._VERIFY_INDEX_LIMIT):
+                derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=index)
+                derived = plugin.derive_address(seed.seed_bytes, derivation_path)
+                if derived.address == self.address:
+                    self.matched_seed = seed
+                    self.matched_derivation_path = derivation_path
+                    break
+            if self.matched_seed is not None:
+                break
+
+
+    def run(self):
+        if self.matched_seed is not None:
+            fingerprint = self.matched_seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+            self.run_screen(
+                LargeIconStatusScreen,
+                title=_("Address Verified"),
+                status_headline=_("Verified"),
+                text=_("This address belongs to seed {} at {}.").format(fingerprint, self.matched_derivation_path),
+            )
+        else:
+            self.run_screen(
+                WarningScreen,
+                title=_("Not Verified"),
+                status_headline=_("No Match Found"),
+                text=_("This address doesn't match any loaded seed within the first {} addresses.").format(self._VERIFY_INDEX_LIMIT),
+            )
+
+        return Destination(MainMenuView, clear_history=True)
 
 
 

@@ -146,6 +146,7 @@ class Controller(Singleton):
     FLOW__ADDRESS_EXPLORER = "address_explorer"
     FLOW__SIGN_MESSAGE = "sign_message"
     FLOW__EVM_SIGN = "evm_sign"
+    FLOW__EVM_ADDRESS_EXPLORER = "evm_address_explorer"
     resume_main_flow: str = None
 
     back_stack: BackStack = None

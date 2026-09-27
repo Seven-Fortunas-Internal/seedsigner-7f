@@ -28,12 +28,16 @@ class ToolsMenuView(View):
     def run(self):
         button_data = [self.IMAGE, self.DICE, self.KEYBOARD]
 
-        # Both are Bitcoin-specific today (see
-        # docs/multi-chain/boot-chain-selection-plan.md and
-        # multi-chain-tools-evm-address-explorer-and-verify-address for the deferred
-        # EVM-mode equivalents) -- the entropy/word-calc tools above stay chain-agnostic.
+        # Address Explorer now has a real EVM-mode equivalent (see
+        # ToolsAddressExplorerSelectSourceView, which branches internally on
+        # active_chain_id) -- shown in both modes. Verify Address stays Bitcoin-only:
+        # its EVM equivalent needs no separate Tools entry at all -- Home's Scan
+        # button already recognizes a scanned EVM address QR directly (see
+        # scan_views.py's is_evm_address branch), matching how PSBT signing itself
+        # has no separate Tools entry either. The entropy/word-calc tools above stay
+        # chain-agnostic.
+        button_data.append(self.ADDRESS_EXPLORER)
         if self.controller.active_chain_id == "bitcoin":
-            button_data.append(self.ADDRESS_EXPLORER)
             button_data.append(self.VERIFY_ADDRESS)
 
         selected_menu_num = self.run_screen(
@@ -549,11 +553,31 @@ class ToolsAddressExplorerSelectSourceView(View):
 
         # Most of the options require us to go through a side flow(s) before we can
         # continue to the address explorer. Set the Controller-level flow so that it
-        # knows to re-route us once the side flow is complete.        
-        self.controller.resume_main_flow = Controller.FLOW__ADDRESS_EXPLORER
+        # knows to re-route us once the side flow is complete -- a different resume
+        # constant per chain mode, each handled at its own call site (Bitcoin:
+        # SeedExportXpubScriptTypeView and friends, unchanged; EVM: the new branch in
+        # SeedOptionsView.run(), see docs/multi-chain/tools-evm-address-explorer-and-verify-address-plan.md).
+        self.controller.resume_main_flow = Controller.FLOW__ADDRESS_EXPLORER if self.controller.active_chain_id == "bitcoin" else Controller.FLOW__EVM_ADDRESS_EXPLORER
 
         if len(seeds) > 0 and selected_menu_num < len(seeds):
             selected_seed = seeds[selected_menu_num]
+            if self.controller.active_chain_id == "evm":
+                # Unlike the Bitcoin path below, EvmNetworkView and the rest of the
+                # EVM address-display chain never read resume_main_flow -- it exists
+                # purely for the acquire-a-new-seed round-trip (the SeedOptionsView
+                # branch above), not as a downstream behavior signal. Clear it here so
+                # a later, unrelated visit to SeedOptionsView (e.g. Seeds > this same
+                # seed > Options) doesn't get hijacked by that branch.
+                self.controller.resume_main_flow = None
+                from seedsigner.views.evm_views import EvmNetworkView
+                return Destination(EvmNetworkView, view_args=dict(seed=selected_seed))
+
+            # Bitcoin: deliberately do NOT clear resume_main_flow here, unlike the EVM
+            # branch above -- SeedExportXpubScriptTypeView and several views further
+            # down this same chain (seed_views.py) read
+            # resume_main_flow == FLOW__ADDRESS_EXPLORER to know they're in the
+            # address-explorer flow rather than a plain "Export xpub" request, even
+            # on this already-loaded-seed path that skips the round-trip itself.
             return Destination(
                 SeedExportXpubScriptTypeView,
                 view_args=dict(

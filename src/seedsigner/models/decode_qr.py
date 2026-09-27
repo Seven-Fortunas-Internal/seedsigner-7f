@@ -88,6 +88,9 @@ class DecodeQR:
             elif self.qr_type == QRType.BITCOIN_ADDRESS:
                 self.decoder = BitcoinAddressQrDecoder() # Single Segment bitcoin address
 
+            elif self.qr_type == QRType.EVM_ADDRESS:
+                self.decoder = EvmAddressQrDecoder() # Single Segment EVM (0x...) address
+
             elif self.qr_type == QRType.SIGN_MESSAGE:
                 self.decoder = SignMessageQrDecoder() # Single Segment sign message request
 
@@ -215,6 +218,12 @@ class DecodeQR:
             return self.decoder.get_address_type()
 
 
+    def get_evm_address(self):
+        """ Returns the EIP-55 checksummed address string, or None. """
+        if self.is_evm_address:
+            return self.decoder.get_address()
+
+
     def get_qr_data(self) -> dict:
         """
         This provides a single access point for external code to retrieve the QR data,
@@ -316,6 +325,11 @@ class DecodeQR:
         return self.qr_type == QRType.EVM__ETH_SIGN_REQUEST_UR
 
 
+    @property
+    def is_evm_address(self):
+        return self.qr_type == QRType.EVM_ADDRESS
+
+
 
     @property
     def is_wallet_descriptor(self):
@@ -412,6 +426,14 @@ class DecodeQR:
             # Bitcoin Address
             elif DecodeQR.is_bitcoin_address(s):
                 return QRType.BITCOIN_ADDRESS
+
+            # EVM Address -- the QR's own format already reveals the chain (0x prefix
+            # + 40 hex chars is unambiguous, never a valid Bitcoin address), so no
+            # active_chain_id awareness is needed at detection time, only at whether
+            # it's in scope to act on once decoded (see evm_views.py's
+            # EvmVerifyAddressStartView).
+            elif DecodeQR.is_evm_address_format(s):
+                return QRType.EVM_ADDRESS
 
             # message signing
             elif s.startswith("signmessage"):
@@ -543,6 +565,18 @@ class DecodeQR:
             return True
         else:
             return False
+
+
+    @staticmethod
+    def is_evm_address_format(s):
+        """ Named _format, not is_evm_address (unlike is_bitcoin_address's own naming)
+            -- DecodeQR already has an instance *property* called is_evm_address
+            (checking self.qr_type), and this project avoids anything that could look
+            like it's guessing at a decode result vs. reporting one. Deliberately no
+            "ethereum:" URI-scheme prefix support (unlike is_bitcoin_address's
+            "bitcoin:" handling) -- no evidence any real requester (MetaMask/Rabby/etc.)
+            shows one for a receiving address; add it if/when a real QR needs it. """
+        return re.search(r'^0x[0-9a-fA-F]{40}$', s) is not None
 
 
     @staticmethod
@@ -1107,6 +1141,44 @@ class BitcoinAddressQrDecoder(BaseSingleFrameQrDecoder):
             else:
                 return "Unknown"
         return None
+
+
+
+class EvmAddressQrDecoder(BaseSingleFrameQrDecoder):
+    """
+        Decodes single frame representing an EVM (0x...) address. Simpler than
+        BitcoinAddressQrDecoder above -- one address format, no script-type/network
+        inference (EVM addresses are chain-agnostic across every EVM network; which
+        network a transaction targets is a property of the transaction, not the
+        address -- see chains/evm/constants.py's own NETWORKS list, none of which
+        change address derivation or formatting).
+    """
+    def __init__(self):
+        super().__init__()
+        self.address = None
+
+
+    def add(self, segment, qr_type=QRType.EVM_ADDRESS):
+        """ RegEx re-confirms the exact format already matched by
+            DecodeQR.is_evm_address_format() at detection time -- not just relied on
+            from the caller, matching this codebase's own doctrine elsewhere. Result
+            is normalized to EIP-55 checksum casing regardless of the scanned QR's own
+            casing (real requesters may show all-lowercase, all-uppercase, or
+            checksum-cased addresses interchangeably). """
+        address_match = re.search(r'^0x[0-9a-fA-F]{40}$', segment)
+        if address_match is not None:
+            from seedsigner.chains.evm.crypto import address_bytes_to_checksum
+            self.address = address_bytes_to_checksum(bytes.fromhex(segment[2:]))
+            self.complete = True
+            self.collected_segments = 1
+            return DecodeQRStatus.COMPLETE
+
+        logger.debug(f"Invalid EVM address: {segment}")
+        return DecodeQRStatus.INVALID
+
+
+    def get_address(self):
+        return self.address
 
 
 

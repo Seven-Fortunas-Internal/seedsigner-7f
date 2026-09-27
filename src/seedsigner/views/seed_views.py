@@ -608,6 +608,15 @@ class SeedOptionsView(View):
                 from seedsigner.views.evm_views import EvmScanSignRequestView
                 return Destination(EvmScanSignRequestView, view_args=dict(seed=self.seed), skip_current_view=True)
 
+            elif self.controller.resume_main_flow == Controller.FLOW__EVM_ADDRESS_EXPLORER:
+                # ToolsAddressExplorerSelectSourceView sent us here to scan/type a
+                # new seed for address exploration; now that one is ready, resume
+                # straight into the EVM address-display flow (same destination the
+                # already-loaded-seed path uses directly, no round-trip needed).
+                self.controller.resume_main_flow = None
+                from seedsigner.views.evm_views import EvmNetworkView
+                return Destination(EvmNetworkView, view_args=dict(seed=self.seed), skip_current_view=True)
+
         button_data = []
 
         if self.controller.active_chain_id == "bitcoin":

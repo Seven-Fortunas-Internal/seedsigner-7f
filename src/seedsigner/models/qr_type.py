@@ -21,6 +21,7 @@ class QRType:
     XPUB__UR = "xpub__ur"
 
     BITCOIN_ADDRESS = "bitcoin_address"
+    EVM_ADDRESS = "evm_address"
 
     SIGN_MESSAGE = "sign_message"
 

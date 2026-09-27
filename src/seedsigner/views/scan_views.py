@@ -180,6 +180,18 @@ class ScanView(View):
                 }
             )
 
+        elif self.decoder.is_evm_address:
+            if self.controller.active_chain_id != "evm":
+                # An EVM address scanned while in Bitcoin mode is out of scope, same
+                # treatment as any other out-of-scope QR -- EvmVerifyAddressStartView
+                # also guards itself, defense-in-depth, same pattern as every other
+                # branch in this method.
+                return Destination(MainMenuView, clear_history=True)
+            from seedsigner.views.evm_views import EvmVerifyAddressStartView
+            address = self.decoder.get_evm_address()
+
+            return Destination(EvmVerifyAddressStartView, skip_current_view=True, view_args=dict(address=address))
+
         elif self.decoder.is_sign_message:
             if self.controller.active_chain_id != "bitcoin":
                 # SeedSignMessageStartView already guards itself (defense-in-depth,

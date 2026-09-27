@@ -841,11 +841,12 @@ class TestEvmFlows(FlowTest):
             assert self.controller.unverified_address is None
 
 
-    def test_tools_menu_hides_address_explorer_and_verify_address_in_evm_mode(self):
-        """ multi-chain-boot-chain-selection-tools-gating: both are Bitcoin-specific
-            (no EVM equivalent exists yet -- see
-            multi-chain-tools-evm-address-explorer-and-verify-address), so neither
-            should appear once active_chain_id != "bitcoin". The chain-agnostic
+    def test_tools_menu_shows_address_explorer_hides_verify_address_in_evm_mode(self):
+        """ multi-chain-tools-evm-address-explorer-and-verify-address: Address
+            Explorer now has a real EVM-mode equivalent (ToolsAddressExplorerSelectSourceView
+            branches internally), so it stays visible. Verify Address stays hidden --
+            its EVM equivalent needs no separate Tools entry (Home's Scan button
+            already recognizes a scanned EVM address directly). The chain-agnostic
             entropy/word-calc tools are unaffected. """
         from seedsigner.views.tools_views import ToolsMenuView
 
@@ -855,7 +856,7 @@ class TestEvmFlows(FlowTest):
             view.run()
 
         button_data = mock_run_screen.call_args.kwargs["button_data"]
-        assert ToolsMenuView.ADDRESS_EXPLORER not in button_data
+        assert ToolsMenuView.ADDRESS_EXPLORER in button_data
         assert ToolsMenuView.VERIFY_ADDRESS not in button_data
         assert ToolsMenuView.IMAGE in button_data
         assert ToolsMenuView.DICE in button_data
@@ -1166,7 +1167,8 @@ class TestScanViewChainGating(FlowTest):
         from seedsigner.models.decode_qr import DecodeQR
 
         self.controller.active_chain_id = None
-        for is_x_property, heavy_call in self.BITCOIN_SPECIFIC_BRANCHES + [("is_eth_sign_request", "get_eth_sign_request")]:
+        evm_branches = [("is_eth_sign_request", "get_eth_sign_request"), ("is_evm_address", "get_evm_address")]
+        for is_x_property, heavy_call in self.BITCOIN_SPECIFIC_BRANCHES + evm_branches:
             view = scan_views.ScanView()
             with patch.object(DecodeQR, is_x_property, new_callable=PropertyMock, return_value=True):
                 with patch.object(view.decoder, heavy_call) as mock_heavy_call:
@@ -1216,3 +1218,164 @@ class TestScanViewChainGating(FlowTest):
 
         assert destination.View_cls == MainMenuView
         mock_get_eth_sign_request.assert_not_called()
+
+
+    def test_evm_address_branch_refuses_before_any_decode_work_in_bitcoin_mode(self):
+        """ multi-chain-tools-evm-address-explorer-and-verify-address: the same
+            before-any-decode-work property as is_eth_sign_request above, for the new
+            is_evm_address branch. """
+        from seedsigner.models.decode_qr import DecodeQR
+
+        self.controller.active_chain_id = "bitcoin"
+        view = scan_views.ScanView()
+        with patch.object(DecodeQR, "is_evm_address", new_callable=PropertyMock, return_value=True):
+            with patch.object(view.decoder, "get_evm_address") as mock_get_evm_address:
+                destination = view._handle_complete_scan()
+
+        assert destination.View_cls == MainMenuView
+        mock_get_evm_address.assert_not_called()
+
+
+"""********************************************************************************
+    multi-chain-tools-evm-address-explorer-and-verify-address: EVM-mode equivalents
+    for Tools > Address Explorer and the Verify Address QR format.
+********************************************************************************"""
+class TestEvmAddressExplorerAndVerifyAddress(FlowTest):
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "evm"
+
+
+    def seed_fixture(self) -> Seed:
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+        return seed
+
+
+    def test_address_explorer_existing_seed_routes_to_evm_network_view_and_clears_resume_flow(self):
+        """ Picking an already-loaded seed in EVM mode proceeds straight to
+            EvmNetworkView, reusing the already-built/tested EVM address-display
+            flow -- zero new View classes for this path, per the locked design. Must
+            clear resume_main_flow (unlike the Bitcoin path, which deliberately keeps
+            it set for its own downstream views) so a later, unrelated visit to
+            SeedOptionsView isn't hijacked by the new FLOW__EVM_ADDRESS_EXPLORER
+            resume branch there. """
+        from seedsigner.views.tools_views import ToolsAddressExplorerSelectSourceView
+        from seedsigner.views.evm_views import EvmNetworkView
+
+        seed = self.seed_fixture()
+        view = ToolsAddressExplorerSelectSourceView()
+        with patch.object(view, "run_screen", return_value=0):
+            destination = view.run()
+
+        assert destination.View_cls == EvmNetworkView
+        assert destination.view_args["seed"] is seed
+        assert self.controller.resume_main_flow is None
+
+
+    def test_address_explorer_new_seed_sets_resume_flow_and_full_cycle_resumes(self):
+        """ End-to-end: no seed loaded yet -> scan a new seed -> finalize -> resume
+            straight into EvmNetworkView with that seed, and resume_main_flow is
+            cleared afterward (not left dangling). """
+        from seedsigner.views import tools_views
+
+        self.run_sequence([
+            FlowStep(MainMenuView, button_data_selection=MainMenuView.TOOLS),
+            FlowStep(tools_views.ToolsMenuView, button_data_selection=tools_views.ToolsMenuView.ADDRESS_EXPLORER),
+            FlowStep(tools_views.ToolsAddressExplorerSelectSourceView, button_data_selection=tools_views.ToolsAddressExplorerSelectSourceView.SCAN_SEED),
+            FlowStep(scan_views.ScanSeedQRView, before_run=load_seed_into_decoder),
+            FlowStep(seed_views.SeedFinalizeView, button_data_selection=seed_views.SeedFinalizeView.FINALIZE),
+            FlowStep(seed_views.SeedOptionsView, is_redirect=True),
+            FlowStep(evm_views.EvmNetworkView),
+        ])
+
+        assert self.controller.resume_main_flow is None
+
+
+    def test_evm_verify_address_start_view_refuses_to_run_outside_evm_mode(self):
+        for wrong_chain_id in ["bitcoin", None]:
+            self.controller.active_chain_id = wrong_chain_id
+            view = evm_views.EvmVerifyAddressStartView(address="0x" + "11" * 20)
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+
+
+    def test_evm_verify_address_start_view_finds_real_match(self):
+        """ End-to-end: a real address derived from a loaded seed at a real index
+            within the search bound is found and reported, with the correct
+            derivation path -- not just that *some* screen appears. """
+        from seedsigner.chains import ChainRegistry
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+        path = "m/44'/60'/0'/0/5"
+        real_address = plugin.derive_address(seed.seed_bytes, path).address
+
+        view = evm_views.EvmVerifyAddressStartView(address=real_address)
+        assert view.matched_seed is seed
+        assert view.matched_derivation_path == path
+
+        with patch.object(view, "run_screen", return_value=0) as mock_run_screen:
+            destination = view.run()
+        assert destination.View_cls == MainMenuView
+        # Confirms the success screen was actually shown, not the not-verified one.
+        assert "Verified" in mock_run_screen.call_args.kwargs["status_headline"]
+
+
+    def test_evm_verify_address_start_view_does_not_match_beyond_search_limit(self):
+        """ The search is deliberately bounded (_VERIFY_INDEX_LIMIT) -- an address
+            only reachable beyond that bound must be reported as not verified, not
+            silently found by an unbounded search. """
+        from seedsigner.chains import ChainRegistry
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+        path = f"m/44'/60'/0'/0/{evm_views.EvmVerifyAddressStartView._VERIFY_INDEX_LIMIT}"  # one past the bound
+        real_address = plugin.derive_address(seed.seed_bytes, path).address
+
+        view = evm_views.EvmVerifyAddressStartView(address=real_address)
+        assert view.matched_seed is None
+
+        with patch.object(view, "run_screen", return_value=0) as mock_run_screen:
+            view.run()
+        assert "No Match" in mock_run_screen.call_args.kwargs["status_headline"]
+
+
+    def test_evm_verify_address_start_view_no_match_for_unrelated_address(self):
+        self.seed_fixture()
+        view = evm_views.EvmVerifyAddressStartView(address="0x" + "ab" * 20)
+        assert view.matched_seed is None
+
+
+    def test_evm_address_qr_format_detects_and_normalizes_to_checksum_casing(self):
+        """ A real end-to-end check via DecodeQR (not a mocked decoder), confirming
+            the address is normalized to EIP-55 checksum casing regardless of the
+            scanned QR's own casing. """
+        from seedsigner.models.decode_qr import DecodeQR
+        from seedsigner.models.qr_type import QRType
+        from seedsigner.chains import ChainRegistry
+
+        seed = self.seed_fixture()
+        plugin = ChainRegistry.get("evm")
+        checksum_address = plugin.derive_address(seed.seed_bytes, "m/44'/60'/0'/0/0").address
+
+        for scanned_casing in [checksum_address, checksum_address.lower(), checksum_address.upper().replace("0X", "0x")]:
+            decoder = DecodeQR()
+            status = decoder.add_data(scanned_casing)
+            assert decoder.qr_type == QRType.EVM_ADDRESS
+            assert decoder.is_evm_address
+            assert decoder.complete
+            assert decoder.get_evm_address() == checksum_address
+
+
+    def test_evm_address_qr_format_rejects_malformed_hex(self):
+        from seedsigner.models.decode_qr import DecodeQR
+        from seedsigner.models.qr_type import QRType
+
+        # Too short, and contains a non-hex character -- must not be misdetected as
+        # any other QR type either (a real risk given detect_segment_type's own
+        # documented ordering sensitivity).
+        for bad in ["0x1234", "0x" + "g" * 40, "not an address at all"]:
+            decoder = DecodeQR()
+            decoder.add_data(bad)
+            assert decoder.qr_type != QRType.EVM_ADDRESS
