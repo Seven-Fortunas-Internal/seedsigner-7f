@@ -439,6 +439,16 @@ class SettingsEntry:
     selection_options: list[tuple[str | int], str] = None
     default_value: Any = None
 
+    # None = always visible regardless of Controller.active_chain_id; "bitcoin"/"evm" =
+    # only shown while that chain mode is active (see
+    # docs/multi-chain/boot-chain-selection-plan.md). Filtered centrally in
+    # SettingsMenuView.run() (settings_views.py), the one real call site of
+    # get_settings_entries() -- not per-entry. UI-VISIBILITY-ONLY, not an enforcement
+    # boundary: SettingsIngestSettingsQRView (settings_views.py) writes directly to
+    # Settings via a scanned QR with zero chain-scope check, same pre-existing gap as
+    # SETTING__MULTICHAIN_ENABLED had, not something this field closes.
+    chain_scope: str = None
+
     def __post_init__(self):
         if self.type == SettingsConstants.TYPE__ENABLED_DISABLED:
             self.selection_options = SettingsConstants.OPTIONS__ENABLED_DISABLED
@@ -582,8 +592,9 @@ class SettingsDefinition:
                       display_name=_mft("Denomination display"),
                       type=SettingsConstants.TYPE__SELECT_1,
                       selection_options=SettingsConstants.ALL_BTC_DENOMINATIONS,
-                      default_value=SettingsConstants.BTC_DENOMINATION__THRESHOLD),
-     
+                      default_value=SettingsConstants.BTC_DENOMINATION__THRESHOLD,
+                      chain_scope="bitcoin"),
+
 
         # Advanced options
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
@@ -592,7 +603,13 @@ class SettingsDefinition:
                       type=SettingsConstants.TYPE__SELECT_1,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_NETWORKS,
-                      default_value=SettingsConstants.MAINNET),
+                      default_value=SettingsConstants.MAINNET,
+                      # Also read by views classified chain-agnostic elsewhere in this
+                      # cluster (SeedsMenuView, SeedFinalizeView, SeedDiscardView, all
+                      # via Seed.get_fingerprint()) -- hiding it here doesn't break
+                      # those, it just becomes non-adjustable while in EVM mode
+                      # (falls back to its last persisted value).
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__QR_DENSITY,
@@ -609,7 +626,8 @@ class SettingsDefinition:
                       type=SettingsConstants.TYPE__MULTISELECT,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_SIG_TYPES,
-                      default_value=SettingsConstants.ALL_SIG_TYPES),
+                      default_value=SettingsConstants.ALL_SIG_TYPES,
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__SCRIPT_TYPES,
@@ -618,7 +636,8 @@ class SettingsDefinition:
                       type=SettingsConstants.TYPE__MULTISELECT,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_SCRIPT_TYPES,
-                      default_value=[SettingsConstants.NATIVE_SEGWIT, SettingsConstants.NESTED_SEGWIT, SettingsConstants.TAPROOT]),
+                      default_value=[SettingsConstants.NATIVE_SEGWIT, SettingsConstants.NESTED_SEGWIT, SettingsConstants.TAPROOT],
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__XPUB_QR_FORMAT,
@@ -629,13 +648,15 @@ class SettingsDefinition:
                       default_value=[
                             SettingsConstants.XPUB_QR_FORMAT__UR_CRYPTO_ACCOUNT,
                             SettingsConstants.XPUB_QR_FORMAT__STATIC,
-                      ]),
+                      ],
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__XPUB_DETAILS,
                       display_name=_mft("Show xpub details"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__ENABLED),
+                      default_value=SettingsConstants.OPTION__ENABLED,
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__PASSPHRASE,
@@ -673,7 +694,8 @@ class SettingsDefinition:
                       display_name=_mft("Electrum seeds"),
                       help_text=_mft("Native Segwit only"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__DISABLED),
+                      default_value=SettingsConstants.OPTION__DISABLED,
+                      chain_scope="bitcoin"),
         
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__MICROSD_TOAST_TIMER,
@@ -687,7 +709,8 @@ class SettingsDefinition:
                       attr_name=SettingsConstants.SETTING__MESSAGE_SIGNING,
                       display_name=_mft("Message signing"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__DISABLED),
+                      default_value=SettingsConstants.OPTION__DISABLED,
+                      chain_scope="bitcoin"),
 
         # Multi-chain (EVM today; Tron/7Fchain planned) is no longer a Settings toggle --
         # retired in favor of Controller.active_chain_id, set once per power-on session

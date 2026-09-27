@@ -839,3 +839,65 @@ class TestEvmFlows(FlowTest):
             assert view.has_redirect
             assert view.get_redirect().View_cls == MainMenuView
             assert self.controller.unverified_address is None
+
+
+    def test_tools_menu_hides_address_explorer_and_verify_address_in_evm_mode(self):
+        """ multi-chain-boot-chain-selection-tools-gating: both are Bitcoin-specific
+            (no EVM equivalent exists yet -- see
+            multi-chain-tools-evm-address-explorer-and-verify-address), so neither
+            should appear once active_chain_id != "bitcoin". The chain-agnostic
+            entropy/word-calc tools are unaffected. """
+        from seedsigner.views.tools_views import ToolsMenuView
+
+        # self.controller.active_chain_id == "evm" from setup_method
+        view = ToolsMenuView()
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+
+        button_data = mock_run_screen.call_args.kwargs["button_data"]
+        assert ToolsMenuView.ADDRESS_EXPLORER not in button_data
+        assert ToolsMenuView.VERIFY_ADDRESS not in button_data
+        assert ToolsMenuView.IMAGE in button_data
+        assert ToolsMenuView.DICE in button_data
+        assert ToolsMenuView.KEYBOARD in button_data
+
+
+    def test_settings_menu_hides_bitcoin_scoped_entries_in_evm_mode(self):
+        """ multi-chain-boot-chain-selection-settings-scope: the 8 Bitcoin-scoped
+            SettingsEntry rows (chain_scope="bitcoin") must not appear in either the
+            General or Advanced settings screens while active_chain_id == "evm";
+            chain-agnostic entries (e.g. Persistent Settings) are unaffected. """
+        from unittest.mock import MagicMock
+        from seedsigner.views.settings_views import SettingsMenuView
+        from seedsigner.models.settings_definition import SettingsConstants as SC, SettingsDefinition
+
+        def shown_labels_for(entry):
+            view = SettingsMenuView(visibility=entry.visibility)
+            view.screen = MagicMock()  # run()'s post-scroll-position read needs this set
+            with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+                view.run()
+            return {b.button_label for b in mock_run_screen.call_args.kwargs["button_data"]}
+
+        bitcoin_scoped_attrs = [
+            SC.SETTING__NETWORK, SC.SETTING__BTC_DENOMINATION, SC.SETTING__SIG_TYPES,
+            SC.SETTING__SCRIPT_TYPES, SC.SETTING__XPUB_QR_FORMAT, SC.SETTING__XPUB_DETAILS,
+            SC.SETTING__ELECTRUM_SEEDS, SC.SETTING__MESSAGE_SIGNING,
+        ]
+
+        # self.controller.active_chain_id == "evm" from setup_method
+        for attr in bitcoin_scoped_attrs:
+            entry = SettingsDefinition.get_settings_entry(attr)
+            assert entry.display_name not in shown_labels_for(entry)
+
+        # Sanity + fixture-validity check: the same entries DO show up in Bitcoin mode --
+        # proves this isn't a false "evm hides everything" result.
+        self.controller.active_chain_id = "bitcoin"
+        for attr in bitcoin_scoped_attrs:
+            entry = SettingsDefinition.get_settings_entry(attr)
+            assert entry.display_name in shown_labels_for(entry)
+
+        # Chain-agnostic entry unaffected in either mode.
+        persistent_entry = SettingsDefinition.get_settings_entry(SC.SETTING__PERSISTENT_SETTINGS)
+        for chain_id in ["bitcoin", "evm"]:
+            self.controller.active_chain_id = chain_id
+            assert persistent_entry.display_name in shown_labels_for(persistent_entry)

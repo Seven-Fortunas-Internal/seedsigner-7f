@@ -26,7 +26,15 @@ class ToolsMenuView(View):
     VERIFY_ADDRESS = ButtonOption("Verify address")
 
     def run(self):
-        button_data = [self.IMAGE, self.DICE, self.KEYBOARD, self.ADDRESS_EXPLORER, self.VERIFY_ADDRESS]
+        button_data = [self.IMAGE, self.DICE, self.KEYBOARD]
+
+        # Both are Bitcoin-specific today (see
+        # docs/multi-chain/boot-chain-selection-plan.md and
+        # multi-chain-tools-evm-address-explorer-and-verify-address for the deferred
+        # EVM-mode equivalents) -- the entropy/word-calc tools above stay chain-agnostic.
+        if self.controller.active_chain_id == "bitcoin":
+            button_data.append(self.ADDRESS_EXPLORER)
+            button_data.append(self.VERIFY_ADDRESS)
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,

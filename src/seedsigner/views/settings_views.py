@@ -33,6 +33,16 @@ class SettingsMenuView(View):
         settings_entries = SettingsDefinition.get_settings_entries(
             visibility=self.visibility
         )
+
+        # Bitcoin/EVM-scoped entries are UI-visibility-only (see SettingsEntry.chain_scope's
+        # own docstring in settings_definition.py) -- filtered here, the one real call
+        # site of get_settings_entries(), rather than at each of the 8 entries
+        # individually (see docs/multi-chain/boot-chain-selection-plan.md).
+        settings_entries = [
+            e for e in settings_entries
+            if e.chain_scope is None or e.chain_scope == self.controller.active_chain_id
+        ]
+
         button_data: list[ButtonOption] = [ButtonOption(e.display_name) for e in settings_entries]
 
         if self.visibility == SettingsConstants.VISIBILITY__GENERAL:
