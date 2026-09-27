@@ -527,10 +527,11 @@ class ToolsAddressExplorerSelectSourceView(View):
         button_data = button_data + [self.SCAN_SEED, self.SCAN_DESCRIPTOR, self.TYPE_12WORD, self.TYPE_24WORD]
         # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
         # (not replaced by) active_chain_id (see seed_views.py's SeedSelectSeedView/
-        # LoadSeedView for the same pattern, and
-        # docs/multi-chain/boot-chain-selection-plan.md: this Address Explorer view
-        # itself is Bitcoin-specific and will be gated as a whole by the separate
-        # tools-gating story, but until then it's still reachable in EVM mode).
+        # LoadSeedView for the same pattern). Updated 2026-09-27: this view is no
+        # longer reachable at all in EVM mode -- ToolsMenuView (tools-gating, done)
+        # hides the button that routes here -- so this inner gate is now redundant
+        # defense-in-depth rather than a live gap, kept for the same
+        # not-just-relied-on-from-the-caller reason the rest of this cluster uses it.
         if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \
                 and self.controller.active_chain_id == "bitcoin":
             button_data.append(self.TYPE_ELECTRUM)

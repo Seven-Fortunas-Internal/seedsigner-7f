@@ -901,3 +901,22 @@ class TestEvmFlows(FlowTest):
         for chain_id in ["bitcoin", "evm"]:
             self.controller.active_chain_id = chain_id
             assert persistent_entry.display_name in shown_labels_for(persistent_entry)
+
+
+    def test_seed_sign_message_start_view_refuses_to_run_outside_bitcoin_mode(self):
+        """ HIGH finding from the cluster-wide adversarial review (2026-09-27): the
+            exact same shape as AddressVerificationStartView's own gap --
+            ScanView.is_sign_message dispatches directly to SeedSignMessageStartView,
+            bypassing SeedOptionsView's SIGN_MESSAGE-button gate entirely. Must refuse
+            to run (and must not touch sign_message_data) when active_chain_id !=
+            "bitcoin", including the fail-closed None case. """
+        self.settings.set_value(SettingsConstants.SETTING__MESSAGE_SIGNING, SettingsConstants.OPTION__ENABLED)
+
+        for wrong_chain_id in ["evm", None]:
+            self.controller.active_chain_id = wrong_chain_id
+            self.controller.sign_message_data = None
+
+            view = seed_views.SeedSignMessageStartView(derivation_path="m/84'/0'/0'/0/0", message="test message")
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+            assert self.controller.sign_message_data is None

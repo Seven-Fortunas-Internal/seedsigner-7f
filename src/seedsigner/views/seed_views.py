@@ -2176,6 +2176,15 @@ class SeedSignMessageStartView(View):
         self.derivation_path = derivation_path
         self.message = message
 
+        # Fail-closed defense-in-depth (found by cluster-wide adversarial review,
+        # 2026-09-27): the exact same shape as AddressVerificationStartView's own
+        # guard above -- ScanView.is_sign_message dispatches directly here,
+        # bypassing SeedOptionsView's own active_chain_id=="bitcoin" gate on its
+        # SIGN_MESSAGE button entirely. See
+        # docs/multi-chain/boot-chain-selection-plan.md.
+        if guard_active_chain(self, "bitcoin"):
+            return
+
         if self.settings.get_value(SettingsConstants.SETTING__MESSAGE_SIGNING) == SettingsConstants.OPTION__DISABLED:
             self.set_redirect(Destination(OptionDisabledView, view_args=dict(settings_attr=SettingsConstants.SETTING__MESSAGE_SIGNING)))
             return
