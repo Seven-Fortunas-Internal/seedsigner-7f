@@ -17,7 +17,7 @@ from seedsigner.models.seed import Seed
 from seedsigner.models.settings import Settings, SettingsConstants
 from seedsigner.models.settings_definition import SettingsDefinition
 from seedsigner.models.threads import BaseThread, ThreadsafeCounter
-from seedsigner.views.view import NotYetImplementedView, OptionDisabledView, View, Destination, BackStackView, MainMenuView
+from seedsigner.views.view import NotYetImplementedView, OptionDisabledView, View, Destination, BackStackView, MainMenuView, guard_active_chain
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,10 @@ class SeedSelectSeedView(View):
         button_data.append(self.TYPE_12WORD)
         button_data.append(self.TYPE_24WORD)
 
-        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED:
+        # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
+        # (not replaced by) active_chain_id, same relationship as message signing above.
+        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \
+                and self.controller.active_chain_id == "bitcoin":
             button_data.append(self.TYPE_ELECTRUM)
 
         selected_menu_num = self.run_screen(
@@ -173,9 +176,12 @@ class LoadSeedView(View):
             self.TYPE_24WORD,
         ]
 
-        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED:
+        # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
+        # (not replaced by) active_chain_id, same relationship as SeedSelectSeedView above.
+        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \
+                and self.controller.active_chain_id == "bitcoin":
             button_data.append(self.TYPE_ELECTRUM)
-        
+
         button_data.append(self.CREATE)
 
         selected_menu_num = self.run_screen(
@@ -530,7 +536,18 @@ class SeedOptionsView(View):
     EXPORT_XPUB = ButtonOption("Export xpub")
     EXPLORER = ButtonOption("Address explorer")
     SIGN_MESSAGE = ButtonOption("Sign message")
-    MULTICHAIN = ButtonOption("Multi-chain", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
+    # EVM-mode actions, flattened in directly from the now-retired EvmOptionsView (see
+    # docs/multi-chain/boot-chain-selection-plan.md) -- never shown at the same time as
+    # the Bitcoin-specific buttons above, since exactly one of active_chain_id ==
+    # "bitcoin"/"evm" gates each group. EVM_SIGN is deliberately labeled "Sign request",
+    # NOT "Sign message": ButtonOption is a plain @dataclass with value-based equality,
+    # so an identical label would make `button_data[n] == self.SIGN_MESSAGE` match this
+    # button by value once both live in this one class's elif chain below (found by
+    # plan-stage adversarial review) -- "Sign request" also matches
+    # EvmSignSelectView's own screen title.
+    EVM_ADDRESS = ButtonOption("Address / Connect")
+    EVM_SCAN = ButtonOption("Scan sign request")
+    EVM_SIGN = ButtonOption("Sign request")
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")
@@ -545,45 +562,59 @@ class SeedOptionsView(View):
         from seedsigner.controller import Controller
         from seedsigner.views.psbt_views import PSBTOverviewView
 
-        if self.controller.unverified_address:
-            if self.controller.resume_main_flow == Controller.FLOW__VERIFY_SINGLESIG_ADDR:
-                # Jump straight back into the single sig addr verification flow
-                self.controller.resume_main_flow = None
-                return Destination(SeedAddressVerificationView, view_args=dict(seed=self.seed), skip_current_view=True)
-
-        if self.controller.resume_main_flow == Controller.FLOW__ADDRESS_EXPLORER:
-            # Jump straight back into the address explorer script type selection flow
-            # But don't cancel the `resume_main_flow` as we'll still need that after
-            # derivation path is specified.
-            return Destination(SeedExportXpubScriptTypeView, view_args=dict(seed=self.seed, sig_type=SettingsConstants.SINGLE_SIG), skip_current_view=True)
-
-        elif self.controller.resume_main_flow == Controller.FLOW__SIGN_MESSAGE:
-            self.controller.sign_message_data["seed"] = self.seed
-            return Destination(SeedSignMessageConfirmMessageView, skip_current_view=True)
-
-        if self.controller.psbt:
-            from seedsigner.models.psbt_parser import PSBTParser
-            if PSBTParser.has_matching_input_fingerprint(self.controller.psbt, self.seed, network=self.settings.get_value(SettingsConstants.SETTING__NETWORK)):
-                if self.controller.resume_main_flow and self.controller.resume_main_flow == Controller.FLOW__PSBT:
-                    # Re-route us directly back to the start of the PSBT flow
+        # Every branch below is Bitcoin-specific control flow (PSBT signing, single-sig
+        # address verification, address explorer, Bitcoin message signing) driven off
+        # Controller state (unverified_address/resume_main_flow/psbt) that only
+        # Bitcoin-specific views ever set. Gate the whole block on active_chain_id ==
+        # "bitcoin", not just the button list below: ScanView's dispatcher
+        # (scan_views.py) isn't yet chain-gated (multi-chain-boot-chain-selection-scan-gating,
+        # blocked on multi-chain-ux-scan-recognizes-eth-sign-request), so an EVM-mode
+        # operator who scans a PSBT or address QR via Home's Scan button today would
+        # otherwise still trigger these Bitcoin-specific short-circuits while nominally
+        # in EVM mode (found by plan-stage adversarial review).
+        if self.controller.active_chain_id == "bitcoin":
+            if self.controller.unverified_address:
+                if self.controller.resume_main_flow == Controller.FLOW__VERIFY_SINGLESIG_ADDR:
+                    # Jump straight back into the single sig addr verification flow
                     self.controller.resume_main_flow = None
-                    self.controller.psbt_seed = self.seed
-                    return Destination(PSBTOverviewView, skip_current_view=True)
+                    return Destination(SeedAddressVerificationView, view_args=dict(seed=self.seed), skip_current_view=True)
+
+            if self.controller.resume_main_flow == Controller.FLOW__ADDRESS_EXPLORER:
+                # Jump straight back into the address explorer script type selection flow
+                # But don't cancel the `resume_main_flow` as we'll still need that after
+                # derivation path is specified.
+                return Destination(SeedExportXpubScriptTypeView, view_args=dict(seed=self.seed, sig_type=SettingsConstants.SINGLE_SIG), skip_current_view=True)
+
+            elif self.controller.resume_main_flow == Controller.FLOW__SIGN_MESSAGE:
+                self.controller.sign_message_data["seed"] = self.seed
+                return Destination(SeedSignMessageConfirmMessageView, skip_current_view=True)
+
+            if self.controller.psbt:
+                from seedsigner.models.psbt_parser import PSBTParser
+                if PSBTParser.has_matching_input_fingerprint(self.controller.psbt, self.seed, network=self.settings.get_value(SettingsConstants.SETTING__NETWORK)):
+                    if self.controller.resume_main_flow and self.controller.resume_main_flow == Controller.FLOW__PSBT:
+                        # Re-route us directly back to the start of the PSBT flow
+                        self.controller.resume_main_flow = None
+                        self.controller.psbt_seed = self.seed
+                        return Destination(PSBTOverviewView, skip_current_view=True)
 
         button_data = []
 
-        button_data.append(self.SCAN_PSBT)
-        
-        button_data.append(self.EXPORT_XPUB)
+        if self.controller.active_chain_id == "bitcoin":
+            button_data.append(self.SCAN_PSBT)
+            button_data.append(self.EXPORT_XPUB)
+            button_data.append(self.EXPLORER)
 
-        button_data.append(self.EXPLORER)
         button_data.append(self.BACKUP)
 
-        if self.settings.get_value(SettingsConstants.SETTING__MESSAGE_SIGNING) == SettingsConstants.OPTION__ENABLED:
-            button_data.append(self.SIGN_MESSAGE)
+        if self.controller.active_chain_id == "bitcoin":
+            if self.settings.get_value(SettingsConstants.SETTING__MESSAGE_SIGNING) == SettingsConstants.OPTION__ENABLED:
+                button_data.append(self.SIGN_MESSAGE)
 
-        if self.settings.get_value(SettingsConstants.SETTING__MULTICHAIN_ENABLED) == SettingsConstants.OPTION__ENABLED:
-            button_data.append(self.MULTICHAIN)
+        elif self.controller.active_chain_id == "evm":
+            button_data.append(self.EVM_ADDRESS)
+            button_data.append(self.EVM_SCAN)
+            button_data.append(self.EVM_SIGN)
 
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)
@@ -618,9 +649,17 @@ class SeedOptionsView(View):
             self.controller.resume_main_flow = Controller.FLOW__SIGN_MESSAGE
             return Destination(ScanView)
 
-        elif button_data[selected_menu_num] == self.MULTICHAIN:
-            from seedsigner.views.multichain_views import MultiChainOptionsView
-            return Destination(MultiChainOptionsView, view_args=dict(seed=self.seed))
+        elif button_data[selected_menu_num] == self.EVM_ADDRESS:
+            from seedsigner.views.evm_views import EvmNetworkView
+            return Destination(EvmNetworkView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.EVM_SCAN:
+            from seedsigner.views.evm_views import EvmScanSignRequestView
+            return Destination(EvmScanSignRequestView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.EVM_SIGN:
+            from seedsigner.views.evm_views import EvmSignSelectView
+            return Destination(EvmSignSelectView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.BACKUP:
             return Destination(SeedBackupView, view_args=dict(seed=self.seed))
@@ -1736,6 +1775,16 @@ class SeedTranscribeSeedQRConfirmSuccessView(View):
 class AddressVerificationStartView(View):
     def __init__(self, address: str, script_type: str, network: str):
         super().__init__()
+
+        # Fail-closed defense-in-depth (found by plan-stage adversarial review): this
+        # is the actual root that sets self.controller.unverified_address, which
+        # SeedOptionsView's own active_chain_id=="bitcoin" gate depends on never being
+        # set in EVM mode. Guarding here closes the gap regardless of which
+        # (potentially still chain-ungated) menu reached this view -- see
+        # docs/multi-chain/boot-chain-selection-plan.md.
+        if guard_active_chain(self, "bitcoin"):
+            return
+
         self.controller.unverified_address = dict(
             address=address,
             script_type=script_type,

@@ -517,7 +517,14 @@ class ToolsAddressExplorerSelectSourceView(View):
             button_str = seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
             button_data.append(ButtonOption(button_str, SeedSignerIconConstants.FINGERPRINT))
         button_data = button_data + [self.SCAN_SEED, self.SCAN_DESCRIPTOR, self.TYPE_12WORD, self.TYPE_24WORD]
-        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED:
+        # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
+        # (not replaced by) active_chain_id (see seed_views.py's SeedSelectSeedView/
+        # LoadSeedView for the same pattern, and
+        # docs/multi-chain/boot-chain-selection-plan.md: this Address Explorer view
+        # itself is Bitcoin-specific and will be gated as a whole by the separate
+        # tools-gating story, but until then it's still reachable in EVM mode).
+        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \
+                and self.controller.active_chain_id == "bitcoin":
             button_data.append(self.TYPE_ELECTRUM)
 
         selected_menu_num = self.run_screen(

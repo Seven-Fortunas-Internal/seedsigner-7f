@@ -81,7 +81,6 @@ class BackgroundImportThread(BaseThread):
         time_import('seedsigner.views.seed_views')
         time_import('seedsigner.views.tools_views')
         time_import('seedsigner.views.settings_views')
-        time_import('seedsigner.views.multichain_views')
 
 
 

@@ -43,7 +43,14 @@ class PSBTSelectSeedView(View):
         button_data.append(self.SCAN_SEED)
         button_data.append(self.TYPE_12WORD)
         button_data.append(self.TYPE_24WORD)
-        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED:
+        # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
+        # (not replaced by) active_chain_id (see seed_views.py's SeedSelectSeedView/
+        # LoadSeedView for the same pattern, and
+        # docs/multi-chain/boot-chain-selection-plan.md for why this view is reachable
+        # in EVM mode today despite being PSBT/Bitcoin-specific itself: ScanView's
+        # dispatcher isn't yet chain-gated).
+        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \
+                and self.controller.active_chain_id == "bitcoin":
             button_data.append(self.TYPE_ELECTRUM)
 
         selected_menu_num = self.run_screen(

@@ -3,10 +3,15 @@
     ChainPlugin contract and docs/multi-chain/README.md (diy-seedsigner repo) for the
     architecture this implements.
 
-    Plugins register themselves via `ChainRegistry.register()`; the multi-chain UI
-    (views/multichain_views.py) reads `ChainRegistry.all()` to build its chain-selector
-    menu, so adding a chain to the menu never means editing that view -- just
-    registering a new plugin (see chains/_template/ for a stub to copy).
+    Plugins register themselves via `ChainRegistry.register()`. `ChainRegistry.all()`
+    has no current caller (the old multi-chain-picker view that used it was retired
+    along with SETTING__MULTICHAIN_ENABLED -- see
+    docs/multi-chain/boot-chain-selection-plan.md in the diy-seedsigner repo) but
+    stays as a reasonable public surface for a future multi-chain UI (e.g. a settings
+    diagnostics screen, or a menu once a 3rd chain makes per-chain-option-block
+    hardcoding in ChainChooserView too repetitive) -- adding a chain via
+    `ChainRegistry.register()` (see chains/_template/ for a stub to copy) never
+    requires touching this file either way.
 """
 from .base import ChainPlugin
 

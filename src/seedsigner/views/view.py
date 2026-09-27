@@ -276,6 +276,37 @@ class ChainChooserView(View):
 
 
 
+def guard_active_chain(view: View, expected_chain_id: str) -> bool:
+    """
+        Shared fail-closed defense-in-depth check for chain-scoped views: refuses to
+        let `view` run unless Controller.active_chain_id == expected_chain_id exactly
+        -- blocks both the wrong-chain case AND the chooser-not-yet-completed (None)
+        case, matching this project's fail-closed doctrine (never an inverted
+        `!= "the other chain"` check, which would fail open on None).
+
+        Used by evm_views.py (guarding EVM-only views, e.g. `guard_active_chain(self,
+        "evm")`) and seed_views.py's `AddressVerificationStartView` (guarding a
+        Bitcoin-only view). Each entry point calls this directly, at `__init__`/
+        `__post_init__` time, rather than relying solely on its caller's menu hiding
+        the button -- a caller that isn't yet chain-gated (e.g. ScanView's dispatcher,
+        still ungated as of this writing, see
+        docs/multi-chain/boot-chain-selection-plan.md) can otherwise reach these views
+        directly.
+
+        Call sites must `return` immediately after a truthy result, same convention
+        as `set_redirect()` itself.
+    """
+    if view.controller.active_chain_id != expected_chain_id:
+        logger.warning(
+            "Refusing %s: active_chain_id is %r, expected %r",
+            type(view).__name__, view.controller.active_chain_id, expected_chain_id,
+        )
+        view.set_redirect(Destination(MainMenuView, clear_history=True))
+        return True
+    return False
+
+
+
 class PowerOptionsView(View):
     RESET = ButtonOption("Restart", SeedSignerIconConstants.RESTART)
     POWER_OFF = ButtonOption("Power off", SeedSignerIconConstants.POWER)

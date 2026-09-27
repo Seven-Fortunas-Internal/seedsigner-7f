@@ -348,7 +348,6 @@ class SettingsConstants:
     SETTING__BIP85_CHILD_SEEDS = "bip85_child_seeds"
     SETTING__ELECTRUM_SEEDS = "electrum_seeds"
     SETTING__MESSAGE_SIGNING = "message_signing"
-    SETTING__MULTICHAIN_ENABLED = "multichain_enabled"
     SETTING__PRIVACY_WARNINGS = "privacy_warnings"
     SETTING__DIRE_WARNINGS = "dire_warnings"
     SETTING__QR_BRIGHTNESS_TIPS = "qr_brightness_tips"
@@ -690,14 +689,9 @@ class SettingsDefinition:
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__DISABLED),
 
-        # Multi-chain: non-Bitcoin chains (EVM today; Tron/7Fchain planned), each its
-        # own ChainRegistry-registered plugin. See docs/multi-chain/README.md and
-        # docs/multi-chain/evm-first-class-plan.md in the diy-seedsigner repo.
-        SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
-                      attr_name=SettingsConstants.SETTING__MULTICHAIN_ENABLED,
-                      display_name=_mft("Multi-chain"),
-                      visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__DISABLED),
+        # Multi-chain (EVM today; Tron/7Fchain planned) is no longer a Settings toggle --
+        # retired in favor of Controller.active_chain_id, set once per power-on session
+        # by ChainChooserView (see docs/multi-chain/boot-chain-selection-plan.md).
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__PRIVACY_WARNINGS,

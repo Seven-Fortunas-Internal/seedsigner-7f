@@ -1,13 +1,17 @@
 from unittest.mock import patch
 
+from binascii import a2b_base64
+from embit.psbt import PSBT
+
 # Must import test base before the Controller
 from base import BaseTest, FlowTest, FlowStep
 
 from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON
 from seedsigner.models.seed import Seed
 from seedsigner.models.settings import SettingsConstants
-from seedsigner.views.view import MainMenuView, OptionDisabledView
-from seedsigner.views import seed_views, scan_views, settings_views, multichain_views, evm_views
+from seedsigner.views.view import MainMenuView
+from seedsigner.views import seed_views, scan_views, settings_views, evm_views
+from psbt_testing_util import PSBTTestData
 
 
 def load_seed_into_decoder(view: scan_views.ScanView):
@@ -24,11 +28,6 @@ ENTER_SEED_OPTIONS_STEPS = [
     FlowStep(seed_views.SeedFinalizeView, button_data_selection=seed_views.SeedFinalizeView.FINALIZE),
 ]
 
-ENTER_EVM_OPTIONS_STEPS = ENTER_SEED_OPTIONS_STEPS + [
-    FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.MULTICHAIN),
-    FlowStep(multichain_views.MultiChainOptionsView, screen_return_value=0),  # only EVM registered right now
-]
-
 
 
 class TestEvmFlows(FlowTest):
@@ -42,10 +41,9 @@ class TestEvmFlows(FlowTest):
 
     def setup_method(self):
         super().setup_method()
-        self.settings.set_value(SettingsConstants.SETTING__MULTICHAIN_ENABLED, SettingsConstants.OPTION__ENABLED)
         # Override BaseTest's "bitcoin" default (see docs/multi-chain/boot-chain-selection-plan.md) --
-        # not yet read by anything besides Controller.start()'s boot-time redirect, but
-        # set here so this test class is ready once the gating stories land.
+        # this is what actually gates every EVM view/button now that
+        # SETTING__MULTICHAIN_ENABLED has been retired in its favor.
         self.controller.active_chain_id = "evm"
 
 
@@ -65,14 +63,15 @@ class TestEvmFlows(FlowTest):
 
     def test_evm_address_flow(self):
         """
-            SeedOptionsView -> MultiChainOptionsView -> EvmOptionsView ->
-            EvmNetworkView -> EvmSelectAddressIndexView -> EvmAddressView ->
-            EvmAddressQRView -> MainMenuView. Non-zero index (1) deliberately, to
-            prove the picker's value actually flows through to derivation, not
-            just that the screen appears.
+            SeedOptionsView -> EvmNetworkView -> EvmSelectAddressIndexView ->
+            EvmAddressView -> EvmAddressQRView -> MainMenuView. Non-zero index (1)
+            deliberately, to prove the picker's value actually flows through to
+            derivation, not just that the screen appears. EvmOptionsView/
+            MultiChainOptionsView are retired -- SeedOptionsView routes directly
+            (see docs/multi-chain/boot-chain-selection-plan.md).
         """
-        self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
-            FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.ADDRESS),
+        self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
+            FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EVM_ADDRESS),
             FlowStep(evm_views.EvmNetworkView, screen_return_value=1),  # "Base"
             FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="1"),
             FlowStep(evm_views.EvmAddressView, screen_return_value=0),  # "Export Address QR"
@@ -86,8 +85,8 @@ class TestEvmFlows(FlowTest):
             button ("Export Connect QR") must route to EvmConnectQRView, not
             EvmAddressQRView -- confirms the merge actually dispatches on which
             button was pressed rather than always taking one branch. """
-        self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
-            FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.ADDRESS),
+        self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
+            FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EVM_ADDRESS),
             FlowStep(evm_views.EvmNetworkView, screen_return_value=0),  # "Optimism"
             FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="0"),
             FlowStep(evm_views.EvmAddressView, screen_return_value=1),  # "Export Connect QR"
@@ -144,14 +143,14 @@ class TestEvmFlows(FlowTest):
 
 
     def test_evm_sign_flow_transfer(self):
-        """ SeedOptionsView -> ... -> EvmSignSelectView -> EvmSelectAddressIndexView
+        """ SeedOptionsView -> EvmSignSelectView -> EvmSelectAddressIndexView
             -> EvmSignStartView (redirect) -> EvmConfirmPayloadView (paged) ->
             EvmConfirmAddressView -> EvmSignedQRView -> MainMenuView. Ordinary
             transfer (rollout Phase 4: a real RLP-encoded EIP-1559 transaction,
             really signed): 4 review fields (Network, Operation, Amount, To) +
             first-time-address warning. """
-        self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
-            FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.SIGN),
+        self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
+            FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EVM_SIGN),
             FlowStep(evm_views.EvmSignSelectView, screen_return_value=0),  # "Ordinary transfer"
             FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="0"),
             FlowStep(evm_views.EvmSignStartView, is_redirect=True),
@@ -303,8 +302,8 @@ class TestEvmFlows(FlowTest):
             redirect, so it never occupies its own back-stack entry) -- mirroring
             the 7F work's SevenFConfirmPayloadView.
         """
-        self.run_sequence(ENTER_EVM_OPTIONS_STEPS + [
-            FlowStep(evm_views.EvmOptionsView, button_data_selection=evm_views.EvmOptionsView.SIGN),
+        self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
+            FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EVM_SIGN),
             FlowStep(evm_views.EvmSignSelectView, screen_return_value=0),
             FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="0"),
             FlowStep(evm_views.EvmSignStartView, is_redirect=True),
@@ -317,12 +316,11 @@ class TestEvmFlows(FlowTest):
         assert self.controller.multichain_data is None
 
 
-    def test_multichain_option_disabled_hides_seed_options_button(self):
-        """
-            With the "Other Blockchains" setting off, SeedOptionsView shouldn't offer
-            that button at all.
-        """
-        self.settings.set_value(SettingsConstants.SETTING__MULTICHAIN_ENABLED, SettingsConstants.OPTION__DISABLED)
+    def test_seed_options_view_hides_evm_buttons_in_bitcoin_mode(self):
+        """ SETTING__MULTICHAIN_ENABLED is retired -- active_chain_id is what gates
+            EVM buttons now. In Bitcoin mode, none of the three EVM buttons should
+            appear, even though nothing about Bitcoin-mode settings changed. """
+        self.controller.active_chain_id = "bitcoin"
         seed = self.seed_fixture()
 
         view = seed_views.SeedOptionsView(seed=seed)
@@ -330,7 +328,145 @@ class TestEvmFlows(FlowTest):
             view.run()
 
         button_data = mock_run_screen.call_args.kwargs["button_data"]
-        assert seed_views.SeedOptionsView.MULTICHAIN not in button_data
+        assert seed_views.SeedOptionsView.EVM_ADDRESS not in button_data
+        assert seed_views.SeedOptionsView.EVM_SCAN not in button_data
+        assert seed_views.SeedOptionsView.EVM_SIGN not in button_data
+
+
+    def test_seed_options_view_hides_bitcoin_buttons_in_evm_mode(self):
+        """ Mirror of the above: in EVM mode, none of the four Bitcoin-specific
+            buttons should appear, even with their own settings toggles enabled --
+            active_chain_id ANDs with each toggle, it doesn't get overridden by it. """
+        self.settings.set_value(SettingsConstants.SETTING__MESSAGE_SIGNING, SettingsConstants.OPTION__ENABLED)
+        seed = self.seed_fixture()  # self.controller.active_chain_id == "evm" from setup_method
+
+        view = seed_views.SeedOptionsView(seed=seed)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+
+        button_data = mock_run_screen.call_args.kwargs["button_data"]
+        assert seed_views.SeedOptionsView.SCAN_PSBT not in button_data
+        assert seed_views.SeedOptionsView.EXPORT_XPUB not in button_data
+        assert seed_views.SeedOptionsView.EXPLORER not in button_data
+        assert seed_views.SeedOptionsView.SIGN_MESSAGE not in button_data
+
+
+    def test_seed_options_view_hides_both_chains_buttons_when_chain_not_yet_chosen(self):
+        """ Fail-closed property: active_chain_id=None (the chooser hasn't run --
+            shouldn't be reachable via normal navigation, but this is the exact
+            defense-in-depth case the design exists for) hides EVERY chain-specific
+            button, Bitcoin's and EVM's alike -- neither branch is `== "bitcoin"` nor
+            `== "evm"`, so nothing chain-specific appends. """
+        self.controller.active_chain_id = None
+        seed = self.seed_fixture()
+
+        view = seed_views.SeedOptionsView(seed=seed)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+
+        button_data = mock_run_screen.call_args.kwargs["button_data"]
+        for chain_specific_button in [
+            seed_views.SeedOptionsView.SCAN_PSBT, seed_views.SeedOptionsView.EXPORT_XPUB,
+            seed_views.SeedOptionsView.EXPLORER, seed_views.SeedOptionsView.SIGN_MESSAGE,
+            seed_views.SeedOptionsView.EVM_ADDRESS, seed_views.SeedOptionsView.EVM_SCAN,
+            seed_views.SeedOptionsView.EVM_SIGN,
+        ]:
+            assert chain_specific_button not in button_data
+        # Chain-agnostic buttons are unaffected.
+        assert seed_views.SeedOptionsView.BACKUP in button_data
+        assert seed_views.SeedOptionsView.DISCARD in button_data
+
+
+    def test_seed_options_view_psbt_short_circuit_gated_on_bitcoin_mode(self):
+        """ Regression test for the HIGH/MEDIUM finding from plan-stage adversarial
+            review: must actually exercise the pre-existing fingerprint-match AND
+            resume_main_flow==FLOW__PSBT conditions too, not just self.controller.psbt
+            being truthy -- otherwise this could pass even if the active_chain_id gate
+            were never added (those two pre-existing conditions alone already prevent
+            the short-circuit for an unrelated seed/flow). """
+        from seedsigner.controller import Controller
+        from seedsigner.views.psbt_views import PSBTOverviewView
+
+        psbt = PSBT.parse(a2b_base64(PSBTTestData.SINGLE_SIG_NATIVE_SEGWIT_1_INPUT))
+        self.controller.storage.seeds.append(PSBTTestData.seed)
+        self.controller.psbt = psbt
+        self.controller.psbt_seed = None
+        self.controller.resume_main_flow = Controller.FLOW__PSBT
+        self.controller.active_chain_id = "evm"
+
+        view = seed_views.SeedOptionsView(seed=PSBTTestData.seed)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            destination = view.run()
+
+        # Must NOT have short-circuited to PSBTOverviewView -- confirms the
+        # active_chain_id=="bitcoin" gate (not just the pre-existing fingerprint/
+        # resume-flow checks) is what's actually preventing it here.
+        assert destination is None or destination.View_cls != PSBTOverviewView
+        mock_run_screen.assert_called_once()
+
+        # Sanity: the exact same seed/psbt/resume_main_flow DOES short-circuit in
+        # Bitcoin mode -- proves the fixture is real (a false "evm mode blocks it"
+        # result could otherwise mean the fixture never would have triggered the
+        # short-circuit at all, chain mode aside).
+        self.controller.active_chain_id = "bitcoin"
+        view2 = seed_views.SeedOptionsView(seed=PSBTTestData.seed)
+        destination2 = view2.run()
+        assert destination2.View_cls == PSBTOverviewView
+
+
+    def test_seed_options_view_address_verification_resume_gated_on_bitcoin_mode(self):
+        """ Regression test for the HIGH finding from plan-stage adversarial review:
+            the unverified_address/FLOW__VERIFY_SINGLESIG_ADDR short-circuit
+            (seed_views.py) must also be gated, not just the PSBT one -- same
+            live gap (ScanView's is_address dispatch is still chain-ungated). """
+        from seedsigner.controller import Controller
+        from seedsigner.views.seed_views import SeedAddressVerificationView
+
+        seed = self.seed_fixture()
+        self.controller.unverified_address = dict(address="bc1qexampleaddress", script_type=SettingsConstants.NATIVE_SEGWIT, network=SettingsConstants.MAINNET)
+        self.controller.resume_main_flow = Controller.FLOW__VERIFY_SINGLESIG_ADDR
+        # self.controller.active_chain_id == "evm" from setup_method
+
+        view = seed_views.SeedOptionsView(seed=seed)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            destination = view.run()
+
+        assert destination is None or destination.View_cls != SeedAddressVerificationView
+        mock_run_screen.assert_called_once()
+
+
+    def test_electrum_seed_entry_hidden_in_evm_mode_across_all_entry_points(self):
+        """ Regression test for the MEDIUM finding from plan-stage adversarial review:
+            all FOUR "Enter Electrum seed" entry points (not just SeedSelectSeedView/
+            LoadSeedView) must respect active_chain_id, since Electrum-format seeds
+            are a Bitcoin-only concept. """
+        from seedsigner.views.psbt_views import PSBTSelectSeedView
+        from seedsigner.views.tools_views import ToolsAddressExplorerSelectSourceView
+        from seedsigner.controller import Controller
+
+        self.settings.set_value(SettingsConstants.SETTING__ELECTRUM_SEEDS, SettingsConstants.OPTION__ENABLED)
+        # self.controller.active_chain_id == "evm" from setup_method
+
+        view = seed_views.SeedSelectSeedView(flow=Controller.FLOW__VERIFY_SINGLESIG_ADDR)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+        assert seed_views.SeedSelectSeedView.TYPE_ELECTRUM not in mock_run_screen.call_args.kwargs["button_data"]
+
+        view = seed_views.LoadSeedView()
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+        assert seed_views.LoadSeedView.TYPE_ELECTRUM not in mock_run_screen.call_args.kwargs["button_data"]
+
+        self.controller.psbt = PSBT.parse(a2b_base64(PSBTTestData.SINGLE_SIG_NATIVE_SEGWIT_1_INPUT))
+        view = PSBTSelectSeedView()
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+        assert PSBTSelectSeedView.TYPE_ELECTRUM not in mock_run_screen.call_args.kwargs["button_data"]
+
+        view = ToolsAddressExplorerSelectSourceView()
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+        assert ToolsAddressExplorerSelectSourceView.TYPE_ELECTRUM not in mock_run_screen.call_args.kwargs["button_data"]
 
 
     def test_evm_select_address_index_view_rejects_out_of_range(self):
@@ -659,13 +795,47 @@ class TestEvmFlows(FlowTest):
         assert decoded.origin == "metamask"
 
 
-    def test_evm_options_disabled_redirects(self):
-        """ Direct-construction guard: EvmOptionsView itself refuses to run with the
-            setting off, not just relying on SeedOptionsView hiding its button. """
-        self.settings.set_value(SettingsConstants.SETTING__MULTICHAIN_ENABLED, SettingsConstants.OPTION__DISABLED)
+    def test_evm_views_refuse_to_run_outside_evm_mode(self):
+        """ Direct-construction guard: each of the 4 EVM entry-point views (now that
+            EvmOptionsView is retired -- see docs/multi-chain/boot-chain-selection-plan.md)
+            refuses to run itself with active_chain_id != "evm", not just relying on
+            SeedOptionsView hiding its button. Checks both the wrong-chain case
+            (Bitcoin) and the fail-closed None case (chooser not yet completed). """
         seed = self.seed_fixture()
 
-        view = evm_views.EvmOptionsView(seed=seed)
-        assert view.has_redirect
-        destination = view.get_redirect()
-        assert destination.View_cls == OptionDisabledView
+        for wrong_chain_id in ["bitcoin", None]:
+            self.controller.active_chain_id = wrong_chain_id
+
+            view = evm_views.EvmNetworkView(seed=seed)
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+
+            view = evm_views.EvmSignSelectView(seed=seed)
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+
+            view = evm_views.EvmScanSignRequestView(seed=seed)
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+
+            view = evm_views.EvmSignStartView(seed=seed, scenario_key="transfer", address_index=0)
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+            # And it must not have gone on to set multichain_data before redirecting.
+            assert self.controller.multichain_data is None
+
+
+    def test_address_verification_start_view_refuses_to_run_outside_bitcoin_mode(self):
+        """ Mirror-image guard test for the new Bitcoin-side fix (finding #3 from
+            plan-stage adversarial review): AddressVerificationStartView must refuse
+            to run, and crucially must NOT set self.controller.unverified_address,
+            when active_chain_id != "bitcoin". """
+        for wrong_chain_id in ["evm", None]:
+            self.controller.active_chain_id = wrong_chain_id
+            self.controller.unverified_address = None
+
+            view = seed_views.AddressVerificationStartView(
+                address="bc1qexampleaddress", script_type=SettingsConstants.NATIVE_SEGWIT, network=SettingsConstants.MAINNET)
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+            assert self.controller.unverified_address is None

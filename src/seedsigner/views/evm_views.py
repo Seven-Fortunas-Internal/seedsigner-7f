@@ -10,9 +10,12 @@
 
     Follows the same file-pairing convention as the rest of this codebase
     (seed_views.py <-> seed_screens.py); see gui/screens/evm_screens.py for the paired
-    Screen classes. Reached via multichain_views.MultiChainOptionsView, which is
-    itself reached from SeedOptionsView behind Settings > Advanced > "Multi-chain"
-    (renamed 2026-09-26 from "Other Blockchains").
+    Screen classes. Reached directly from SeedOptionsView's flattened EVM actions
+    (Address/Connect, Scan sign request, Sign request) once the operator has chosen
+    "Ethereum / EVM" at boot (see ChainChooserView in view.py and
+    docs/multi-chain/boot-chain-selection-plan.md) -- there is no longer an
+    intermediate chain-picker or per-plugin options submenu (both retired along with
+    SETTING__MULTICHAIN_ENABLED; see that same plan doc's adversarial review findings).
 
     Real camera-based scan-and-sign (ERC-4527) is built (EvmScanSignRequestView
     below) and is the primary send path; the fixed demo-scenario menu
@@ -34,7 +37,7 @@ from seedsigner.gui.screens import DireWarningScreen, RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed
 from seedsigner.views.scan_views import ScanView
-from seedsigner.views.view import BackStackView, Destination, MainMenuView, OptionDisabledView, View
+from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
 logger = logging.getLogger(__name__)
 
@@ -53,67 +56,19 @@ _SCENARIO_MENU = [
 
 
 
-def _guard_multichain_enabled(view: View):
-    """
-        Shared settings-gate check. Reached from two places (SeedOptionsView's button,
-        which hides itself when disabled, and here, called at every EVM view's own
-        __init__) because a future real scan entry point -- like the 7F work's
-        generic ScanView dispatch -- would bypass SeedOptionsView's hidden button
-        entirely; guarding each entry point directly is the same defense-in-depth
-        the 7F work already established for SETTING__SEVENF_ENABLED.
-    """
-    from seedsigner.models.settings import SettingsConstants
-    if view.settings.get_value(SettingsConstants.SETTING__MULTICHAIN_ENABLED) == SettingsConstants.OPTION__DISABLED:
-        view.set_redirect(Destination(OptionDisabledView, view_args=dict(settings_attr=SettingsConstants.SETTING__MULTICHAIN_ENABLED)))
-        return True
-    return False
-
-
-
 """****************************************************************************
     EVM Address Display Views
 ****************************************************************************"""
-class EvmOptionsView(View):
-    ADDRESS = ButtonOption("Address / Connect")
-    SCAN = ButtonOption("Scan sign request")
-    SIGN = ButtonOption("Sign message")
-
-
-    def __init__(self, seed: Seed):
-        super().__init__()
-        self.seed = seed
-        _guard_multichain_enabled(self)
-
-
-    def run(self):
-        from seedsigner.gui.screens.screen import ButtonListScreen
-        button_data = [self.ADDRESS, self.SCAN, self.SIGN]
-
-        selected_menu_num = self.run_screen(
-            ButtonListScreen,
-            title=_("Ethereum / EVM"),
-            is_button_text_centered=True,
-            button_data=button_data,
-        )
-
-        if selected_menu_num == RET_CODE__BACK_BUTTON:
-            return Destination(BackStackView)
-
-        if button_data[selected_menu_num] == self.ADDRESS:
-            return Destination(EvmNetworkView, view_args=dict(seed=self.seed))
-
-        elif button_data[selected_menu_num] == self.SCAN:
-            return Destination(EvmScanSignRequestView, view_args=dict(seed=self.seed))
-
-        elif button_data[selected_menu_num] == self.SIGN:
-            return Destination(EvmSignSelectView, view_args=dict(seed=self.seed))
-
-
-
 class EvmNetworkView(View):
+    """ Entry point for EVM address display -- reached directly from
+        SeedOptionsView.EVM_ADDRESS now that EvmOptionsView/MultiChainOptionsView are
+        retired (see module docstring). """
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
+
+        if guard_active_chain(self, "evm"):
+            return
 
 
     def run(self):
@@ -308,7 +263,9 @@ class EvmScanSignRequestView(ScanView):
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
-        _guard_multichain_enabled(self)
+
+        if guard_active_chain(self, "evm"):
+            return
 
 
     @property
@@ -412,6 +369,9 @@ class EvmSignSelectView(View):
         super().__init__()
         self.seed = seed
 
+        if guard_active_chain(self, "evm"):
+            return
+
 
     def run(self):
         from seedsigner.gui.screens.screen import ButtonListScreen
@@ -440,7 +400,7 @@ class EvmSignStartView(View):
         super().__init__()
         self.seed = seed
 
-        if _guard_multichain_enabled(self):
+        if guard_active_chain(self, "evm"):
             return
 
         from seedsigner.chains import ChainRegistry
