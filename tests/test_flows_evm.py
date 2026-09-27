@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import patch, PropertyMock
 
 from binascii import a2b_base64
 from embit.psbt import PSBT
@@ -920,3 +920,299 @@ class TestEvmFlows(FlowTest):
             assert view.has_redirect
             assert view.get_redirect().View_cls == MainMenuView
             assert self.controller.sign_message_data is None
+
+
+"""********************************************************************************
+    multi-chain-ux-scan-recognizes-eth-sign-request: Home's catch-all Scan button
+    recognizes eth-sign-request QRs (double-scan design -- see
+    docs/multi-chain/scan-recognizes-eth-sign-request-plan.md).
+********************************************************************************"""
+def _eth_sign_request_qr_string(derivation_path="m/44'/60'/0'/0/0", address=None):
+    """ Builds a real single-frame UR-encoded eth-sign-request QR string, the same
+        way test_decode_qr_recognizes_and_decodes_a_real_eth_sign_request_ur above
+        does -- so dispatch tests exercise the real QRType detection + DecodeQR path,
+        not a mocked decoder. """
+    from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+    from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+    from seedsigner.helpers.ur2.ur import UR
+    from seedsigner.helpers.ur2.ur_encoder import UREncoder
+
+    eth_sign_request = EthSignRequest(
+        sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+        derivation_path=derivation_path, request_id=b"\x09" * 16, address=address,
+    )
+    ur = UR("eth-sign-request", eth_sign_request.to_cbor())
+    return UREncoder(ur=ur, max_fragment_len=800).next_part()
+
+
+
+class TestScanRecognizesEthSignRequest(FlowTest):
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "evm"
+
+
+    def seed_fixture(self) -> Seed:
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+        return seed
+
+
+    def test_scan_view_recognizes_eth_sign_request_and_routes_to_select_seed(self):
+        """ In EVM mode (this class's default), the real QRType detection + DecodeQR
+            path routes an eth-sign-request QR to EvmSelectSeedView. Decision #5's
+            "no active_chain_id check at this branch" premise no longer holds --
+            multi-chain-boot-chain-selection-scan-gating added a dispatch-level
+            active_chain_id=="evm" check here too (see TestScanViewChainGating for
+            that gate's own tests); EvmSelectSeedView's own guard stays as
+            defense-in-depth on top of it. Confirms the real QRType detection +
+            DecodeQR path, not a mocked decoder. """
+        view = scan_views.ScanView()
+        view.decoder.add_data(_eth_sign_request_qr_string(derivation_path="m/44'/60'/0'/0/2"))
+
+        destination = view._handle_complete_scan()
+
+        assert destination.View_cls == evm_views.EvmSelectSeedView
+        assert destination.view_args["eth_sign_request"].derivation_path == "m/44'/60'/0'/0/2"
+        # Chain-agnostic: this dispatch branch itself never touches active_chain_id or
+        # Controller state -- confirm no side effect leaked.
+        assert self.controller.resume_main_flow is None
+
+
+    def test_scan_view_handles_undecodable_eth_sign_request(self):
+        """ HIGH finding from execution-stage adversarial review: is_eth_sign_request
+            only checks the UR-type prefix, independent of whether the CBOR body
+            actually decodes -- get_eth_sign_request() can return None for a QR that
+            still matches the prefix (truncated/garbled scan, or an adversarially
+            crafted QR). Must be refused gracefully, same as
+            EvmScanSignRequestView._handle_complete_scan() already does for the
+            identical failure mode on the second scan -- not an unhandled AttributeError
+            crash. """
+        from seedsigner.models.decode_qr import DecodeQR
+
+        view = scan_views.ScanView()
+        with patch.object(DecodeQR, "is_eth_sign_request", new_callable=PropertyMock, return_value=True):
+            with patch.object(view.decoder, "get_eth_sign_request", return_value=None):
+                destination = view._handle_complete_scan()
+
+        assert destination.View_cls == evm_views.EvmUnsupportedSignRequestView
+
+
+    def test_evm_select_seed_view_refuses_to_run_outside_evm_mode(self):
+        """ Guard belongs in EvmSelectSeedView itself, called first -- same
+            fail-closed doctrine as every other EVM view this cluster added. """
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+
+        request = EthSignRequest(
+            sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+            derivation_path="m/44'/60'/0'/0/0",
+        )
+        for wrong_chain_id in ["bitcoin", None]:
+            self.controller.active_chain_id = wrong_chain_id
+            view = evm_views.EvmSelectSeedView(eth_sign_request=request)
+            assert view.has_redirect
+            assert view.get_redirect().View_cls == MainMenuView
+
+
+    def test_evm_select_seed_view_existing_seed_routes_to_second_scan(self):
+        """ Picking an already-loaded seed proceeds straight to EvmScanSignRequestView
+            for the real (second) scan -- the double-scan design's core contract. No
+            resume_main_flow should be set for this path (only the acquire-a-new-seed
+            sub-paths need it). """
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+
+        seed = self.seed_fixture()
+        request = EthSignRequest(
+            sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+            derivation_path="m/44'/60'/0'/0/0",
+        )
+        view = evm_views.EvmSelectSeedView(eth_sign_request=request)
+        with patch.object(view, "run_screen", return_value=0):
+            destination = view.run()
+
+        assert destination.View_cls == evm_views.EvmScanSignRequestView
+        assert destination.view_args["seed"] is seed
+        assert self.controller.resume_main_flow is None
+
+
+    def test_evm_select_seed_view_new_seed_sets_resume_flow_and_full_cycle_resumes(self):
+        """ End-to-end: scan eth-sign-request with no seed loaded yet -> scan a new
+            seed -> finalize -> resume straight into EvmScanSignRequestView with that
+            seed, and resume_main_flow is cleared afterward (not left dangling). """
+        self.run_sequence([
+            FlowStep(MainMenuView, button_data_selection=MainMenuView.SCAN),
+            FlowStep(scan_views.ScanView, before_run=lambda view: view.decoder.add_data(_eth_sign_request_qr_string())),
+            FlowStep(evm_views.EvmSelectSeedView, button_data_selection=evm_views.EvmSelectSeedView.SCAN_SEED),
+            FlowStep(scan_views.ScanSeedQRView, before_run=load_seed_into_decoder),
+            FlowStep(seed_views.SeedFinalizeView, button_data_selection=seed_views.SeedFinalizeView.FINALIZE),
+            FlowStep(seed_views.SeedOptionsView, is_redirect=True),
+            FlowStep(evm_views.EvmScanSignRequestView),
+        ])
+
+        assert self.controller.resume_main_flow is None
+
+
+    def test_evm_select_seed_view_hint_flags_mismatched_seed(self):
+        """ A seed whose derived address at the request's claimed path does NOT match
+            the (optional, unverified) address hint gets flagged "(?)" -- same
+            convention PSBTSelectSeedView already uses, weaker guarantee since this
+            field is attacker-controlled. """
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+
+        seed = self.seed_fixture()
+        path = "m/44'/60'/0'/0/0"
+        # A syntactically valid but definitely-wrong address (not this seed's real one).
+        wrong_address_bytes = bytes(range(20))
+        real_address = ChainRegistry.get("evm").derive_address(seed.seed_bytes, path).address
+        assert real_address != f"0x{wrong_address_bytes.hex()}"  # sanity: fixture really is a mismatch
+
+        request = EthSignRequest(
+            sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+            derivation_path=path, address=wrong_address_bytes,
+        )
+        view = evm_views.EvmSelectSeedView(eth_sign_request=request)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+
+        button_data = mock_run_screen.call_args.kwargs["button_data"]
+        assert button_data[0].button_label.endswith("(?)")
+
+
+    def test_evm_select_seed_view_hint_no_marker_when_matching_or_absent(self):
+        """ A matching hint shows no marker (only mismatches get flagged); no hint at
+            all (address is None, the common case -- most requesters won't set it)
+            also shows no marker for any seed. """
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+
+        seed = self.seed_fixture()
+        path = "m/44'/60'/0'/0/0"
+        real_address = ChainRegistry.get("evm").derive_address(seed.seed_bytes, path).address
+        real_address_bytes = bytes.fromhex(real_address[2:])
+
+        for address_hint in [real_address_bytes, None]:
+            request = EthSignRequest(
+                sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+                derivation_path=path, address=address_hint,
+            )
+            view = evm_views.EvmSelectSeedView(eth_sign_request=request)
+            with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+                view.run()
+            button_data = mock_run_screen.call_args.kwargs["button_data"]
+            assert not button_data[0].button_label.endswith("(?)")
+
+
+    def test_evm_select_seed_view_malformed_hint_path_does_not_crash(self):
+        """ derivation_path is attacker-controlled -- a malformed/non-EVM path must
+            not crash seed selection; the hint is just unavailable (no marker), not
+            treated as a confirmed mismatch. """
+        from seedsigner.chains.evm.ur_types import EthSignRequest, DATA_TYPE_TYPED_TRANSACTION
+        from seedsigner.chains.evm.plugin import DEMO_SCENARIOS
+
+        seed = self.seed_fixture()
+        request = EthSignRequest(
+            sign_data=DEMO_SCENARIOS["usdc_transfer"], data_type=DATA_TYPE_TYPED_TRANSACTION, chain_id=10,
+            derivation_path="not a valid path", address=bytes(range(20)),
+        )
+        view = evm_views.EvmSelectSeedView(eth_sign_request=request)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            # Must not raise.
+            view.run()
+
+        button_data = mock_run_screen.call_args.kwargs["button_data"]
+        assert not button_data[0].button_label.endswith("(?)")
+
+
+"""********************************************************************************
+    multi-chain-boot-chain-selection-scan-gating: ScanView's dispatch branches are
+    gated on active_chain_id, checked BEFORE each branch's own decode/parse work
+    (not just relying on a downstream view's own guard).
+********************************************************************************"""
+class TestScanViewChainGating(FlowTest):
+    # (decoder property to fake True, the heavy call that must never run when gated)
+    BITCOIN_SPECIFIC_BRANCHES = [
+        ("is_psbt", "get_psbt"),
+        ("is_wallet_descriptor", "get_wallet_descriptor"),
+        ("is_address", "get_address"),
+        ("is_sign_message", "get_qr_data"),
+    ]
+
+
+    def test_bitcoin_specific_branches_refuse_before_any_decode_work_in_evm_mode(self):
+        from seedsigner.models.decode_qr import DecodeQR
+
+        for is_x_property, heavy_call in self.BITCOIN_SPECIFIC_BRANCHES:
+            self.controller.active_chain_id = "evm"
+            view = scan_views.ScanView()
+            with patch.object(DecodeQR, is_x_property, new_callable=PropertyMock, return_value=True):
+                with patch.object(view.decoder, heavy_call) as mock_heavy_call:
+                    destination = view._handle_complete_scan()
+
+            assert destination.View_cls == MainMenuView, f"{is_x_property} did not refuse in evm mode"
+            mock_heavy_call.assert_not_called()
+
+
+    def test_all_branches_fail_closed_when_chain_not_yet_chosen(self):
+        """ active_chain_id=None (the chooser hasn't run -- shouldn't be reachable via
+            normal navigation, but this is exactly the defense-in-depth case the
+            `!=` (not `== "the other chain"`) form exists for) must refuse every
+            chain-specific branch, Bitcoin's and EVM's alike -- neither `!= "bitcoin"`
+            nor `!= "evm"` is satisfied by `None` being `== "bitcoin"`/`== "evm"`. """
+        from seedsigner.models.decode_qr import DecodeQR
+
+        self.controller.active_chain_id = None
+        for is_x_property, heavy_call in self.BITCOIN_SPECIFIC_BRANCHES + [("is_eth_sign_request", "get_eth_sign_request")]:
+            view = scan_views.ScanView()
+            with patch.object(DecodeQR, is_x_property, new_callable=PropertyMock, return_value=True):
+                with patch.object(view.decoder, heavy_call) as mock_heavy_call:
+                    destination = view._handle_complete_scan()
+
+            assert destination.View_cls == MainMenuView, f"{is_x_property} did not refuse with active_chain_id=None"
+            mock_heavy_call.assert_not_called()
+
+
+    def test_bitcoin_specific_branches_still_dispatch_normally_in_bitcoin_mode(self):
+        """ Sanity/fixture-validity check: the same properties DO reach their real
+            dispatch in Bitcoin mode -- proves the gate isn't accidentally blocking
+            everything regardless of chain (a false "evm mode blocks it" result could
+            otherwise mean the property mock never would have reached the gate check
+            at all). """
+        from seedsigner.models.decode_qr import DecodeQR
+
+        for is_x_property, heavy_call in self.BITCOIN_SPECIFIC_BRANCHES:
+            self.controller.active_chain_id = "bitcoin"
+            view = scan_views.ScanView()
+            with patch.object(DecodeQR, is_x_property, new_callable=PropertyMock, return_value=True):
+                with patch.object(view.decoder, heavy_call) as mock_heavy_call:
+                    # get_wallet_descriptor()/get_address() etc. return a Mock, not
+                    # real data -- some branches do further real work on the result
+                    # and would raise; only assert the heavy call itself was reached,
+                    # not that the whole branch completes cleanly with fake data.
+                    try:
+                        view._handle_complete_scan()
+                    except Exception:
+                        pass
+
+            mock_heavy_call.assert_called_once()
+
+
+    def test_eth_sign_request_branch_refuses_before_any_decode_work_in_bitcoin_mode(self):
+        """ Mirror of the Bitcoin-specific checks above, for the one EVM-specific
+            branch: must refuse before get_eth_sign_request()'s real CBOR parse, not
+            just rely on EvmSelectSeedView's own downstream guard (which stays as
+            defense-in-depth, but by then the parse would already have run). """
+        from seedsigner.models.decode_qr import DecodeQR
+
+        self.controller.active_chain_id = "bitcoin"
+        view = scan_views.ScanView()
+        with patch.object(DecodeQR, "is_eth_sign_request", new_callable=PropertyMock, return_value=True):
+            with patch.object(view.decoder, "get_eth_sign_request") as mock_get_eth_sign_request:
+                destination = view._handle_complete_scan()
+
+        assert destination.View_cls == MainMenuView
+        mock_get_eth_sign_request.assert_not_called()

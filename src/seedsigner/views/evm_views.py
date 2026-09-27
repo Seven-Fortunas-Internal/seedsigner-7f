@@ -31,11 +31,12 @@ from seedsigner.helpers.l10n import mark_for_translation as _mft
 from seedsigner.chains.base import ReviewField
 from seedsigner.chains.evm.constants import NETWORKS
 from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
-from seedsigner.chains.evm.ur_types import DATA_TYPE_TYPED_TRANSACTION, EthSignature
-from seedsigner.gui.components import SeedSignerIconConstants
+from seedsigner.chains.evm.ur_types import DATA_TYPE_TYPED_TRANSACTION, EthSignature, EthSignRequest
+from seedsigner.gui.components import FontAwesomeIconConstants, SeedSignerIconConstants
 from seedsigner.gui.screens import DireWarningScreen, RET_CODE__BACK_BUTTON
-from seedsigner.gui.screens.screen import ButtonOption
+from seedsigner.gui.screens.screen import ButtonListScreen, ButtonOption
 from seedsigner.models.seed import Seed
+from seedsigner.models.settings import SettingsConstants
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
@@ -248,6 +249,90 @@ class EvmConnectQRView(View):
 """****************************************************************************
     EVM Sign Views
 ****************************************************************************"""
+class EvmSelectSeedView(View):
+    """ Reached from Home's catch-all Scan button (scan_views.py's
+        ScanView._handle_complete_scan(), is_eth_sign_request branch) when no seed
+        context is known yet -- the EVM-side twin of PSBTSelectSeedView
+        (psbt_views.py). Double-scan design (see
+        docs/multi-chain/scan-recognizes-eth-sign-request-plan.md): this view only
+        ever uses the decoded `eth_sign_request` to build a seed-selection hint, then
+        discards it -- the operator scans the same QR again inside
+        EvmScanSignRequestView below for the real, fully-validated review. No new
+        Controller-level slot for a decoded-but-seed-less request is needed. """
+    SCAN_SEED = ButtonOption("Scan a seed", SeedSignerIconConstants.QRCODE)
+    TYPE_12WORD = ButtonOption("Enter 12-word seed", FontAwesomeIconConstants.KEYBOARD)
+    TYPE_24WORD = ButtonOption("Enter 24-word seed", FontAwesomeIconConstants.KEYBOARD)
+
+
+    def __init__(self, eth_sign_request: EthSignRequest):
+        super().__init__()
+        self.eth_sign_request = eth_sign_request
+
+        if guard_active_chain(self, "evm"):
+            return
+
+
+    def run(self):
+        from seedsigner.controller import Controller
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.crypto import address_bytes_to_checksum
+
+        seeds = self.controller.storage.seeds
+        button_data = []
+        for seed in seeds:
+            button_str = seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+
+            # Partial hint only -- EthSignRequest.address is optional and
+            # attacker-controlled (unlike PSBT's real input-fingerprint check), so a
+            # mismatch is flagged, never used to hide/block a seed outright. A
+            # malformed/non-EVM derivation_path must not crash seed selection --
+            # validate_derivation_path()/is_real_transaction_payload() are what
+            # actually gate signing, inside EvmScanSignRequestView's own second scan.
+            if self.eth_sign_request.address is not None:
+                try:
+                    plugin = ChainRegistry.get("evm")
+                    derived = plugin.derive_address(seed.seed_bytes, self.eth_sign_request.derivation_path)
+                    hinted_address = address_bytes_to_checksum(self.eth_sign_request.address)
+                    if derived.address != hinted_address:
+                        # TRANSLATOR_NOTE: Inserts fingerprint w/"?" to indicate the address hint doesn't match this seed
+                        button_str = _("{} (?)").format(button_str)
+                except Exception as e:
+                    logger.info("Couldn't compute address hint for seed selection: %r", e)
+
+            button_data.append(ButtonOption(button_str, SeedSignerIconConstants.FINGERPRINT))
+
+        button_data += [self.SCAN_SEED, self.TYPE_12WORD, self.TYPE_24WORD]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Select Signer"),
+            button_data=button_data,
+            is_bottom_list=True,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if len(seeds) > 0 and selected_menu_num < len(seeds):
+            # Seed already loaded -- proceed straight to the second (real) scan.
+            return Destination(EvmScanSignRequestView, view_args=dict(seed=seeds[selected_menu_num]))
+
+        # None of the loaded seeds were selected; the operator needs to
+        # scan/type a new one first, then resume back here once it's ready.
+        self.controller.resume_main_flow = Controller.FLOW__EVM_SIGN
+
+        if button_data[selected_menu_num] == self.SCAN_SEED:
+            from seedsigner.views.scan_views import ScanSeedQRView
+            return Destination(ScanSeedQRView)
+
+        elif button_data[selected_menu_num] in [self.TYPE_12WORD, self.TYPE_24WORD]:
+            from seedsigner.views.seed_views import SeedMnemonicEntryView
+            num_words = 12 if button_data[selected_menu_num] == self.TYPE_12WORD else 24
+            self.controller.storage.init_pending_mnemonic(num_words=num_words)
+            return Destination(SeedMnemonicEntryView)
+
+
+
 class EvmScanSignRequestView(ScanView):
     """ Real free-form send: scans an ERC-4527 eth-sign-request QR -- what
         MetaMask/Rabby/etc. actually produce -- instead of picking from the fixed

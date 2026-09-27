@@ -285,13 +285,14 @@ def guard_active_chain(view: View, expected_chain_id: str) -> bool:
         `!= "the other chain"` check, which would fail open on None).
 
         Used by evm_views.py (guarding EVM-only views, e.g. `guard_active_chain(self,
-        "evm")`) and seed_views.py's `AddressVerificationStartView` (guarding a
-        Bitcoin-only view). Each entry point calls this directly, at `__init__`/
-        `__post_init__` time, rather than relying solely on its caller's menu hiding
-        the button -- a caller that isn't yet chain-gated (e.g. ScanView's dispatcher,
-        still ungated as of this writing, see
-        docs/multi-chain/boot-chain-selection-plan.md) can otherwise reach these views
-        directly.
+        "evm")`) and seed_views.py's `AddressVerificationStartView`/
+        `SeedSignMessageStartView` (guarding Bitcoin-only views). Each entry point
+        calls this directly, at `__init__`/`__post_init__` time, as defense-in-depth
+        rather than relying solely on its caller's menu hiding the button or its own
+        dispatch-level gate -- ScanView's dispatcher (scan_views.py) now also
+        gates each Bitcoin/EVM-specific branch itself, before its own decode/parse
+        work (multi-chain-boot-chain-selection-scan-gating), but the guard here stays
+        as the second, view-level layer rather than being removed.
 
         Call sites must `return` immediately after a truthy result, same convention
         as `set_redirect()` itself.

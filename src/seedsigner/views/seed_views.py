@@ -562,16 +562,17 @@ class SeedOptionsView(View):
         from seedsigner.controller import Controller
         from seedsigner.views.psbt_views import PSBTOverviewView
 
-        # Every branch below is Bitcoin-specific control flow (PSBT signing, single-sig
-        # address verification, address explorer, Bitcoin message signing) driven off
-        # Controller state (unverified_address/resume_main_flow/psbt) that only
-        # Bitcoin-specific views ever set. Gate the whole block on active_chain_id ==
-        # "bitcoin", not just the button list below: ScanView's dispatcher
-        # (scan_views.py) isn't yet chain-gated (multi-chain-boot-chain-selection-scan-gating,
-        # blocked on multi-chain-ux-scan-recognizes-eth-sign-request), so an EVM-mode
-        # operator who scans a PSBT or address QR via Home's Scan button today would
-        # otherwise still trigger these Bitcoin-specific short-circuits while nominally
-        # in EVM mode (found by plan-stage adversarial review).
+        # Every branch below is chain-specific control flow, driven off Controller
+        # state (unverified_address/resume_main_flow/psbt) that only that chain's own
+        # views ever set. Gated per-chain, not just the button list below: ScanView's
+        # dispatcher (scan_views.py) still has some Bitcoin-specific branches
+        # (is_psbt/is_wallet_descriptor/is_address/is_sign_message) that aren't yet
+        # chain-gated themselves (multi-chain-boot-chain-selection-scan-gating, still
+        # open), so an EVM-mode operator who scans a PSBT or address QR via Home's Scan
+        # button today would otherwise still trigger the Bitcoin-specific short-circuits
+        # below while nominally in EVM mode (found by plan-stage adversarial review).
+        # The EVM branch has no equivalent problem: its own dispatch (is_eth_sign_request)
+        # never touches Controller state before EvmSelectSeedView's own guard runs.
         if self.controller.active_chain_id == "bitcoin":
             if self.controller.unverified_address:
                 if self.controller.resume_main_flow == Controller.FLOW__VERIFY_SINGLESIG_ADDR:
@@ -597,6 +598,15 @@ class SeedOptionsView(View):
                         self.controller.resume_main_flow = None
                         self.controller.psbt_seed = self.seed
                         return Destination(PSBTOverviewView, skip_current_view=True)
+
+        elif self.controller.active_chain_id == "evm":
+            if self.controller.resume_main_flow == Controller.FLOW__EVM_SIGN:
+                # EvmSelectSeedView sent us here to scan/type a new seed; now that one
+                # is ready, resume straight into the real (second) scan -- see
+                # docs/multi-chain/scan-recognizes-eth-sign-request-plan.md.
+                self.controller.resume_main_flow = None
+                from seedsigner.views.evm_views import EvmScanSignRequestView
+                return Destination(EvmScanSignRequestView, view_args=dict(seed=self.seed), skip_current_view=True)
 
         button_data = []
 

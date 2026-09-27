@@ -145,6 +145,7 @@ class Controller(Singleton):
     FLOW__VERIFY_SINGLESIG_ADDR = "singlesig_addr"
     FLOW__ADDRESS_EXPLORER = "address_explorer"
     FLOW__SIGN_MESSAGE = "sign_message"
+    FLOW__EVM_SIGN = "evm_sign"
     resume_main_flow: str = None
 
     back_stack: BackStack = None

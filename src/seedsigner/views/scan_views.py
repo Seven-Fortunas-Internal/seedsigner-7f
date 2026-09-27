@@ -108,6 +108,13 @@ class ScanView(View):
                     return Destination(SeedFinalizeView)
 
         elif self.decoder.is_psbt:
+            if self.controller.active_chain_id != "bitcoin":
+                # Fail-closed, checked before any decode/parse work (get_psbt() below
+                # does the real embit PSBT parse) -- PSBTSelectSeedView itself has no
+                # active_chain_id guard of its own, unlike is_address/is_sign_message
+                # below, so this dispatch-level check is the only thing closing this
+                # gap (found by the 2026-09-26 cluster-wide adversarial review).
+                return Destination(MainMenuView, clear_history=True)
             from seedsigner.views.psbt_views import PSBTSelectSeedView
             psbt = self.decoder.get_psbt()
             self.controller.psbt = psbt
@@ -120,6 +127,10 @@ class ScanView(View):
             return Destination(SettingsIngestSettingsQRView, view_args=dict(data=data))
 
         elif self.decoder.is_wallet_descriptor:
+            if self.controller.active_chain_id != "bitcoin":
+                # Same rationale as is_psbt above -- MultisigWalletDescriptorView has
+                # no guard of its own either.
+                return Destination(MainMenuView, clear_history=True)
             from embit.descriptor import Descriptor
             from seedsigner.views.seed_views import MultisigWalletDescriptorView
             descriptor_str = self.decoder.get_wallet_descriptor()
@@ -149,6 +160,12 @@ class ScanView(View):
             return Destination(MultisigWalletDescriptorView, skip_current_view=True)
 
         elif self.decoder.is_address:
+            if self.controller.active_chain_id != "bitcoin":
+                # AddressVerificationStartView already guards itself (defense-in-depth,
+                # added the night before this story) -- this dispatch-level check adds
+                # the "before any decode/parse work" property get_address()/
+                # get_address_type() below would otherwise skip.
+                return Destination(MainMenuView, clear_history=True)
             from seedsigner.views.seed_views import AddressVerificationStartView
             address = self.decoder.get_address()
             (script_type, network) = self.decoder.get_address_type()
@@ -164,6 +181,11 @@ class ScanView(View):
             )
 
         elif self.decoder.is_sign_message:
+            if self.controller.active_chain_id != "bitcoin":
+                # SeedSignMessageStartView already guards itself (defense-in-depth,
+                # the HIGH finding fixed the night before this story) -- same
+                # before-any-decode-work rationale as is_address above.
+                return Destination(MainMenuView, clear_history=True)
             from seedsigner.views.seed_views import SeedSignMessageStartView
             qr_data = self.decoder.get_qr_data()
 
@@ -174,6 +196,34 @@ class ScanView(View):
                     message=qr_data["message"],
                 )
             )
+
+        elif self.decoder.is_eth_sign_request:
+            if self.controller.active_chain_id != "evm":
+                # Checked here, BEFORE get_eth_sign_request()'s real CBOR parse below --
+                # a check placed only inside EvmSelectSeedView.__init__ (which still
+                # keeps its own guard too, as defense-in-depth) would let the full
+                # parse of attacker-controlled bytes run first in the wrong chain mode
+                # (multi-chain-boot-chain-selection-scan-gating).
+                return Destination(MainMenuView, clear_history=True)
+            # No Controller state is touched here beyond the check above: the decoded
+            # request is used only to build EvmSelectSeedView's seed-selection hint and
+            # then discarded (double-scan design -- see
+            # docs/multi-chain/scan-recognizes-eth-sign-request-plan.md). The operator
+            # scans the same QR again inside EvmScanSignRequestView for the real,
+            # fully-validated review.
+            from seedsigner.views.evm_views import EvmSelectSeedView, EvmUnsupportedSignRequestView
+            eth_sign_request = self.decoder.get_eth_sign_request()
+            if eth_sign_request is None:
+                # is_eth_sign_request only checks the UR-type prefix, independent of
+                # whether the CBOR body actually decodes into a valid EthSignRequest
+                # (get_eth_sign_request() has its own try/except around that and
+                # returns None on failure) -- same "refuse rather than guess" handling
+                # EvmScanSignRequestView._handle_complete_scan() already uses for the
+                # identical failure mode on the second scan (found by execution-stage
+                # adversarial review; this dispatch branch had no check at all before).
+                return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                    reason=_("Couldn't decode the scanned request.")))
+            return Destination(EvmSelectSeedView, view_args=dict(eth_sign_request=eth_sign_request))
 
         else:
             return Destination(NotYetImplementedView)
