@@ -11,8 +11,8 @@
     Follows the same file-pairing convention as the rest of this codebase
     (seed_views.py <-> seed_screens.py); see gui/screens/evm_screens.py for the paired
     Screen classes. Reached via multichain_views.MultiChainOptionsView, which is
-    itself reached from SeedOptionsView behind Settings > Advanced >
-    "Other Blockchains".
+    itself reached from SeedOptionsView behind Settings > Advanced > "Multi-chain"
+    (renamed 2026-09-26 from "Other Blockchains").
 
     Real camera-based scan-and-sign (ERC-4527) is built (EvmScanSignRequestView
     below) and is the primary send path; the fixed demo-scenario menu

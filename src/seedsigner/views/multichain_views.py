@@ -6,9 +6,9 @@
     design.
 
     Reached from one gated button on SeedOptionsView (see seed_views.py), behind
-    Settings > Advanced > "Other Blockchains" (SETTING__MULTICHAIN_ENABLED, disabled
-    by default). Reuses the already-loaded `Seed` object exactly the way every other
-    SeedOptionsView destination does.
+    Settings > Advanced > "Multi-chain" (SETTING__MULTICHAIN_ENABLED, renamed
+    2026-09-26 from "Other Blockchains"). Reuses the already-loaded `Seed` object
+    exactly the way every other SeedOptionsView destination does.
 """
 from gettext import gettext as _
 
@@ -33,7 +33,7 @@ class MultiChainOptionsView(View):
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title=_("Other Blockchains"),
+            title=_("Multi-chain"),
             is_button_text_centered=True,
             button_data=button_data,
         )
