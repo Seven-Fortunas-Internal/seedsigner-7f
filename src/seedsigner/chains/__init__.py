@@ -39,8 +39,10 @@ def _register_builtin_plugins():
     # BackgroundImportThread), since chain plugins may eventually pull in
     # chain-specific crypto libs.
     from .evm.plugin import EvmPlugin
+    from .sevenf.plugin import SevenFPlugin
 
     ChainRegistry.register(EvmPlugin())
+    ChainRegistry.register(SevenFPlugin())
 
 
 _register_builtin_plugins()

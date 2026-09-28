@@ -111,6 +111,19 @@ class TestViewFlows(FlowTest):
         assert self.controller.active_chain_id == "evm"
 
 
+    def test_chain_chooser_sevenf_selection_flow(self):
+        """
+        Selecting "7F Chain" on ChainChooserView sets active_chain_id and lands on
+        MainMenuView -- same pattern as Bitcoin/EVM selection above.
+        """
+        self.controller.active_chain_id = None
+        self.run_sequence([
+            FlowStep(ChainChooserView, button_data_selection=ChainChooserView.SEVENF),
+            FlowStep(MainMenuView),
+        ])
+        assert self.controller.active_chain_id == "sevenf"
+
+
     def test_chain_chooser_chains_to_microsd_forever_reminder(self):
         """
         Found by execution-stage adversarial review: since active_chain_id never

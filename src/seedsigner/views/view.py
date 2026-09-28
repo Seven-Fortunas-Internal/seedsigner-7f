@@ -232,24 +232,27 @@ class ChainChooserView(View):
         (see docs/multi-chain/boot-chain-selection-plan.md in the diy-seedsigner
         repo for the full design and the adversarial review that shaped it).
 
-        Deliberately hardcodes its two options rather than importing ChainRegistry:
+        Deliberately hardcodes its options rather than importing ChainRegistry:
         this View runs on every single boot, and importing seedsigner.chains eagerly
         loads the full EVM crypto stack (embit + pycryptodomex, ~66ms measured on a
         dev machine, likely worse on the actual Pi Zero hardware) for every user,
         including Bitcoin-only ones -- the same eager-import cost an earlier review
-        flagged as unacceptable for settings_definition.py's selection_options. A
-        future second non-Bitcoin chain means adding its option here too, a small,
-        accepted cost against that per-boot latency hit for everyone today.
+        flagged as unacceptable for settings_definition.py's selection_options. Each
+        non-Bitcoin chain means adding its option here too, a small, accepted cost
+        against that per-boot latency hit for everyone today -- 7F Chain is the
+        second one added this way (docs/multi-chain/boot-chain-selection-plan.md
+        named it as an anticipated third chain before any of it was built).
 
         No back button: chain selection isn't optional at this point in the boot
         sequence, and there's nothing to back out to yet.
     """
     BITCOIN = ButtonOption("Bitcoin")
     EVM = ButtonOption("Ethereum / EVM")
+    SEVENF = ButtonOption("7F Chain")
 
     def run(self):
         from seedsigner.gui.screens.screen import ButtonListScreen
-        button_data = [self.BITCOIN, self.EVM]
+        button_data = [self.BITCOIN, self.EVM, self.SEVENF]
         selected_menu_num = self.run_screen(
             ButtonListScreen,
             title=_("Choose Blockchain"),
@@ -261,6 +264,8 @@ class ChainChooserView(View):
             self.controller.active_chain_id = "bitcoin"
         elif button_data[selected_menu_num] == self.EVM:
             self.controller.active_chain_id = "evm"
+        elif button_data[selected_menu_num] == self.SEVENF:
+            self.controller.active_chain_id = "sevenf"
 
         # Found by execution-stage adversarial review: Controller.start()'s own
         # microSD-forever reminder is only ever checked once, before this chooser runs

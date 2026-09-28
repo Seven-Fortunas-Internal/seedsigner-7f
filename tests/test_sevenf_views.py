@@ -360,19 +360,31 @@ def _load_genesis_config_into_decoder(canonical_bytes: bytes, file_type: str = "
 class TestSevenFScanEntryPoint(FlowTest):
     """ The wizard's real entry point: SeedOptionsView's "7F: Sign Genesis
         Config" button -> SevenFScanGenesisConfigView -> (valid payload)
-        SevenFGenesisReviewStartView, or (invalid) SevenFUnsupportedArtefactView. """
+        SevenFGenesisReviewStartView, or (invalid) SevenFUnsupportedArtefactView.
+
+        Gated on active_chain_id == "sevenf", same pattern as EVM's own
+        EVM_ADDRESS/EVM_SIGN buttons -- corrected 2026-09-27 from an earlier
+        unconditional placement (see seed_views.py's SEVENF_SCAN_GENESIS_CONFIG
+        comment and chains/sevenf/plugin.py's own docstring for why 7F is a
+        proper ChainPlugin now, not a standalone bolt-on). """
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "sevenf"
+
+
     def seed_fixture(self) -> Seed:
         seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
         self.controller.storage.seeds.append(seed)
         return seed
 
 
-    def test_seed_options_view_offers_the_sevenf_button_regardless_of_active_chain_id(self):
-        """ Unlike EVM_ADDRESS/EVM_SIGN, this button must appear whether the
-            boot-time chooser picked bitcoin, evm, or nothing at all -- the
-            ceremony is a standalone capability, not one of those choices. """
+    def test_seed_options_view_offers_the_sevenf_button_only_in_sevenf_mode(self):
+        """ Unlike an earlier, incorrect unconditional placement, this button
+            must appear ONLY when active_chain_id == "sevenf" -- absent for
+            bitcoin, evm, or no chain chosen yet -- same gating discipline as
+            every other chain-specific button in this menu. """
         seed = self.seed_fixture()
-        for active_chain_id in ("bitcoin", "evm", None):
+        for active_chain_id, should_appear in [("sevenf", True), ("bitcoin", False), ("evm", False), (None, False)]:
             self.controller.active_chain_id = active_chain_id
             view = seed_views.SeedOptionsView(seed=seed)
             captured = {}
@@ -384,7 +396,8 @@ class TestSevenFScanEntryPoint(FlowTest):
             with pytest.MonkeyPatch().context() as mp:
                 mp.setattr(view, "run_screen", fake_run_screen)
                 view.run()
-            assert seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG in captured["button_data"]
+            is_present = seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG in captured["button_data"]
+            assert is_present == should_appear, f"active_chain_id={active_chain_id!r}: expected present={should_appear}, got {is_present}"
 
 
     def test_seed_options_view_routes_to_scan_genesis_config_view(self):
@@ -449,3 +462,18 @@ class TestSevenFScanEntryPoint(FlowTest):
         )
 
         assert self.controller.sevenf_ceremony_data is None
+
+
+    def test_scan_genesis_config_view_refuses_to_run_in_the_wrong_chain_mode(self):
+        """ guard_active_chain defense-in-depth, same pattern
+            EvmScanSignRequestView relies on: even if something bypassed
+            SeedOptionsView's own button gating, this view must still refuse
+            to run outside sevenf mode. """
+        seed = self.seed_fixture()
+        self.controller.active_chain_id = "evm"
+
+        view = sevenf_views.SevenFScanGenesisConfigView(seed=seed)
+        assert view.has_redirect
+        destination = view.get_redirect()
+        assert destination.View_cls == MainMenuView
+        assert destination.clear_history is True

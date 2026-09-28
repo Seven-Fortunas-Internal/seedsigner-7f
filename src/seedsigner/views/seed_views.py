@@ -549,9 +549,11 @@ class SeedOptionsView(View):
     EVM_SCAN = ButtonOption("Scan sign request")
     EVM_SIGN = ButtonOption("Sign request")
     # 7F federation root-key ceremony (docs/7f-integration/root-key-ceremony-plan.md).
-    # Not gated by active_chain_id like the bitcoin/evm blocks above -- this is a
-    # standalone ceremony-device capability, orthogonal to which chain the boot-time
-    # chooser picked, not one of the choices itself.
+    # Gated on active_chain_id == "sevenf", same pattern as the bitcoin/evm blocks
+    # above -- corrected 2026-09-27 from an earlier unconditional placement, which
+    # didn't match how every other chain-specific feature in this menu is gated
+    # (see chains/sevenf/plugin.py's own docstring for why 7F fits the ChainPlugin
+    # model the same way EVM does).
     SEVENF_SCAN_GENESIS_CONFIG = ButtonOption("7F: Sign Genesis Config")
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
@@ -640,7 +642,8 @@ class SeedOptionsView(View):
             button_data.append(self.EVM_SCAN)
             button_data.append(self.EVM_SIGN)
 
-        button_data.append(self.SEVENF_SCAN_GENESIS_CONFIG)
+        elif self.controller.active_chain_id == "sevenf":
+            button_data.append(self.SEVENF_SCAN_GENESIS_CONFIG)
 
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)

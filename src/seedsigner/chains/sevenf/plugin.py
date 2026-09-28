@@ -1,0 +1,105 @@
+"""
+    SevenFPlugin -- the ChainPlugin adapter for 7fchain's federation root-key
+    ceremony (docs/7f-integration/root-key-ceremony-plan.md). Pure plumbing:
+    every method here wraps an already-built, already-tested function in
+    models/sevenf/* -- no new crypto or canonical-bytes logic lives here.
+
+    Named as a plugin candidate before any of this existed
+    (docs/multi-chain/boot-chain-selection-plan.md: "a third chain (Tron,
+    7Fchain)"), and now built as one for the same reason EVM was: its
+    signing pipeline is stateless (explicit args in, explicit results out,
+    no ambient Controller reads), the same property that made EVM a clean
+    ChainRegistry fit and Bitcoin's own retrofit a real rewrite (see that
+    doc's "Research findings" section).
+
+    Two intentional departures from a literal 1:1 EvmPlugin mirror, both
+    tied to properties unique to 7F's ceremony (not oversights):
+    - `sign()` ignores its own `path` argument and re-derives chain_kind
+      from `payload` itself (genesis_config.parse_canonical_bytes()) rather
+      than trusting a separately-supplied path -- the same self-validation
+      fix already applied to SevenFGenesisReviewStartView (sevenf_views.py)
+      for the identical reason: a path argument could diverge from what's
+      actually inside the bytes being signed.
+    - `sign()` always passes confirmed=True into
+      root_ceremony.sign_with_root_ca() -- consistent with EvmPlugin.sign()
+      itself having no confirmation gate (no-blind-signing lives in the view
+      layer for both chains); the *extra* structural gate inside
+      sign_with_root_ca() stays as defense-in-depth, unused by any other
+      caller.
+"""
+from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signature
+from seedsigner.models.sevenf import genesis_config, mldsa, root_ceremony
+from seedsigner.models.sevenf.constants import (
+    ML_DSA_LEAF_ROLE,
+    ChainKind,
+    Layer,
+    root_ca_purpose_path,
+)
+
+
+def _chain_kind_from_path(path: str) -> ChainKind:
+    """ 7F derivation paths embed chain_kind literally as one path segment
+        (e.g. "m/root-ca/l1/testnet/0" -- constants.py's own
+        ChainKind.path_segment), so this recovers it without a second,
+        separately-supplied argument that could drift from the path
+        string's own content. """
+    for chain_kind in ChainKind:
+        if f"/{chain_kind.path_segment}/" in path:
+            return chain_kind
+    raise ValueError(f"Could not determine chain_kind from 7F derivation path: {path!r}")
+
+
+class SevenFPlugin:
+    chain_id = "sevenf"
+    display_name = "7F Chain"
+
+    def derive_address(self, seed_bytes: bytes, path: str) -> Address:
+        """ `path` must be one of root_ca_purpose_path()/devfund_purpose_path()'s
+            own output for some ChainKind -- not yet exercised by any current
+            UI (the ceremony flow itself never browses an address; it only
+            derives the Root CA key at sign time, from the chain_kind
+            embedded in a scanned genesis-config). Implemented for real
+            rather than stubbed so a future "view Root CA address" screen
+            has a working, already-correct entry point. """
+        chain_kind = _chain_kind_from_path(path)
+        public_key, address = mldsa.derive_pubkey(
+            seed_bytes, path, ML_DSA_LEAF_ROLE, int(chain_kind), int(Layer.L1),
+        )
+        return Address(path=path, address=address, network_name=chain_kind.name.lower())
+
+
+    def parse_sign_request(self, payload: bytes) -> ParsedRequest:
+        """ `payload` is a genesis-config's raw canonical bytes (received
+            over BBQr from the coordinator) -- see genesis_config.py's own
+            docstring for the anchored-parser's self-validation. """
+        fields = genesis_config.parse_canonical_bytes(payload)
+        return ParsedRequest(
+            operation="Genesis Config",
+            network_name=fields.chain_kind.name.lower(),
+            derivation_path=root_ca_purpose_path(fields.chain_kind),
+            review_fields=genesis_config.review_fields(fields),
+        )
+
+
+    def review_fields(self, parsed: ParsedRequest) -> list[ReviewField]:
+        return parsed.review_fields
+
+
+    def sign(self, seed_bytes: bytes, path: str, payload: bytes) -> Signature:
+        """ `path` is intentionally unused -- see this module's own docstring
+            for why chain_kind must come from `payload` itself, never a
+            separately-supplied argument. """
+        fields = genesis_config.parse_canonical_bytes(payload)
+        public_key, signature_bytes = root_ceremony.sign_with_root_ca(
+            seed_bytes, fields.chain_kind, payload, confirmed=True,
+        )
+        return Signature(signature_bytes=signature_bytes, public_key=public_key)
+
+
+    def encode_response(self, signature: Signature) -> bytes:
+        """ Generic hex encoding, matching EvmPlugin.encode_response()'s own
+            triviality -- the real export formats (signed-JSON, BBQr) are
+            built directly by sevenf_views.py's export views via
+            genesis_config.build_signed_json(), not routed through this
+            generic method. """
+        return signature.signature_bytes.hex().encode()

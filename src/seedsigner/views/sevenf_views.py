@@ -36,7 +36,7 @@ from seedsigner.models.sevenf import genesis_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.genesis_config import GenesisConfigError
 from seedsigner.views.scan_views import ScanView
-from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
+from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
 
 class SevenFScanGenesisConfigView(ScanView):
@@ -57,6 +57,9 @@ class SevenFScanGenesisConfigView(ScanView):
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
+
+        if guard_active_chain(self, "sevenf"):
+            return
 
 
     @property
