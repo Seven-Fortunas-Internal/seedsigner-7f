@@ -38,6 +38,47 @@ from seedsigner.models.sevenf.genesis_config import GenesisConfigError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
+# Conservative, character-count-based page budget for a single review field's
+# value -- found live 2026-09-27 (7F hardware walkthrough): the genesis-
+# config's `message` field is arbitrary-length, coordinator-supplied text
+# with no length limit enforced anywhere (Jorge's own call: an arbitrary cap
+# invented on the device side would be a protocol decision, not a UI one --
+# raise with Patrick separately if the ceremony protocol itself ever wants
+# one). IconTextLine's value display has no scrolling primitive and no cap
+# of its own -- a long-enough message silently renders past the canvas
+# bounds with zero visual indication, which is a real no-blind-signing gap:
+# the operator could approve a message they never actually saw in full.
+# This is a character-count estimate, not exact pixel measurement -- same
+# class of approximation as evm_screens.py's own _MAX_UNBROKEN_VALUE_CHARS.
+# If it ever renders a page that doesn't quite fit some font/locale
+# combination, the fix is tuning this constant down, not a correctness
+# regression: every character is still shown on some page.
+_MAX_CHARS_PER_REVIEW_PAGE = 180
+
+
+def _paginate_value(value: str, max_chars: int = _MAX_CHARS_PER_REVIEW_PAGE) -> list[str]:
+    """ Splits a field value into screen-sized pages, breaking only on word
+        boundaries. Text already containing "\\n" (only the Timestamp field
+        today, via genesis_config._format_timestamp() -- always short) is
+        returned as a single page unchanged; pagination only kicks in for
+        content that actually needs it and has no embedded hard breaks to
+        preserve. """
+    if len(value) <= max_chars or "\n" in value:
+        return [value]
+
+    pages = []
+    current = ""
+    for word in value.split(" "):
+        candidate = f"{current} {word}".strip() if current else word
+        if len(candidate) > max_chars and current:
+            pages.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        pages.append(current)
+    return pages if pages else [value]
+
 
 class SevenFScanGenesisConfigView(ScanView):
     """ Scans the BBQr-encoded genesis-config the coordinator (sf-root)
@@ -151,29 +192,42 @@ class SevenFGenesisReviewStartView(View):
 class SevenFGenesisReviewFieldView(View):
     """ Pages through the genesis-config's review fields one concern per
         screen -- the concrete no-blind-signing mechanism. See
-        gui/screens/sevenf_screens.py's SevenFReviewFieldScreen. """
+        gui/screens/sevenf_screens.py's SevenFReviewFieldScreen.
+
+        Pages through *chunks*, not raw fields directly: any field whose
+        value doesn't fit _MAX_CHARS_PER_REVIEW_PAGE (see that constant's own
+        docstring) gets split into multiple consecutive pages sharing the
+        same label, rather than silently rendering past the screen bounds --
+        found live 2026-09-27 (7F hardware walkthrough) as a real
+        no-blind-signing gap on the message field specifically, but applied
+        generically here since any field could in principle grow long. """
     def __init__(self, page_num: int = 0):
         super().__init__()
         self.page_num = page_num
         data = self.controller.sevenf_ceremony_data
-        self.fields: list[ReviewField] = data["review_fields"]
+        fields: list[ReviewField] = data["review_fields"]
+        self.chunks: list[ReviewField] = [
+            ReviewField(label=field.label, value=chunk_value)
+            for field in fields
+            for chunk_value in _paginate_value(field.value)
+        ]
 
-        if self.page_num >= len(self.fields):
+        if self.page_num >= len(self.chunks):
             raise Exception("Bug in 7F genesis-config review field paging")
 
 
     def run(self):
         from seedsigner.gui.screens.sevenf_screens import SevenFReviewFieldScreen
-        field = self.fields[self.page_num]
-        is_final_page = self.page_num == len(self.fields) - 1
+        chunk = self.chunks[self.page_num]
+        is_final_page = self.page_num == len(self.chunks) - 1
 
         selected_menu_num = self.run_screen(
             SevenFReviewFieldScreen,
             page_title=_("Review Genesis Config"),
-            label_text=field.label,
-            value_text=field.value,
+            label_text=chunk.label,
+            value_text=chunk.value,
             page_num=self.page_num,
-            num_pages=len(self.fields),
+            num_pages=len(self.chunks),
             is_final_page=is_final_page,
         )
 

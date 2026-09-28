@@ -281,6 +281,58 @@ class TestToolsFlows(FlowTest):
             ])
 
 
+    def test__address_explorer__not_offered_in_sevenf_mode(self):
+        """ Regression test for a real bug found live during the 7F hardware
+            walkthrough: this button used to be unconditional, but
+            ToolsAddressExplorerSelectSourceView's own internal branching is a
+            binary bitcoin/evm check with no case for "sevenf" -- an operator
+            reaching it in 7F mode would have fallen through to the *bitcoin*
+            xpub export path. Confirms the button itself is no longer offered
+            in sevenf mode at all, matching VERIFY_ADDRESS's existing
+            bitcoin-only pattern. """
+        import pytest
+
+        self.controller.active_chain_id = "sevenf"
+        view = tools_views.ToolsMenuView()
+        captured = {}
+
+        def fake_run_screen(screen_cls, button_data=None, **kwargs):
+            captured["button_data"] = button_data
+            return RET_CODE__BACK_BUTTON
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+
+        assert tools_views.ToolsMenuView.ADDRESS_EXPLORER not in captured["button_data"]
+        assert tools_views.ToolsMenuView.VERIFY_ADDRESS not in captured["button_data"]
+
+
+    def test__dice_entropy_mnemonic_length__hides_12_word_option_in_sevenf_mode(self):
+        """ Same rationale and regression as LoadSeedView's own 12-word
+            gating (test_flows_seed.py): 7F ceremony seeds are always
+            24-word BIP-39 (Patrick's requirements doc, decision D1). """
+        import pytest
+
+        for active_chain_id, expect_12word in [("bitcoin", True), ("evm", True), ("sevenf", False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = tools_views.ToolsDiceEntropyMnemonicLengthView()
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+
+            labels = [b.button_label for b in captured["button_data"]]
+            is_present = any("12 words" in label for label in labels)
+            assert is_present == expect_12word, f"active_chain_id={active_chain_id!r}: expected 12-word present={expect_12word}, got {is_present}"
+            assert any("24 words" in label for label in labels)
+
+
 class TestToolsImageEntropyFlows(FlowTest):
 
     def test__image_entropy__incorrect_preview_frame_count_aborts(self):

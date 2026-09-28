@@ -17,6 +17,7 @@ from seedsigner.models.sevenf.genesis_config import (
     DERIVATION_SCHEME_V1,
     GenesisConfigError,
     SCHEMA_VERSION,
+    _format_timestamp,
     build_canonical_bytes,
     build_signed_json,
     genesis_config_review_lines,
@@ -266,3 +267,53 @@ def test_signed_json_filename_uses_hex_not_raw_bytes():
     assert filename.startswith("genesis-config-")
     assert filename.endswith(".json")
     assert filename == f"genesis-config-{signer_vk.hex()[:16]}.json"
+
+
+def test_format_timestamp_shows_both_raw_value_and_utc_interpretation():
+    """ Regression test for real no-blind-signing feedback from the 7F
+        hardware walkthrough: a bare Unix epoch integer isn't independently
+        reviewable by a human -- the operator must see both the exact raw
+        value (what's actually inside the signed bytes) and a human-readable
+        UTC interpretation, not one instead of the other. """
+    formatted = _format_timestamp(1_790_555_198)
+    assert "1790555198" in formatted
+    assert "2026" in formatted  # sanity: this epoch value is in 2026
+    assert "UTC" in formatted
+
+
+def test_format_timestamp_is_actually_correct_utc():
+    """ Pins the exact conversion against Python's own stdlib, not just
+        "contains a plausible-looking year". """
+    formatted = _format_timestamp(1_790_555_198)
+    from datetime import datetime, timezone
+    expected = datetime.fromtimestamp(1_790_555_198, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    assert expected in formatted
+
+
+def test_format_timestamp_handles_zero():
+    formatted = _format_timestamp(0)
+    assert "1970-01-01 00:00:00 UTC" in formatted
+
+
+def test_format_timestamp_refuses_to_crash_on_an_out_of_range_value():
+    """ `timestamp` is coordinator-supplied, unvalidated u64 data -- an
+        absurdly large value must not crash the whole review screen with an
+        uncaught OverflowError/OSError. The raw value must still be shown
+        (never hidden), just without a UTC interpretation that can't be
+        computed. """
+    huge_timestamp = 2**63 - 1  # max signed 64-bit, far outside any real calendar date
+    formatted = _format_timestamp(huge_timestamp)
+    assert str(huge_timestamp) in formatted
+    assert "not a valid calendar date" in formatted
+
+
+def test_review_fields_timestamp_includes_utc():
+    """ End-to-end: the actual review-screen field, not just the helper in
+        isolation. """
+    consensus = _sample_consensus()
+    bytes_ = build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", consensus)
+    fields = parse_canonical_bytes(bytes_)
+    review_field_list = review_fields(fields)
+    timestamp_field = next(f for f in review_field_list if f.label == "Timestamp")
+    assert "1790555198" in timestamp_field.value
+    assert "UTC" in timestamp_field.value

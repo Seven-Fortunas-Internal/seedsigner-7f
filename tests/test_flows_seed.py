@@ -419,6 +419,33 @@ class TestSeedFlows(FlowTest):
         )
 
 
+    def test_load_seed_view_hides_12_word_option_in_sevenf_mode(self):
+        """ Regression test for real feedback from the 7F hardware
+            walkthrough: 7F ceremony seeds are always 24-word BIP-39
+            (Patrick's requirements doc, decision D1) -- offering a 12-word
+            entry option here invites using the wrong entropy strength for a
+            federation root-key ceremony. Every other chain mode must keep
+            both lengths, matching stock SeedSigner's existing behavior. """
+        for active_chain_id, expect_12word in [("bitcoin", True), ("evm", True), ("sevenf", False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.LoadSeedView()
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+
+            is_present = seed_views.LoadSeedView.TYPE_12WORD in captured["button_data"]
+            assert is_present == expect_12word, f"active_chain_id={active_chain_id!r}: expected 12-word present={expect_12word}, got {is_present}"
+            # 24-word and the ability to create a seed must always remain available.
+            assert seed_views.LoadSeedView.TYPE_24WORD in captured["button_data"]
+            assert seed_views.LoadSeedView.CREATE in captured["button_data"]
+
+
     @patch("seedsigner.gui.screens.seed_screens.SeedTranscribeSeedQRZoomedInScreen", autospec=True)
     def test_transcribe_seedqr_and_verify(self, mock_zoomed_in_screen: Callable):
         """

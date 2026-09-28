@@ -30,13 +30,23 @@ class ToolsMenuView(View):
 
         # Address Explorer now has a real EVM-mode equivalent (see
         # ToolsAddressExplorerSelectSourceView, which branches internally on
-        # active_chain_id) -- shown in both modes. Verify Address stays Bitcoin-only:
-        # its EVM equivalent needs no separate Tools entry at all -- Home's Scan
-        # button already recognizes a scanned EVM address QR directly (see
-        # scan_views.py's is_evm_address branch), matching how PSBT signing itself
-        # has no separate Tools entry either. The entropy/word-calc tools above stay
-        # chain-agnostic.
-        button_data.append(self.ADDRESS_EXPLORER)
+        # active_chain_id) -- shown in bitcoin/evm modes. Verify Address stays
+        # Bitcoin-only: its EVM equivalent needs no separate Tools entry at all --
+        # Home's Scan button already recognizes a scanned EVM address QR directly
+        # (see scan_views.py's is_evm_address branch), matching how PSBT signing
+        # itself has no separate Tools entry either. The entropy/word-calc tools
+        # above stay chain-agnostic.
+        #
+        # Explicit allow-list, not "show unless bitcoin/evm-specific" -- found live
+        # 2026-09-27 (7F hardware walkthrough): this button used to be unconditional,
+        # and ToolsAddressExplorerSelectSourceView's own internal branching is a
+        # binary bitcoin/evm check with no case for a third active_chain_id value,
+        # so a sevenf-mode operator tapping it fell through to the *bitcoin* xpub
+        # export path -- wrong chain entirely. 7F has no address-explorer concept
+        # (the ceremony derives exactly one Root CA/devfund key per chain_kind,
+        # determined by the scanned genesis-config, not browsed by the operator).
+        if self.controller.active_chain_id in ("bitcoin", "evm"):
+            button_data.append(self.ADDRESS_EXPLORER)
         if self.controller.active_chain_id == "bitcoin":
             button_data.append(self.VERIFY_ADDRESS)
 
@@ -254,7 +264,13 @@ class ToolsDiceEntropyMnemonicLengthView(View):
         twenty_four = _("24 words ({} rolls)").format(mnemonic_generation.DICE__NUM_ROLLS__24WORD)
         TWENTY_FOUR = ButtonOption(twenty_four, return_data=mnemonic_generation.DICE__NUM_ROLLS__24WORD)
 
-        button_data = [TWELVE, TWENTY_FOUR]
+        # 7F ceremony seeds are always 24-word BIP-39 (Patrick's requirements doc,
+        # decision D1) -- same rationale as LoadSeedView's TYPE_12WORD gating
+        # (seed_views.py), found live 2026-09-27 (7F hardware walkthrough).
+        if self.controller.active_chain_id == "sevenf":
+            button_data = [TWENTY_FOUR]
+        else:
+            button_data = [TWELVE, TWENTY_FOUR]
         selected_menu_num = self.run_screen(
             ButtonListScreen,
             title=_("Mnemonic Length"),

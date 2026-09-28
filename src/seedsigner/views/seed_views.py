@@ -170,11 +170,16 @@ class LoadSeedView(View):
     CREATE = ButtonOption("Create a seed", SeedSignerIconConstants.PLUS)
 
     def run(self):
-        button_data = [
-            self.SEED_QR,
-            self.TYPE_12WORD,
-            self.TYPE_24WORD,
-        ]
+        button_data = [self.SEED_QR]
+
+        # 7F ceremony seeds are always 24-word BIP-39 (Patrick's requirements doc,
+        # decision D1) -- found live 2026-09-27 (7F hardware walkthrough): offering
+        # a 12-word entry option here for sevenf mode invites using the wrong
+        # entropy strength for a federation root-key ceremony. Every other chain
+        # mode keeps both lengths, matching stock SeedSigner's existing behavior.
+        if self.controller.active_chain_id != "sevenf":
+            button_data.append(self.TYPE_12WORD)
+        button_data.append(self.TYPE_24WORD)
 
         # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
         # (not replaced by) active_chain_id, same relationship as SeedSelectSeedView above.

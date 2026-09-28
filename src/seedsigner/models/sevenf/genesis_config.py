@@ -16,6 +16,7 @@
     of those things.
 """
 import ctypes
+from datetime import datetime, timezone
 
 from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf import mldsa
@@ -165,6 +166,26 @@ def parse_canonical_bytes(data: bytes, max_message_len: int = 4096) -> GenesisCo
     )
 
 
+def _format_timestamp(timestamp: int) -> str:
+    """ Shows both the raw signed value (exactly what's inside the bytes
+        being signed -- an operator cross-checking against the coordinator's
+        own display must see the identical number) and its UTC
+        interpretation, so the operator can actually evaluate whether the
+        date is sane -- a bare Unix epoch integer isn't independently
+        reviewable by a human. Found live 2026-09-27 (7F hardware
+        walkthrough). `timestamp` is coordinator-supplied, unvalidated data
+        (u64, so it can be far outside any real calendar date) -- refuse to
+        let an out-of-range value crash the whole review screen; show the
+        raw value alone with a clear note instead ("refuse rather than
+        guess" for the interpretation, not for the raw value itself, which
+        is always shown). """
+    try:
+        utc_str = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (OSError, OverflowError, ValueError):
+        return f"{timestamp} (not a valid calendar date)"
+    return f"{timestamp}\n({utc_str})"
+
+
 def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
     """ Single source of truth for both genesis_config_review_lines() and
         review_fields() below, so the two can't drift out of sync with each
@@ -177,7 +198,7 @@ def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
         three consensus fields -- sf-core's own GenesisConfig field order. """
     return [
         ("Chain", fields.chain_kind.name.lower()),
-        ("Timestamp", str(fields.timestamp)),
+        ("Timestamp", _format_timestamp(fields.timestamp)),
         ("Message", fields.message),
         ("Derivation scheme", DERIVATION_SCHEME_V1),
         ("Target block time", f"{fields.consensus.target_block_time_secs}s"),

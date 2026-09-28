@@ -477,3 +477,68 @@ class TestSevenFScanEntryPoint(FlowTest):
         destination = view.get_redirect()
         assert destination.View_cls == MainMenuView
         assert destination.clear_history is True
+
+
+class TestSevenFReviewFieldPagination:
+    """ _paginate_value() and SevenFGenesisReviewFieldView's use of it --
+        regression coverage for a real no-blind-signing gap found live
+        during the 7F hardware walkthrough: a long field value (the
+        genesis-config's `message`, coordinator-supplied with no length
+        limit) could silently render past the screen bounds with zero
+        visual indication. """
+    def test_paginate_value_returns_single_page_for_short_text(self):
+        assert sevenf_views._paginate_value("hardware test ceremony") == ["hardware test ceremony"]
+
+    def test_paginate_value_returns_single_page_for_text_containing_newline(self):
+        """ Timestamp's own multi-line format (raw value + UTC) must not get
+            re-split -- it's already deliberately formatted, and it's always
+            short regardless. """
+        value = "1790555198\n(2026-09-28 03:19:58 UTC)"
+        assert sevenf_views._paginate_value(value) == [value]
+
+    def test_paginate_value_splits_long_text_on_word_boundaries(self):
+        long_message = " ".join(f"word{i}" for i in range(80))  # well over 180 chars
+        pages = sevenf_views._paginate_value(long_message, max_chars=40)
+        assert len(pages) > 1
+        for page in pages:
+            assert len(page) <= 40
+        # No content lost, no words split mid-word, order preserved.
+        assert " ".join(pages) == long_message
+
+    def test_paginate_value_never_splits_a_single_word_wider_than_the_page(self):
+        """ A single unbroken run longer than max_chars (e.g. no spaces at
+            all) has nowhere safe to break -- must still be returned whole
+            on its own page rather than corrupting it, matching this
+            module's own "every character is still shown on some page"
+            guarantee. """
+        unbroken = "x" * 300
+        pages = sevenf_views._paginate_value(unbroken, max_chars=180)
+        assert "".join(pages) == unbroken
+
+    def test_long_message_produces_multiple_review_pages_with_all_content_preserved(self):
+        """ End-to-end: a genesis-config with a message long enough to need
+            pagination actually produces more total review pages than the
+            baseline 7, and paging through the message's own pages and
+            rejoining them recovers the exact original message -- no
+            silent truncation anywhere in the chain. """
+        from seedsigner.models.sevenf.genesis_config import review_fields
+
+        long_message = "word " * 60  # 300 chars, well over the 180-char budget
+        consensus = ConsensusParams(target_block_time_secs=1, difficulty_adjustment_interval_blocks=1, blocks_per_decay_period=1)
+        canonical_bytes = build_canonical_bytes(ChainKind.TESTNET, 1, long_message.strip(), consensus)
+        fields = parse_canonical_bytes(canonical_bytes)
+
+        real_fields = review_fields(fields)
+        assert len(real_fields) == 7  # baseline, unchanged
+
+        chunks = [
+            chunk_value
+            for field in real_fields
+            for chunk_value in sevenf_views._paginate_value(field.value)
+        ]
+        assert len(chunks) > 7  # message pagination added real pages
+
+        message_field = next(f for f in real_fields if f.label == "Message")
+        message_chunks = sevenf_views._paginate_value(message_field.value)
+        assert len(message_chunks) > 1
+        assert " ".join(message_chunks) == message_field.value == long_message.strip()
