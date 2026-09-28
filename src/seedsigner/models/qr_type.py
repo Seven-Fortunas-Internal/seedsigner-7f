@@ -37,4 +37,11 @@ class QRType:
     # already speak for QR-based hardware wallets.
     EVM__ETH_SIGN_REQUEST_UR = "evm__eth_sign_request_ur"
 
+    # 7F ceremony artefacts (genesis-config, devfund-config, enrollment/signature
+    # exports) travel as BBQr, per docs/7f-integration/root-key-ceremony-plan.md's
+    # "Superseding authority" section -- BBQr's own file-type byte is 'B' (generic
+    # binary), not 'P' (PSBT), which is the only file-type the existing BBQr
+    # decoder recognized before this addition.
+    SEVENF__BBQR = "sevenf__bbqr"
+
     INVALID = "invalid"

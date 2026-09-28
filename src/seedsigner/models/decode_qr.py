@@ -79,6 +79,9 @@ class DecodeQR:
             elif self.qr_type == QRType.PSBT__BBQR:
                 self.decoder = BBQRPsbtQrDecoder() # BBQr Decoder
 
+            elif self.qr_type == QRType.SEVENF__BBQR:
+                self.decoder = SevenFBBQrDecoder() # BBQr Decoder, non-PSBT file types
+
             elif self.qr_type in [QRType.SEED__SEEDQR, QRType.SEED__COMPACTSEEDQR, QRType.SEED__MNEMONIC, QRType.SEED__FOUR_LETTER_MNEMONIC, QRType.SEED__UR2]:
                 self.decoder = SeedQrDecoder(wordlist_language_code=self.wordlist_language_code)          
 
@@ -257,7 +260,7 @@ class DecodeQR:
         if self.qr_type in [QRType.PSBT__UR2, QRType.OUTPUT__UR, QRType.ACCOUNT__UR, QRType.BYTES__UR, QRType.EVM__ETH_SIGN_REQUEST_UR]:
             return int(self.decoder.estimated_percent_complete(weight_mixed_frames=weight_mixed_frames) * 100)
 
-        elif self.qr_type in [QRType.PSBT__SPECTER, QRType.PSBT__BBQR]:
+        elif self.qr_type in [QRType.PSBT__SPECTER, QRType.PSBT__BBQR, QRType.SEVENF__BBQR]:
             if self.decoder.total_segments == None:
                 return 0
             return int((self.decoder.collected_segments / self.decoder.total_segments) * 100)
@@ -402,6 +405,14 @@ class DecodeQR:
 
             elif re.search(r"^B\$[2HZ]P[0-9A-Z]{4}", s): # https://github.com/coinkite/BBQr/blob/master/BBQr.md#spliting-the-data
                 return QRType.PSBT__BBQR
+
+            elif re.search(r"^B\$[2HZ][TJCUBX][0-9A-Z]{4}", s):
+                # Same BBQr wire format, any of the spec's other file-type bytes
+                # (T=tx, J=JSON, C=CBOR, U=UTF8 text, B=generic binary, X=executable) --
+                # 7F ceremony artefacts use 'B'. The 'P' (PSBT) case above is
+                # unchanged and takes priority so existing Bitcoin PSBT scanning
+                # is unaffected by this addition.
+                return QRType.SEVENF__BBQR
 
             # Wallet Descriptor
             desc_str = s.replace("\n","").replace(" ","")
@@ -778,56 +789,105 @@ class SpecterPsbtQrDecoder(BaseAnimatedQrDecoder):
 
 
 
-class BBQRPsbtQrDecoder(BaseAnimatedQrDecoder):
+def _bbqr_decode_segments(segments: list, encoding: str) -> bytes | None:
     """
-        Used to decode BBQR Animated PSBT encoding.
+        Shared BBQr payload reconstruction, used by both BBQRPsbtQrDecoder
+        (file-type 'P') and SevenFBBQrDecoder (7F's non-PSBT file types) --
+        the reconstruction logic is identical regardless of file type; only
+        what the caller does with the resulting bytes differs.
+        https://github.com/coinkite/BBQr/blob/master/BBQr.md
+    """
+    if not encoding:
+        return None
+
+    if encoding == 'H':
+        return b''.join(bytes.fromhex(s) for s in segments)
+
+    # base32 decode, but insert padding for API
+    rv = b''
+    for p in segments:
+        padding = (8 - (len(p) % 8)) % 8
+        rv += b32decode(p + (padding*'='))
+
+    if encoding == 'Z':
+        # decompress
+        z = zlib.decompressobj(wbits=-10)
+        rv = z.decompress(rv)
+        rv += z.flush()
+
+    return rv
+
+
+
+class BaseBBQrDecoder(BaseAnimatedQrDecoder):
+    """
+        Shared BBQr header-parsing logic (encoding/file-type/segment
+        numbering), independent of what the decoded bytes mean. Subclasses
+        exist per file-type only so DecodeQR's dispatch can distinguish
+        "this was a PSBT" from "this was a 7F ceremony artefact" without
+        parsing the payload itself.
     """
     def __init__(self):
         super().__init__()
         self.encoding = None
+        self.file_type = None
 
 
-    def get_data(self) -> str:
-        logger.debug("BBQRPsbtQrDecoder get_data")
-        data = "".join(self.segments)
-        if self.complete and self.encoding:
-            if self.encoding == 'H':
-                return b''.join(bytes.fromhex(s) for s in self.segments)
-
-            # base32 decode, but insert padding for API
-            rv = b''
-            for p in self.segments:
-                padding = (8 - (len(p) % 8)) % 8
-                rv += b32decode(p + (padding*'='))
-
-            if self.encoding == 'Z':
-                # decompress
-                z = zlib.decompressobj(wbits=-10)
-                rv = z.decompress(rv)
-                rv += z.flush()
-
-            return rv
+    def get_data(self) -> bytes | None:
+        logger.debug(f"{self.__class__.__name__} get_data")
+        if self.complete:
+            return _bbqr_decode_segments(self.segments, self.encoding)
 
         return None
 
+
     def current_segment_num(self, segment) -> int:
         current_segment = int(segment[6:8], 36) + 1
-        logger.debug(f"BBQRPsbtQrDecoder current_segment_num {current_segment}")
+        logger.debug(f"{self.__class__.__name__} current_segment_num {current_segment}")
         return current_segment
 
 
     def total_segment_nums(self, segment) -> int:
         total_segments = int(segment[4:6], 36)
-        logger.debug(f"BBQRPsbtQrDecoder total_segment_nums {total_segments}")
+        logger.debug(f"{self.__class__.__name__} total_segment_nums {total_segments}")
         return total_segments
 
 
     def parse_segment(self, segment) -> str:
         self.encoding = segment[2]
-        file_type = segment[3]
+        self.file_type = segment[3]
         data = segment[8:]
-
         return data.strip()
+
+
+
+class BBQRPsbtQrDecoder(BaseBBQrDecoder):
+    """
+        Used to decode BBQR Animated PSBT encoding (file-type 'P').
+        Unchanged in behavior from before this file's SEVENF__BBQR
+        addition -- header parsing and payload reconstruction now live in
+        BaseBBQrDecoder/_bbqr_decode_segments, shared with SevenFBBQrDecoder,
+        but this class's own get_data()/current_segment_num()/
+        total_segment_nums()/parse_segment() outputs are identical to the
+        pre-refactor version for the same input.
+    """
+    pass
+
+
+
+class SevenFBBQrDecoder(BaseBBQrDecoder):
+    """
+        Decodes BBQr-encoded 7F ceremony artefacts (genesis-config,
+        devfund-config, enrollment/signature exports) -- any BBQr file-type
+        byte other than 'P' (see the SEVENF__BBQR detection regex above).
+        Inherits BaseBBQrDecoder's parse_segment()/get_data() unchanged --
+        this subclass exists only so DecodeQR's dispatch can distinguish
+        "this was a PSBT" from "this was a 7F artefact" (self.file_type is
+        available on either class if a caller needs to branch on it).
+        Backs 7f-signing-support-bbqr-encoding /
+        docs/7f-integration/root-key-ceremony-plan.md.
+    """
+    pass
 
 
 
