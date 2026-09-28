@@ -187,3 +187,43 @@ def test_bbqr_wire_format_header_matches_spec():
     assert part[4:6] == "01"     # total segments, base36, 1 segment
     assert part[6:8] == "00"     # this segment's index, base36, zero-based
     assert part[8:] == "ABCD"    # uppercase hex, per spec
+
+
+def test_bbqr_segments_survive_real_qr_image_rendering_and_scanning():
+    """ Regression test for a real shell-injection/truncation bug found live
+        during the 7F hardware walkthrough (helpers/qr.py's qrimage_io()):
+        every test above this one operates on BBQrEncoder's string segments
+        directly, never through actual QR image rendering -- so none of them
+        would have caught a bug in the rendering step itself. Every BBQr
+        segment starts with a literal "B$", which triggered shell variable
+        expansion in the old `shell=True` qrencode invocation, silently
+        collapsing every segment down to just "B" before it was ever
+        rendered -- symptom on real hardware: every export QR looked
+        identical regardless of which segment was showing. This test goes
+        through the real rendering (encoder.next_part_image(), which calls
+        qrimage_io()) and real scanning (pyzbar) for every segment of a
+        multi-segment, realistic (incompressible) payload, confirming the
+        full round trip survives image rendering, not just string handling. """
+    import os
+    import shutil
+    pytest.importorskip("pyzbar")
+    if shutil.which("qrencode") is None:
+        pytest.skip("qrencode binary not installed")
+    from pyzbar import pyzbar
+
+    payload = os.urandom(1952)  # ML-DSA-65 pubkey size, incompressible
+    encoder = BBQrEncoder(data=payload, file_type="U")
+    assert encoder.seq_len() > 1, "test payload must actually require multiple segments"
+
+    d = DecodeQR()
+    status = None
+    for _ in range(encoder.seq_len()):
+        image = encoder.next_part_image(240, 240, border=2, background_color="bdbdbd")
+        decoded = pyzbar.decode(image.convert("L"))
+        assert len(decoded) == 1, "expected exactly one QR code in the rendered image"
+        status = d.add_data(decoded[0].data.decode())
+        if status == DecodeQRStatus.COMPLETE:
+            break
+
+    assert status == DecodeQRStatus.COMPLETE
+    assert d.decoder.get_data() == payload
