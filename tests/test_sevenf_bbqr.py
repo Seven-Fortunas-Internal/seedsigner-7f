@@ -61,6 +61,23 @@ def test_empty_payload_round_trips():
     assert d.decoder.get_data() == b""
 
 
+def test_is_sevenf_bbqr_and_get_sevenf_bbqr_data():
+    """ DecodeQR's own wrapper properties/methods (used by
+        sevenf_views.SevenFScanGenesisConfigView) -- mirrors
+        is_evm_address/get_evm_address's exact shape. """
+    d, status = _round_trip(b"genesis-config fixture bytes", file_type="J")
+    assert status == DecodeQRStatus.COMPLETE
+    assert d.is_sevenf_bbqr is True
+    assert d.is_evm_address is False
+    assert d.get_sevenf_bbqr_data() == b"genesis-config fixture bytes"
+
+
+def test_get_sevenf_bbqr_data_returns_none_for_a_different_qr_type():
+    d = DecodeQR()
+    assert d.is_sevenf_bbqr is False
+    assert d.get_sevenf_bbqr_data() is None
+
+
 def test_file_type_is_preserved_and_not_psbt():
     encoder = BBQrEncoder(data=b"hello", file_type="J")
     part = encoder.next_part()

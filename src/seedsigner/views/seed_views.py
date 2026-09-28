@@ -548,6 +548,11 @@ class SeedOptionsView(View):
     EVM_ADDRESS = ButtonOption("Address / Connect")
     EVM_SCAN = ButtonOption("Scan sign request")
     EVM_SIGN = ButtonOption("Sign request")
+    # 7F federation root-key ceremony (docs/7f-integration/root-key-ceremony-plan.md).
+    # Not gated by active_chain_id like the bitcoin/evm blocks above -- this is a
+    # standalone ceremony-device capability, orthogonal to which chain the boot-time
+    # chooser picked, not one of the choices itself.
+    SEVENF_SCAN_GENESIS_CONFIG = ButtonOption("7F: Sign Genesis Config")
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")
@@ -635,6 +640,8 @@ class SeedOptionsView(View):
             button_data.append(self.EVM_SCAN)
             button_data.append(self.EVM_SIGN)
 
+        button_data.append(self.SEVENF_SCAN_GENESIS_CONFIG)
+
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)
 
@@ -679,6 +686,10 @@ class SeedOptionsView(View):
         elif button_data[selected_menu_num] == self.EVM_SIGN:
             from seedsigner.views.evm_views import EvmSignSelectView
             return Destination(EvmSignSelectView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.SEVENF_SCAN_GENESIS_CONFIG:
+            from seedsigner.views.sevenf_views import SevenFScanGenesisConfigView
+            return Destination(SevenFScanGenesisConfigView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.BACKUP:
             return Destination(SeedBackupView, view_args=dict(seed=self.seed))

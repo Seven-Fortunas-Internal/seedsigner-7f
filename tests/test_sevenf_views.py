@@ -1,7 +1,8 @@
 """
-    Tests seedsigner.views.sevenf_views -- the no-blind-signing review flow
-    for a genesis-config canonical-bytes payload
-    (7f-signing-support-root-ceremony-review-screen, _delivery/backlog.yaml).
+    Tests seedsigner.views.sevenf_views -- the guided ceremony wizard
+    (scan -> no-blind-signing review -> gated sign call -> export) for a
+    genesis-config canonical-bytes payload
+    (7f-signing-support-root-ceremony-ui-wizard, _delivery/backlog.yaml).
 
     Requires firmware/mldsa7f's compiled library (see test_sevenf_mldsa.py's
     own docstring for the search order); skips cleanly if it's missing.
@@ -13,13 +14,14 @@ from base import FlowTest, FlowStep
 
 from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON
 from seedsigner.models.decode_qr import DecodeQR, DecodeQRStatus
+from seedsigner.models.encode_qr import BBQrEncoder
 from seedsigner.models.seed import Seed
 from seedsigner.models.settings import SettingsConstants
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.genesis_config import ConsensusParams, build_canonical_bytes, parse_canonical_bytes
 from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys
-from seedsigner.views import sevenf_views
+from seedsigner.views import seed_views, sevenf_views
 from seedsigner.views.view import MainMenuView
 
 
@@ -341,3 +343,109 @@ class TestSevenFGenesisReviewFlow(FlowTest):
 
         assert destination.View_cls == MainMenuView
         assert destination.skip_current_view is True
+
+
+def _load_genesis_config_into_decoder(canonical_bytes: bytes, file_type: str = "J"):
+    """ before_run hook (see test_flows_evm.py's own load_seed_into_decoder
+        for the established pattern this mirrors): pushes a real BBQr-encoded
+        payload into a ScanView subclass's decoder before .run() checks
+        decoder.is_complete, standing in for an actual camera scan. """
+    def loader(view):
+        encoder = BBQrEncoder(data=canonical_bytes, file_type=file_type)
+        for _ in range(encoder.seq_len()):
+            view.decoder.add_data(encoder.next_part())
+    return loader
+
+
+class TestSevenFScanEntryPoint(FlowTest):
+    """ The wizard's real entry point: SeedOptionsView's "7F: Sign Genesis
+        Config" button -> SevenFScanGenesisConfigView -> (valid payload)
+        SevenFGenesisReviewStartView, or (invalid) SevenFUnsupportedArtefactView. """
+    def seed_fixture(self) -> Seed:
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+        return seed
+
+
+    def test_seed_options_view_offers_the_sevenf_button_regardless_of_active_chain_id(self):
+        """ Unlike EVM_ADDRESS/EVM_SIGN, this button must appear whether the
+            boot-time chooser picked bitcoin, evm, or nothing at all -- the
+            ceremony is a standalone capability, not one of those choices. """
+        seed = self.seed_fixture()
+        for active_chain_id in ("bitcoin", "evm", None):
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.SeedOptionsView(seed=seed)
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+            assert seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG in captured["button_data"]
+
+
+    def test_seed_options_view_routes_to_scan_genesis_config_view(self):
+        seed = self.seed_fixture()
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG),
+                FlowStep(sevenf_views.SevenFScanGenesisConfigView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_scan_genesis_config_view_accepts_a_real_payload_and_routes_to_review(self):
+        """ End-to-end from a real BBQr-encoded genesis-config through the
+            actual scan/decode machinery -- not a hand-built canonical_bytes
+            handoff -- into the review flow's real entry point. """
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_canonical_bytes()
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG),
+                FlowStep(
+                    sevenf_views.SevenFScanGenesisConfigView,
+                    before_run=_load_genesis_config_into_decoder(canonical_bytes),
+                    screen_return_value=0,
+                ),
+                FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True),
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+        data = self.controller.sevenf_ceremony_data
+        assert data["seed"] is seed
+        assert data["canonical_bytes"] == canonical_bytes
+        assert data["chain_kind"] == ChainKind.TESTNET
+
+
+    def test_scan_genesis_config_view_rejects_a_payload_that_doesnt_parse(self):
+        """ A BBQr payload that decodes fine at the transport layer but isn't
+            a real genesis-config (wrong domain tag) must be refused with a
+            clear reason, not crash or silently proceed into the review flow
+            with garbage fields -- confirms SevenFScanGenesisConfigView's own
+            self-validation, not just genesis_config.parse_canonical_bytes()
+            in isolation (already covered by test_sevenf_genesis_config.py). """
+        seed = self.seed_fixture()
+        garbage = b"not a genesis config at all, but still valid BBQr transport bytes"
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG),
+                FlowStep(
+                    sevenf_views.SevenFScanGenesisConfigView,
+                    before_run=_load_genesis_config_into_decoder(garbage),
+                    screen_return_value=0,
+                ),
+                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+        assert self.controller.sevenf_ceremony_data is None

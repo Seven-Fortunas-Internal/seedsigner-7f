@@ -1,31 +1,115 @@
 """
-    7fchain root-key ceremony UI: the no-blind-signing review flow for a
-    received genesis-config canonical-bytes payload, the gated sign call,
-    and export of the signed result. See docs/7f-integration/root-key-ceremony-plan.md.
+    7fchain root-key ceremony UI: scan the genesis-config sent by the
+    coordinator, the no-blind-signing review flow, the gated sign call, and
+    export of the signed result. See docs/7f-integration/root-key-ceremony-plan.md.
 
     Follows the same file-pairing convention as the rest of this codebase
     (seed_views.py <-> seed_screens.py, evm_views.py <-> evm_screens.py); see
     gui/screens/sevenf_screens.py for the paired Screen classes.
 
-    Deliberately narrow, matching 7f-signing-support-root-ceremony-review-screen's
-    and 7f-signing-support-root-ceremony-export-flow's own scope
-    (_delivery/backlog.yaml): parse -> page through every signed field ->
-    confirm identity -> sign -> export. No scan-entry-point wiring (that's
-    the not-yet-built guided wizard, 7f-signing-support-root-ceremony-ui-wizard,
-    whose own notes call out exactly this kind of state-across-navigation
-    complexity as its scope, not this story's) -- this flow's entry point is
-    SevenFGenesisReviewStartView, constructed directly with the already-
-    received canonical_bytes for now.
+    Backs 7f-signing-support-root-ceremony-ui-wizard (_delivery/backlog.yaml):
+    scan -> parse -> page through every signed field -> confirm identity ->
+    sign -> export. Reached from SeedOptionsView's "7F: Sign Genesis Config"
+    button (seed_views.py) -- a per-seed submenu item, so the seed is always
+    already known by the time SevenFScanGenesisConfigView runs, the same way
+    evm_views.EvmScanSignRequestView never needs a separate seed-selection
+    step either. This is deliberately narrower than the wizard story's
+    original phrasing ("mnemonic generation with optional entropy injection,
+    chain_kind selection, key derivation") -- that phrasing predates this
+    project's own architecture correction that the device PARSES a received
+    genesis-config rather than building one from local operator input (see
+    root-key-ceremony-plan.md's "Superseding authority" section, §5.3/5.4):
+    there is no chain_kind to select (it comes only from the parsed bytes)
+    and no on-device genesis-config construction step at all. Mnemonic
+    generation/entropy injection is just SeedSigner's existing seed-creation
+    flow, already reachable before ever reaching SeedOptionsView -- nothing
+    7F-specific to add there.
 """
 from gettext import gettext as _
 
+from seedsigner.helpers.l10n import mark_for_translation as _mft
 from seedsigner.chains.base import ReviewField
 from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import genesis_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.genesis_config import GenesisConfigError
+from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
+
+
+class SevenFScanGenesisConfigView(ScanView):
+    """ Scans the BBQr-encoded genesis-config the coordinator (sf-root)
+        sends to this signer -- the real entry point into the ceremony.
+        Overrides _handle_complete_scan() rather than duplicating ScanView's
+        shared scan-screen scaffolding (same pattern as EvmScanSignRequestView,
+        evm_views.py). Not wired into ScanView's own top-level catch-all
+        dispatch (scan_views.py's _handle_complete_scan): unlike EVM's
+        eth_sign_request (reachable from Home's generic Scan button before
+        any seed is known, hence that flow's double-scan design), this view
+        is only ever reached with a seed already selected -- no separate
+        seed-selection sub-flow is needed at all. """
+    instructions_text = _mft("Scan genesis config")
+    invalid_qr_type_message = _mft("Expected a genesis-config QR (BBQr, from the coordinator)")
+
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+
+    @property
+    def is_valid_qr_type(self):
+        return self.decoder.is_sevenf_bbqr
+
+
+    def _handle_complete_scan(self):
+        canonical_bytes = self.decoder.get_sevenf_bbqr_data()
+
+        # Self-validation: file_type on the wire is not authoritative (any
+        # BBQr file-type byte could be attached to any bytes) -- the real
+        # check is whether parse_canonical_bytes() itself accepts them, the
+        # same "refuse rather than guess" doctrine every other scan-dispatch
+        # branch in this codebase already applies (see e.g.
+        # EvmScanSignRequestView's own is_real_transaction_payload() check).
+        try:
+            genesis_config.parse_canonical_bytes(canonical_bytes)
+        except GenesisConfigError as e:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't parse this as a genesis-config: {}").format(e)))
+
+        return Destination(
+            SevenFGenesisReviewStartView,
+            view_args=dict(seed=self.seed, canonical_bytes=canonical_bytes),
+            skip_current_view=True,
+        )
+
+
+
+class SevenFUnsupportedArtefactView(View):
+    """ Same role as evm_views.EvmUnsupportedSignRequestView -- a scanned
+        artefact that claims to be a 7F ceremony payload but doesn't
+        actually parse as one. """
+    def __init__(self, reason: str):
+        super().__init__()
+        self.reason = reason
+
+
+    def run(self):
+        from seedsigner.gui.screens import DireWarningScreen
+        from seedsigner.gui.components import SeedSignerIconConstants
+        self.run_screen(
+            DireWarningScreen,
+            title=_("Unsupported Artefact"),
+            show_back_button=False,
+            status_icon_name=SeedSignerIconConstants.ERROR,
+            status_headline=_("Can't Parse This"),
+            text=self.reason,
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(MainMenuView, skip_current_view=True)
+
 
 
 class SevenFGenesisReviewStartView(View):

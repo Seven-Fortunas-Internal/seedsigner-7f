@@ -227,6 +227,19 @@ class DecodeQR:
             return self.decoder.get_address()
 
 
+    def get_sevenf_bbqr_data(self) -> bytes | None:
+        """ Returns the raw decoded bytes of a scanned 7F ceremony artefact
+            (genesis-config canonical bytes today; devfund-config etc. once
+            those parsers exist) -- self.decoder.file_type distinguishes
+            which artefact it claims to be, but callers must not trust that
+            claim over independently re-validating the bytes themselves
+            (e.g. genesis_config.parse_canonical_bytes()'s own domain-tag
+            check) -- same self-validation principle as every other
+            decoder wrapper in this class. """
+        if self.is_sevenf_bbqr:
+            return self.decoder.get_data()
+
+
     def get_qr_data(self) -> dict:
         """
         This provides a single access point for external code to retrieve the QR data,
@@ -331,6 +344,11 @@ class DecodeQR:
     @property
     def is_evm_address(self):
         return self.qr_type == QRType.EVM_ADDRESS
+
+
+    @property
+    def is_sevenf_bbqr(self):
+        return self.qr_type == QRType.SEVENF__BBQR
 
 
 
