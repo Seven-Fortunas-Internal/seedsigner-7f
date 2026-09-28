@@ -85,10 +85,11 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         notes in _delivery/backlog.yaml): a single callable that builds
         bytes and signs them, with review bolted on as a UI step in front
         of it, is not the same guarantee as this project's "no-blind-signing,
-        non-negotiable" principle requires. The (not-yet-built) review
-        screen is the only intended caller allowed to pass confirmed=True,
-        and only after the operator has explicitly approved every displayed
-        field (see genesis_config.genesis_config_review_lines()). Passing
+        non-negotiable" principle requires. views.sevenf_views.SevenFConfirmSignView
+        is the only intended caller allowed to pass confirmed=True, and only
+        after the operator has explicitly approved every displayed field
+        (see genesis_config.review_fields(), paged one field per screen by
+        views.sevenf_views.SevenFGenesisReviewFieldView). Passing
         confirmed=True from anywhere else defeats the whole point of this
         parameter existing -- it is not a formality to satisfy a type
         checker, it is the gate.

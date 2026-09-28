@@ -17,8 +17,15 @@
 """
 import ctypes
 
+from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind
+
+# Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
+# exactly -- display-only here (parse_canonical_bytes already enforces the
+# real check on the Rust side; a mismatch here would only mislabel the
+# review screen, not weaken validation).
+DERIVATION_SCHEME_V1 = "7fchain.ml-dsa-keygen.v1"
 
 
 class GenesisConfigError(Exception):
@@ -151,6 +158,27 @@ def parse_canonical_bytes(data: bytes, max_message_len: int = 4096) -> GenesisCo
     )
 
 
+def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
+    """ Single source of truth for both genesis_config_review_lines() and
+        review_fields() below, so the two can't drift out of sync with each
+        other the way genesis_config_review_lines() previously drifted from
+        firmware/mldsa7f/src/genesis_config.rs's render_lines() (silently
+        missing the "Derivation scheme" line -- caught only when building
+        review_fields() and comparing against the real Rust function this
+        was supposed to mirror). Order/content matches render_lines()
+        exactly: chain_kind, timestamp, message, derivation_scheme, then the
+        three consensus fields -- sf-core's own GenesisConfig field order. """
+    return [
+        ("Chain", fields.chain_kind.name.lower()),
+        ("Timestamp", str(fields.timestamp)),
+        ("Message", fields.message),
+        ("Derivation scheme", DERIVATION_SCHEME_V1),
+        ("Target block time", f"{fields.consensus.target_block_time_secs}s"),
+        ("Difficulty adjustment interval", f"{fields.consensus.difficulty_adjustment_interval_blocks} blocks"),
+        ("Blocks per decay period", str(fields.consensus.blocks_per_decay_period)),
+    ]
+
+
 def genesis_config_review_lines(fields: GenesisConfigFields) -> list[str]:
     """ Human-readable lines for the review screen -- plain UI formatting,
         not derivation/canonical-bytes logic (see this module's own
@@ -158,11 +186,18 @@ def genesis_config_review_lines(fields: GenesisConfigFields) -> list[str]:
         calling into Rust for it). Mirrors
         firmware/mldsa7f/src/genesis_config.rs's render_lines() field
         order/content for consistency, but is not required to call it. """
-    return [
-        f"Chain: {fields.chain_kind.name.lower()}",
-        f"Timestamp: {fields.timestamp}",
-        f"Message: {fields.message}",
-        f"Target block time: {fields.consensus.target_block_time_secs}s",
-        f"Difficulty adjustment interval: {fields.consensus.difficulty_adjustment_interval_blocks} blocks",
-        f"Blocks per decay period: {fields.consensus.blocks_per_decay_period}",
-    ]
+    return [f"{label}: {value}" for label, value in _labeled_values(fields)]
+
+
+def review_fields(fields: GenesisConfigFields) -> list[ReviewField]:
+    """ The no-blind-signing field list for the on-device review screen, one
+        ReviewField per field carried in the signed canonical bytes
+        (sf-core::GenesisConfig). derivation_scheme is included even though
+        it has exactly one valid value today -- a wrong one would already
+        have made parse_canonical_bytes() raise, so it can never reach here
+        with a different value -- because no-blind-signing means every
+        signed field is shown to the operator, not only the ones that could
+        vary. Reuses chains.base.ReviewField (the same generic no-blind-
+        signing field type the EVM chain plugin's review screens consume)
+        rather than inventing a parallel type for this one flow. """
+    return [ReviewField(label=label, value=value) for label, value in _labeled_values(fields)]

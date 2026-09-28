@@ -127,6 +127,12 @@ class Controller(Singleton):
     # Multi-chain (Phase 1 UI-walkthrough demo; mocked data, no real crypto yet).
     # See docs/multi-chain/README.md in the diy-seedsigner repo.
     multichain_data: dict = None
+
+    # 7fchain federation root-key ceremony (docs/7f-integration/root-key-ceremony-plan.md).
+    # Not a ChainRegistry plugin -- a standalone ceremony-device tool, independent
+    # of the boot-time chain chooser below -- so it gets its own flow-state dict
+    # rather than reusing multichain_data.
+    sevenf_ceremony_data: dict = None
     # TODO: end refactor section
 
     # Boot-time chain selection (see docs/multi-chain/boot-chain-selection-plan.md):
@@ -328,6 +334,7 @@ class Controller(Singleton):
                     self.psbt_parser = None
                     self.psbt_seed = None
                     self.multichain_data = None
+                    self.sevenf_ceremony_data = None
                 
                 logger.info(f"\nback_stack: {self.back_stack}")
 

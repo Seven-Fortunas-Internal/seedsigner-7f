@@ -11,12 +11,15 @@ import pytest
 
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf.genesis_config import (
     ConsensusParams,
+    DERIVATION_SCHEME_V1,
     GenesisConfigError,
     build_canonical_bytes,
     genesis_config_review_lines,
     parse_canonical_bytes,
+    review_fields,
 )
 
 
@@ -146,6 +149,13 @@ def test_build_canonical_bytes_raises_on_nonzero_return(monkeypatch):
 
 
 def test_genesis_config_review_lines_contains_all_fields():
+    """ Regression test for a real bug: this function's own docstring claims
+        to mirror firmware/mldsa7f/src/genesis_config.rs's render_lines(),
+        but the original Python port silently dropped the "Derivation
+        scheme" line (6 lines instead of Rust's 7) -- caught only while
+        building review_fields() below and comparing against the real Rust
+        function. Asserting len == 7 and the scheme string itself pins that
+        this can't silently regress again. """
     consensus = _sample_consensus()
     bytes_ = build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", consensus)
     fields = parse_canonical_bytes(bytes_)
@@ -153,7 +163,38 @@ def test_genesis_config_review_lines_contains_all_fields():
     joined = "\n".join(lines)
     assert "testnet" in joined
     assert "cross-check fixture" in joined
+    assert DERIVATION_SCHEME_V1 in joined
     assert "420" in joined
     assert "3500" in joined
     assert "70000" in joined
-    assert len(lines) == 6
+    assert len(lines) == 7
+
+
+def test_review_fields_matches_genesis_config_review_lines_content():
+    """ review_fields() and genesis_config_review_lines() share the same
+        _labeled_values() source, so their content must agree field-for-
+        field -- confirms the shared-helper refactor didn't let the two
+        functions drift again the way the pre-refactor version already had
+        (see the regression test above). """
+    consensus = _sample_consensus()
+    bytes_ = build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", consensus)
+    fields = parse_canonical_bytes(bytes_)
+
+    lines = genesis_config_review_lines(fields)
+    review_field_list = review_fields(fields)
+
+    assert len(review_field_list) == len(lines) == 7
+    assert all(isinstance(f, ReviewField) for f in review_field_list)
+    for line, field in zip(lines, review_field_list):
+        assert line == f"{field.label}: {field.value}"
+        assert field.is_warning is False
+
+
+def test_review_fields_includes_derivation_scheme():
+    consensus = _sample_consensus()
+    bytes_ = build_canonical_bytes(ChainKind.TESTNET, 1, "x", consensus)
+    fields = parse_canonical_bytes(bytes_)
+    review_field_list = review_fields(fields)
+    scheme_fields = [f for f in review_field_list if f.label == "Derivation scheme"]
+    assert len(scheme_fields) == 1
+    assert scheme_fields[0].value == DERIVATION_SCHEME_V1

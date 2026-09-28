@@ -1,0 +1,96 @@
+"""
+    Screens for the 7fchain root-key ceremony's no-blind-signing review flow
+    (docs/7f-integration/root-key-ceremony-plan.md). Genesis-config only for
+    now -- devfund-config review is a follow-up story once its own
+    canonical-bytes support lands.
+
+    Follows the same file-pairing convention as the rest of this codebase
+    (seed_views.py <-> seed_screens.py, evm_views.py <-> evm_screens.py).
+    SevenFReviewFieldScreen is a near-duplicate of evm_screens.py's own
+    EvmReviewFieldScreen -- anticipated by name in that file's own docstring
+    ("same pattern as the 7F work's SevenFReviewFieldScreen") -- rather than
+    a shared base class, since the two screens' dataclass fields already
+    differ (no warning_detail/is_warning distinction needed here yet: a
+    genesis-config has no anti-scam-style hard-stop field the way an EVM
+    approval/permit does) and forcing a shared base now would be a
+    speculative abstraction for a difference of one field.
+"""
+from dataclasses import dataclass
+from gettext import gettext as _
+
+from seedsigner.gui.components import FormattedAddress, GUIConstants, IconTextLine, SeedSignerIconConstants
+
+from .screen import ButtonListScreen, ButtonOption
+
+
+@dataclass
+class SevenFReviewFieldScreen(ButtonListScreen):
+    """
+        Generic single-field review screen: one labeled value, one "Next"
+        button -- the no-blind-signing mechanism, one concern per screen.
+        See this module's own docstring for why this isn't merged with
+        evm_screens.py's EvmReviewFieldScreen.
+    """
+    page_title: str = None
+    label_text: str = None
+    value_text: str = None
+    page_num: int = 0
+    num_pages: int = 1
+    is_final_page: bool = False
+
+    def __post_init__(self):
+        if self.num_pages > 1:
+            self.title = f"{self.page_title} ({self.page_num + 1}/{self.num_pages})"
+        else:
+            self.title = self.page_title
+        self.is_bottom_list = True
+        self.is_button_text_centered = True
+        self.button_data = [ButtonOption("Next")] if not self.is_final_page else [ButtonOption("Continue")]
+        super().__post_init__()
+
+        value_display = IconTextLine(
+            icon_name=SeedSignerIconConstants.INFO,
+            icon_color=GUIConstants.INFO_COLOR,
+            label_text=self.label_text,
+            value_text=self.value_text,
+            is_text_centered=True,
+            auto_line_break=True,
+            screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,
+        )
+        self.components.append(value_display)
+
+
+
+@dataclass
+class SevenFConfirmSignScreen(ButtonListScreen):
+    """ Final review step before signing: which chain and which Root CA
+        address the signature will be attributed to -- the signing-identity
+        check, distinct from the per-field genesis-config content review
+        that already happened on the preceding pages (SevenFReviewFieldScreen).
+        Same role as evm_screens.py's EvmConfirmSignScreen. """
+    chain_kind_name: str = None
+    address: str = None
+
+    def __post_init__(self):
+        self.title = _("Confirm & Sign")
+        self.is_bottom_list = True
+        self.is_button_text_centered = True
+        self.button_data = [ButtonOption("Sign")]
+        super().__post_init__()
+
+        chain_display = IconTextLine(
+            icon_name=SeedSignerIconConstants.INFO,
+            icon_color=GUIConstants.INFO_COLOR,
+            label_text=_("signing as Root CA for"),
+            value_text=self.chain_kind_name,
+            is_text_centered=True,
+            auto_line_break=True,
+            screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,
+        )
+        self.components.append(chain_display)
+
+        address_display = FormattedAddress(
+            address=self.address,
+            screen_y=chain_display.screen_y + chain_display.height + 2*GUIConstants.COMPONENT_PADDING,
+        )
+        self.components.append(address_display)
