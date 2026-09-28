@@ -243,6 +243,87 @@ class SevenFGenesisReviewFieldView(View):
 
 
 
+class SevenFCertRequestReviewFieldView(View):
+    """ Pages through a CertRequest's review fields one concern per screen --
+        the no-blind-signing screen this project's adversarial plan-stage
+        review (2026-09-28) found entirely missing from the original Root
+        self-certification / Deputy cross-certification story filing
+        (CRITICAL, confirmed independently by two reviewers). Mirrors
+        SevenFGenesisReviewFieldView's own pagination exactly (same
+        _paginate_value() mechanism, same reason: any field's value could in
+        principle grow long, and no-blind-signing means every field is shown
+        in full, never silently truncated).
+
+        Deliberately parameterized rather than hardcoded to one flow: Root
+        self-certification and Deputy cross-certification both page through
+        a CertRequest, via cert_request.review_fields(), but diverge on what
+        happens after the operator confirms (a different sign call, a
+        different export). Each call site supplies its own page_title and
+        the View class + view_args to route to once every field has been
+        shown -- this view does not itself call into cert_request.py or
+        perform any signing, keeping it reusable and testable in isolation.
+        State is carried entirely through view_args (not
+        controller.sevenf_ceremony_data, which the unrelated genesis-config
+        flow already owns) so this view has no shared-state collision risk
+        with that flow. """
+    def __init__(
+        self,
+        review_fields: list[ReviewField],
+        page_title: str,
+        confirmed_destination: type,
+        confirmed_view_args: dict = None,
+        page_num: int = 0,
+    ):
+        super().__init__()
+        self.review_fields = review_fields
+        self.page_title = page_title
+        self.confirmed_destination = confirmed_destination
+        self.confirmed_view_args = confirmed_view_args or {}
+        self.page_num = page_num
+        self.chunks: list[ReviewField] = [
+            ReviewField(label=field.label, value=chunk_value)
+            for field in review_fields
+            for chunk_value in _paginate_value(field.value)
+        ]
+
+        if self.page_num >= len(self.chunks):
+            raise Exception("Bug in 7F CertRequest review field paging")
+
+
+    def run(self):
+        from seedsigner.gui.screens.sevenf_screens import SevenFReviewFieldScreen
+        chunk = self.chunks[self.page_num]
+        is_final_page = self.page_num == len(self.chunks) - 1
+
+        selected_menu_num = self.run_screen(
+            SevenFReviewFieldScreen,
+            page_title=self.page_title,
+            label_text=chunk.label,
+            value_text=chunk.value,
+            page_num=self.page_num,
+            num_pages=len(self.chunks),
+            is_final_page=is_final_page,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if is_final_page:
+            return Destination(self.confirmed_destination, view_args=self.confirmed_view_args)
+        else:
+            return Destination(
+                SevenFCertRequestReviewFieldView,
+                view_args=dict(
+                    review_fields=self.review_fields,
+                    page_title=self.page_title,
+                    confirmed_destination=self.confirmed_destination,
+                    confirmed_view_args=self.confirmed_view_args,
+                    page_num=self.page_num + 1,
+                ),
+            )
+
+
+
 class SevenFConfirmSignView(View):
     """ Final review step: confirms which chain and which Root CA address
         the signature will be attributed to, then performs the actual

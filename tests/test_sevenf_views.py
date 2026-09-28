@@ -22,7 +22,7 @@ from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.genesis_config import ConsensusParams, build_canonical_bytes, parse_canonical_bytes
 from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys
 from seedsigner.views import seed_views, sevenf_views
-from seedsigner.views.view import MainMenuView
+from seedsigner.views.view import MainMenuView, View
 
 
 def _lib_available() -> bool:
@@ -546,3 +546,139 @@ class TestSevenFReviewFieldPagination:
         message_chunks = sevenf_views._paginate_value(message_field.value)
         assert len(message_chunks) > 1
         assert " ".join(message_chunks) == message_field.value == long_message.strip()
+
+
+class _DummyConfirmedDestination(View):
+    """ Stand-in target View for SevenFCertRequestReviewFieldView tests --
+        Destination never instantiates its View_cls until the Controller's
+        own run loop does, so a bare class reference is enough to assert
+        against without a real caller (Root self-cert / Deputy cross-cert)
+        existing yet. """
+    def run(self):
+        raise NotImplementedError("never actually run in these tests")
+
+
+class TestSevenFCertRequestReviewFieldView(FlowTest):
+    """ The reusable no-blind-signing review screen for CertRequest fields
+        (7f-signing-support-x509-cert-request-foundation) -- filed after two
+        independent adversarial reviews both found this screen missing
+        entirely from the original story. Tested in isolation from any real
+        Root self-cert / Deputy cross-cert flow (neither exists yet): this
+        view takes its fields via view_args, not controller.sevenf_ceremony_data,
+        specifically so it doesn't need one to be tested or reused. """
+    def _fields(self):
+        from seedsigner.chains.base import ReviewField
+        return [
+            ReviewField(label="Role", value="root"),
+            ReviewField(label="Chain", value="testnet"),
+        ]
+
+    def test_pages_through_every_field_then_reaches_the_confirmed_destination(self):
+        fields = self._fields()
+        view = sevenf_views.SevenFCertRequestReviewFieldView(
+            review_fields=fields,
+            page_title="Review Root Certificate",
+            confirmed_destination=_DummyConfirmedDestination,
+            confirmed_view_args=dict(foo="bar"),
+        )
+        assert len(view.chunks) == 2  # neither value needs pagination
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 0)
+            destination = view.run()
+        assert destination.View_cls == sevenf_views.SevenFCertRequestReviewFieldView
+        assert destination.view_args["page_num"] == 1
+
+        next_view = sevenf_views.SevenFCertRequestReviewFieldView(**destination.view_args)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(next_view, "run_screen", lambda *a, **kw: 0)
+            final_destination = next_view.run()
+        assert final_destination.View_cls == _DummyConfirmedDestination
+        assert final_destination.view_args == dict(foo="bar")
+
+
+    def test_back_button_on_first_page_returns_to_back_stack(self):
+        view = sevenf_views.SevenFCertRequestReviewFieldView(
+            review_fields=self._fields(),
+            page_title="Review Root Certificate",
+            confirmed_destination=_DummyConfirmedDestination,
+        )
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
+            destination = view.run()
+        from seedsigner.views.view import BackStackView
+        assert destination.View_cls == BackStackView
+
+
+    def test_back_button_on_a_later_page_also_returns_to_back_stack(self):
+        view = sevenf_views.SevenFCertRequestReviewFieldView(
+            review_fields=self._fields(),
+            page_title="Review Root Certificate",
+            confirmed_destination=_DummyConfirmedDestination,
+            page_num=1,
+        )
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
+            destination = view.run()
+        from seedsigner.views.view import BackStackView
+        assert destination.View_cls == BackStackView
+
+
+    def test_defaults_to_an_empty_confirmed_view_args_dict(self):
+        view = sevenf_views.SevenFCertRequestReviewFieldView(
+            review_fields=[self._fields()[0]],
+            page_title="Review Deputy Certificate",
+            confirmed_destination=_DummyConfirmedDestination,
+        )
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 0)
+            destination = view.run()
+        assert destination.View_cls == _DummyConfirmedDestination
+        assert destination.view_args == {}
+
+
+    def test_a_long_field_value_is_paginated_like_the_genesis_review_screen(self):
+        from seedsigner.chains.base import ReviewField
+        long_value = " ".join(f"word{i}" for i in range(80))
+        fields = [ReviewField(label="Serial", value=long_value)]
+        view = sevenf_views.SevenFCertRequestReviewFieldView(
+            review_fields=fields,
+            page_title="Review Root Certificate",
+            confirmed_destination=_DummyConfirmedDestination,
+        )
+        assert len(view.chunks) > 1
+        assert " ".join(c.value for c in view.chunks) == long_value
+
+
+    def test_page_title_and_field_content_are_passed_to_the_screen(self):
+        view = sevenf_views.SevenFCertRequestReviewFieldView(
+            review_fields=self._fields(),
+            page_title="Review Root Certificate",
+            confirmed_destination=_DummyConfirmedDestination,
+        )
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured.update(kwargs)
+            return 0
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+
+        assert captured["page_title"] == "Review Root Certificate"
+        assert captured["label_text"] == "Role"
+        assert captured["value_text"] == "root"
+        assert captured["page_num"] == 0
+        assert captured["num_pages"] == 2
+        assert captured["is_final_page"] is False
+
+
+    def test_raises_if_constructed_with_an_out_of_range_page_num(self):
+        with pytest.raises(Exception):
+            sevenf_views.SevenFCertRequestReviewFieldView(
+                review_fields=self._fields(),
+                page_title="Review Root Certificate",
+                confirmed_destination=_DummyConfirmedDestination,
+                page_num=99,
+            )
