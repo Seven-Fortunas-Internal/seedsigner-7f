@@ -12,11 +12,12 @@ import pytest
 from base import FlowTest, FlowStep
 
 from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON
+from seedsigner.models.decode_qr import DecodeQR, DecodeQRStatus
 from seedsigner.models.seed import Seed
 from seedsigner.models.settings import SettingsConstants
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.genesis_config import ConsensusParams, build_canonical_bytes
+from seedsigner.models.sevenf.genesis_config import ConsensusParams, build_canonical_bytes, parse_canonical_bytes
 from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys
 from seedsigner.views import sevenf_views
 from seedsigner.views.view import MainMenuView
@@ -62,7 +63,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             ENTER_SEED_OPTIONS_STEPS). Run it directly, outside the
             run_sequence harness, to sidestep that test-harness-only gap. """
         start_view = sevenf_views.SevenFGenesisReviewStartView(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+            seed=seed, canonical_bytes=canonical_bytes,
         )
         destination = start_view.run()
         assert destination.View_cls == sevenf_views.SevenFGenesisReviewFieldView
@@ -74,7 +75,9 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             _enter_review_flow) -> 7 paged review fields (chain, timestamp,
             message, derivation scheme, target block time, difficulty
             adjustment interval, blocks per decay period) ->
-            SevenFConfirmSignView -> SevenFGenesisSignedView -> MainMenuView. """
+            SevenFConfirmSignView -> SevenFGenesisSignedView -> SevenFExportView
+            -> exports both artifacts (looping back to the export menu after
+            each) -> back button -> MainMenuView. """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
         self._enter_review_flow(seed, canonical_bytes)
@@ -90,6 +93,11 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Blocks per decay period (7/7)
                 FlowStep(sevenf_views.SevenFConfirmSignView, screen_return_value=0),  # "Sign"
                 FlowStep(sevenf_views.SevenFGenesisSignedView, screen_return_value=0),  # "OK"
+                FlowStep(sevenf_views.SevenFExportView, screen_return_value=0),  # "Export Root CA Pubkey"
+                FlowStep(sevenf_views.SevenFExportPubkeyQRView, screen_return_value=0),  # QR displayed, loops back
+                FlowStep(sevenf_views.SevenFExportView, screen_return_value=1),  # "Export Signed Config"
+                FlowStep(sevenf_views.SevenFExportSignedConfigQRView, screen_return_value=0),
+                FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
                 FlowStep(MainMenuView),
             ],
             initial_destination_view_args=dict(page_num=0),
@@ -125,6 +133,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFConfirmSignView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisSignedView, before_run=capture_before_home, screen_return_value=0),
+                FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
                 FlowStep(MainMenuView),
             ],
             initial_destination_view_args=dict(page_num=0),
@@ -212,3 +221,123 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         view = sevenf_views.SevenFConfirmSignView()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         assert view.root_ca_address == keys.root_ca.address
+
+
+    def test_review_start_view_derives_chain_kind_from_the_parsed_bytes(self):
+        """ Regression test for a real self-validation bug caught while
+            wiring the export flow: SevenFGenesisReviewStartView used to
+            take chain_kind as an independent constructor argument, separate
+            from the one embedded in canonical_bytes -- exactly the anti-
+            pattern chains/base.py's own ChainPlugin docstring warns against
+            ("must independently recompute the fields that matter from the
+            raw payload bytes, never just relay externally-supplied
+            metadata"). Confirms chain_kind now always matches what's
+            actually inside the bytes that get signed, with no way to pass
+            a different one in. """
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_canonical_bytes()  # built with ChainKind.TESTNET
+        assert "chain_kind" not in sevenf_views.SevenFGenesisReviewStartView.__init__.__code__.co_varnames[
+            :sevenf_views.SevenFGenesisReviewStartView.__init__.__code__.co_argcount
+        ]
+
+        sevenf_views.SevenFGenesisReviewStartView(seed=seed, canonical_bytes=canonical_bytes)
+        assert self.controller.sevenf_ceremony_data["chain_kind"] == ChainKind.TESTNET
+
+
+    def test_export_pubkey_qr_view_encodes_the_real_root_ca_pubkey(self):
+        """ Confirms the exported QR actually carries this ceremony's real
+            Root CA public key (BBQr-encoded, file_type 'U'), round-tripped
+            through the real BBQr encoder/decoder pair -- not a placeholder
+            and not merely "some bytes got passed to some encoder". """
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_canonical_bytes()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        self.controller.sevenf_ceremony_data = dict(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+            fields=parse_canonical_bytes(canonical_bytes),
+            public_key=keys.root_ca.public_key, signature=b"\x00" * 3309,
+        )
+
+        view = sevenf_views.SevenFExportPubkeyQRView()
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["qr_encoder"] = kwargs["qr_encoder"]
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            destination = view.run()
+
+        encoder = captured["qr_encoder"]
+        assert encoder.file_type == "U"
+
+        d = DecodeQR()
+        while True:
+            status = d.add_data(encoder.next_part())
+            if status == DecodeQRStatus.COMPLETE:
+                break
+        assert d.decoder.get_data() == keys.root_ca.public_key.hex().encode("utf-8")
+
+        assert destination.View_cls == sevenf_views.SevenFExportView
+
+
+    def test_export_signed_config_qr_view_encodes_the_real_signed_json(self):
+        """ Confirms the exported QR carries the real build_signed_json()
+            output for THIS ceremony's actual fields/signature (BBQr-encoded,
+            file_type 'J'), round-tripped through the real BBQr encoder/
+            decoder pair and re-parsed as JSON -- the actual export payload
+            an operator would hand to sf-node/sf-wallet, not a stand-in. """
+        import json
+
+        from seedsigner.models.sevenf.genesis_config import build_signed_json
+
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_canonical_bytes()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        fields = parse_canonical_bytes(canonical_bytes)
+        signature = bytes(range(256)) * 12 + bytes(3309 - 256 * 12)  # 3309 varied bytes, not all-zero
+        self.controller.sevenf_ceremony_data = dict(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+            fields=fields, public_key=keys.root_ca.public_key, signature=signature,
+        )
+
+        view = sevenf_views.SevenFExportSignedConfigQRView()
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["qr_encoder"] = kwargs["qr_encoder"]
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            destination = view.run()
+
+        encoder = captured["qr_encoder"]
+        assert encoder.file_type == "J"
+
+        d = DecodeQR()
+        while True:
+            status = d.add_data(encoder.next_part())
+            if status == DecodeQRStatus.COMPLETE:
+                break
+        decoded_json = json.loads(d.decoder.get_data())
+        assert decoded_json == build_signed_json(fields, keys.root_ca.public_key, signature)
+        assert decoded_json["signer_vk"] == keys.root_ca.public_key.hex()
+        assert decoded_json["sig"] == signature.hex()
+
+        assert destination.View_cls == sevenf_views.SevenFExportView
+
+
+    def test_export_view_back_button_returns_home(self):
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_canonical_bytes()
+        self.controller.sevenf_ceremony_data = dict(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+        )
+
+        view = sevenf_views.SevenFExportView()
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
+            destination = view.run()
+
+        assert destination.View_cls == MainMenuView
+        assert destination.skip_current_view is True
