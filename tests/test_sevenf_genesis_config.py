@@ -16,14 +16,14 @@ from seedsigner.models.sevenf.genesis_config import (
     ConsensusParams,
     DERIVATION_SCHEME_V1,
     GenesisConfigError,
-    SCHEMA_VERSION,
     _format_timestamp,
     build_canonical_bytes,
-    build_signed_json,
+    build_root_sig_json,
     genesis_config_review_lines,
     parse_canonical_bytes,
     review_fields,
-    signed_json_filename,
+    root_id,
+    root_sig_filename,
 )
 
 
@@ -204,32 +204,22 @@ def test_review_fields_includes_derivation_scheme():
     assert scheme_fields[0].value == DERIVATION_SCHEME_V1
 
 
-def test_build_signed_json_matches_real_sf_core_genesis_config_shape():
-    """ Field names, nesting, and chain_kind's lowercase string form must
-        match 7fchain's real crates/sf-core/src/genesis_config.rs::GenesisConfig
-        struct exactly -- confirmed against that source directly (its
-        #[serde(rename_all = "lowercase")] on ChainKind, and its field list/
-        order), not assumed from this module's own Python-side naming. """
-    consensus = _sample_consensus()
-    bytes_ = build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", consensus)
-    fields = parse_canonical_bytes(bytes_)
+def test_build_root_sig_json_matches_real_sf_core_root_sig_shape():
+    """ Field names must match 7fchain's real
+        crates/sf-core/src/genesis_config.rs::RootSig struct exactly, and the
+        payload must NOT re-embed the config -- confirmed against
+        crates/sf-keytree/src/bin/sf-root.rs::cmd_sign_genesis's real, current
+        output (commit 3bb5da3), which is exactly `RootSig{signer_vk, sig}`
+        and nothing else. `signer_vk` defaults to empty per D11 (the key is
+        enrolled once and never resent), mirroring that command's own
+        `--with-vk` flag defaulting to false. """
     signer_vk = bytes([0xAB, 0xCD] * 16)
     sig = bytes([0x12, 0x34] * 8)
 
-    doc = build_signed_json(fields, signer_vk, sig)
+    doc = build_root_sig_json(signer_vk, sig)
 
     assert doc == {
-        "version": SCHEMA_VERSION,
-        "chain_kind": "testnet",
-        "timestamp": 1_790_555_198,
-        "message": "cross-check fixture",
-        "derivation_scheme": DERIVATION_SCHEME_V1,
-        "consensus": {
-            "target_block_time_secs": 420,
-            "difficulty_adjustment_interval_blocks": 3500,
-            "blocks_per_decay_period": 70_000,
-        },
-        "signer_vk": "abcd" * 16,
+        "signer_vk": "",
         "sig": "1234" * 8,
     }
     # JSON-serializable -- this is the actual export payload's real shape.
@@ -237,36 +227,41 @@ def test_build_signed_json_matches_real_sf_core_genesis_config_shape():
     json.dumps(doc)
 
 
-@pytest.mark.parametrize("chain_kind,expected", [
-    (ChainKind.MAINNET, "mainnet"),
-    (ChainKind.TESTNET, "testnet"),
-    (ChainKind.DEVNET, "devnet"),
-])
-def test_build_signed_json_chain_kind_string_matches_serde_rename(chain_kind, expected):
-    consensus = _sample_consensus()
-    bytes_ = build_canonical_bytes(chain_kind, 1, "x", consensus)
-    fields = parse_canonical_bytes(bytes_)
-    doc = build_signed_json(fields, b"\x00", b"\x00")
-    assert doc["chain_kind"] == expected
+def test_build_root_sig_json_with_vk_includes_the_hex_key():
+    signer_vk = bytes([0xAB, 0xCD] * 16)
+    sig = bytes([0x12, 0x34] * 8)
+
+    doc = build_root_sig_json(signer_vk, sig, with_vk=True)
+
+    assert doc["signer_vk"] == "abcd" * 16
+    assert doc["sig"] == "1234" * 8
 
 
-def test_signed_json_filename_matches_real_sf_root_convention():
-    """ Pinned against crates/sf-keytree/src/bin/sf-root.rs's own
-        `signer_hash_short = &root_vk_hex[..16]` / `"genesis-config-{signer_hash_short}.json"`
+def test_root_id_matches_real_sf_core_convention():
+    """ Pinned against crates/sf-core/src/genesis_config.rs::root_id()'s own
+        `vk_hex.chars().take(20).flat_map(|c| c.to_lowercase()).collect()`
         -- confirmed against that real, current source. """
+    vk_hex = "AB" * 976  # ML_DSA_PK_LEN hex chars, uppercase to exercise lowercasing
+    assert root_id(vk_hex) == "ab" * 10
+
+
+def test_root_sig_filename_matches_real_sf_root_convention():
+    """ Pinned against crates/sf-keytree/src/bin/sf-root.rs's own
+        `cmd_sign_genesis` outbox naming: `{id}.genesis` where
+        `id = root_id(vk_hex)` -- confirmed against that real, current
+        source (commit 3bb5da3). """
     signer_vk = bytes.fromhex("ab" * 1952)  # ML_DSA_PK_LEN
-    assert signed_json_filename(signer_vk) == "genesis-config-abababababababab.json"
+    assert root_sig_filename(signer_vk) == "abababababababababab.genesis"
 
 
-def test_signed_json_filename_uses_hex_not_raw_bytes():
+def test_root_sig_filename_uses_hex_not_raw_bytes():
     """ A signer_vk that would not survive a naive str() round-trip --
         confirms the filename is built from the hex encoding, not from
         bytes.decode() or similar, which would raise on arbitrary bytes. """
     signer_vk = bytes([0x00, 0xff, 0x10] * 20)
-    filename = signed_json_filename(signer_vk)
-    assert filename.startswith("genesis-config-")
-    assert filename.endswith(".json")
-    assert filename == f"genesis-config-{signer_vk.hex()[:16]}.json"
+    filename = root_sig_filename(signer_vk)
+    assert filename.endswith(".genesis")
+    assert filename == f"{root_id(signer_vk.hex())}.genesis"
 
 
 def test_format_timestamp_shows_both_raw_value_and_utc_interpretation():

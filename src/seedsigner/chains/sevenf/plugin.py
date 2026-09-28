@@ -98,8 +98,8 @@ class SevenFPlugin:
 
     def encode_response(self, signature: Signature) -> bytes:
         """ Generic hex encoding, matching EvmPlugin.encode_response()'s own
-            triviality -- the real export formats (signed-JSON, BBQr) are
-            built directly by sevenf_views.py's export views via
-            genesis_config.build_signed_json(), not routed through this
+            triviality -- the real export formats (signature-only JSON, BBQr)
+            are built directly by sevenf_views.py's export views via
+            genesis_config.build_root_sig_json(), not routed through this
             generic method. """
         return signature.signature_bytes.hex().encode()

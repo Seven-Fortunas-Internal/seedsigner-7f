@@ -28,13 +28,6 @@ from seedsigner.models.sevenf.constants import ChainKind
 # review screen, not weaken validation).
 DERIVATION_SCHEME_V1 = "7fchain.ml-dsa-keygen.v1"
 
-# Must match 7fchain's crates/sf-core/src/genesis_config.rs's SCHEMA_VERSION
-# exactly -- confirmed against that real source, not guessed. Same
-# display/export-only status as DERIVATION_SCHEME_V1 above: the real check
-# happens on the Rust side (parse_canonical_bytes), a mismatch here would
-# only produce a wrong exported JSON, not weaken validation.
-SCHEMA_VERSION = 1
-
 
 class GenesisConfigError(Exception):
     """ Raised for any non-zero return from the genesis-config FFI
@@ -231,38 +224,47 @@ def review_fields(fields: GenesisConfigFields) -> list[ReviewField]:
     return [ReviewField(label=label, value=value) for label, value in _labeled_values(fields)]
 
 
-def build_signed_json(fields: GenesisConfigFields, signer_vk: bytes, sig: bytes) -> dict:
-    """ The real, on-wire GenesisConfig JSON shape -- 7fchain's
-        crates/sf-core/src/genesis_config.rs's GenesisConfig struct,
-        confirmed field-for-field against that real source (not guessed):
-        field names match its #[derive(Serialize)] output exactly, and
-        chain_kind serializes as its lowercase variant name
-        (#[serde(rename_all = "lowercase")] on that struct's ChainKind).
-        `signer_vk`/`sig` are hex-encoded the same way sf-root.rs's own
-        `hex::encode(...)` calls produce them -- Python's bytes.hex() matches
-        that byte-for-byte (lowercase, no separators, no prefix). """
+def root_id(vk_hex: str) -> str:
+    """ Ports 7fchain's crates/sf-core/src/genesis_config.rs::root_id()
+        exactly: the first 20 hex characters (10 bytes) of a verification
+        key's hex encoding, lowercased -- confirmed against that real,
+        current source, not guessed. Used to name a signature file the same
+        way sf-root.rs's own outbox does (`<id>.genesis`, `<id>.rootcert`,
+        `<id>.deputy`), so a signature produced here is recognizable on the
+        receiving end without decoding it first. """
+    return vk_hex[:20].lower()
+
+
+def build_root_sig_json(signer_vk: bytes, sig: bytes, *, with_vk: bool = False) -> dict:
+    """ The real, on-wire signature-export shape this device actually
+        produces -- 7fchain's crates/sf-core/src/genesis_config.rs's RootSig
+        struct, confirmed field-for-field against that real source (not
+        guessed) and against crates/sf-keytree/src/bin/sf-root.rs's own
+        `cmd_sign_genesis` (its output is exactly `RootSig{signer_vk, sig}`,
+        nothing else -- no header, no re-embedded config).
+
+        Only the signature leaves the device per ceremony (D11: a Root's
+        verification key is enrolled once and never sent again). `signer_vk`
+        therefore defaults to the empty string, mirroring sf-root.rs's own
+        `--with-vk` flag defaulting to false; the Root CA pubkey has its own
+        one-time enrollment export (SevenFExportPubkeyQRView) and does not
+        need to travel again inside every signature.
+
+        `sig` is hex-encoded the same way sf-root.rs's own `hex::encode(...)`
+        calls produce it -- Python's bytes.hex() matches that byte-for-byte
+        (lowercase, no separators, no prefix). """
     return {
-        "version": SCHEMA_VERSION,
-        "chain_kind": fields.chain_kind.name.lower(),
-        "timestamp": fields.timestamp,
-        "message": fields.message,
-        "derivation_scheme": DERIVATION_SCHEME_V1,
-        "consensus": {
-            "target_block_time_secs": fields.consensus.target_block_time_secs,
-            "difficulty_adjustment_interval_blocks": fields.consensus.difficulty_adjustment_interval_blocks,
-            "blocks_per_decay_period": fields.consensus.blocks_per_decay_period,
-        },
-        "signer_vk": signer_vk.hex(),
+        "signer_vk": signer_vk.hex() if with_vk else "",
         "sig": sig.hex(),
     }
 
 
-def signed_json_filename(signer_vk: bytes) -> str:
+def root_sig_filename(signer_vk: bytes) -> str:
     """ Matches 7fchain's own sf-root binary filename convention exactly
-        (crates/sf-keytree/src/bin/sf-root.rs: `signer_hash_short =
-        &root_vk_hex[..16]`, `basename = "genesis-config-{signer_hash_short}.json"`)
-        -- confirmed against that real, current source, not guessed. Display-
-        only here (this device exports over QR per R16, not to a filesystem)
-        but kept so an operator naming a manually-saved copy on the receiving
-        end uses the same convention sf-root itself would have. """
-    return f"genesis-config-{signer_vk.hex()[:16]}.json"
+        (crates/sf-keytree/src/bin/sf-root.rs's `cmd_sign_genesis`:
+        `{id}.genesis` where `id = root_id(vk_hex)`) -- confirmed against
+        that real, current source, not guessed. Display-only here (this
+        device exports over QR per R16, not to a filesystem) but kept so an
+        operator naming a manually-saved copy on the receiving end uses the
+        same convention sf-root itself would have. """
+    return f"{root_id(signer_vk.hex())}.genesis"

@@ -284,14 +284,18 @@ class TestSevenFGenesisReviewFlow(FlowTest):
 
 
     def test_export_signed_config_qr_view_encodes_the_real_signed_json(self):
-        """ Confirms the exported QR carries the real build_signed_json()
-            output for THIS ceremony's actual fields/signature (BBQr-encoded,
+        """ Confirms the exported QR carries the real build_root_sig_json()
+            output for THIS ceremony's actual signature (BBQr-encoded,
             file_type 'J'), round-tripped through the real BBQr encoder/
             decoder pair and re-parsed as JSON -- the actual export payload
-            an operator would hand to sf-node/sf-wallet, not a stand-in. """
+            an operator would hand to sf-node/sf-wallet, not a stand-in.
+            Per D11 / sf-root.rs's real cmd_sign_genesis (commit 3bb5da3),
+            this is signature-only: signer_vk stays empty (the key was
+            already enrolled separately), and the config fields are not
+            re-embedded. """
         import json
 
-        from seedsigner.models.sevenf.genesis_config import build_signed_json
+        from seedsigner.models.sevenf.genesis_config import build_root_sig_json
 
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
@@ -322,8 +326,8 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             if status == DecodeQRStatus.COMPLETE:
                 break
         decoded_json = json.loads(d.decoder.get_data())
-        assert decoded_json == build_signed_json(fields, keys.root_ca.public_key, signature)
-        assert decoded_json["signer_vk"] == keys.root_ca.public_key.hex()
+        assert decoded_json == build_root_sig_json(keys.root_ca.public_key, signature)
+        assert decoded_json["signer_vk"] == ""
         assert decoded_json["sig"] == signature.hex()
 
         assert destination.View_cls == sevenf_views.SevenFExportView

@@ -356,18 +356,21 @@ class SevenFExportPubkeyQRView(View):
 
 
 class SevenFExportSignedConfigQRView(View):
-    """ Exports the final signed genesis-config as BBQr-encoded JSON -- the
-        second export artifact, matching sf-core::GenesisConfig's real,
-        current on-wire shape exactly (genesis_config.build_signed_json()'s
-        own docstring has the field-by-field confirmation). """
+    """ Exports the genesis-config signature as BBQr-encoded JSON -- the
+        second export artifact. Matches sf-core::genesis_config::RootSig's
+        real, current on-wire shape exactly (genesis_config.build_root_sig_json()'s
+        own docstring has the field-by-field confirmation): only the
+        signature leaves the device per ceremony (D11), not the config
+        again -- the coordinator that produced the unsigned config already
+        has every other field. """
     def run(self):
         import json
 
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
         data = self.controller.sevenf_ceremony_data
-        signed_json = genesis_config.build_signed_json(
-            data["fields"], data["public_key"], data["signature"],
+        signed_json = genesis_config.build_root_sig_json(
+            data["public_key"], data["signature"],
         )
         json_bytes = json.dumps(signed_json).encode("utf-8")
 
