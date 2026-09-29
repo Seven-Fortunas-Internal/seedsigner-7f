@@ -560,6 +560,7 @@ class SeedOptionsView(View):
     # (see chains/sevenf/plugin.py's own docstring for why 7F fits the ChainPlugin
     # model the same way EVM does).
     SEVENF_SCAN_GENESIS_CONFIG = ButtonOption("7F: Sign Genesis Config")
+    SEVENF_SCAN_ROOT_CERT_REQUEST = ButtonOption("7F: Self-Certify Root")
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")
@@ -649,6 +650,7 @@ class SeedOptionsView(View):
 
         elif self.controller.active_chain_id == "sevenf":
             button_data.append(self.SEVENF_SCAN_GENESIS_CONFIG)
+            button_data.append(self.SEVENF_SCAN_ROOT_CERT_REQUEST)
 
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)
@@ -698,6 +700,10 @@ class SeedOptionsView(View):
         elif button_data[selected_menu_num] == self.SEVENF_SCAN_GENESIS_CONFIG:
             from seedsigner.views.sevenf_views import SevenFScanGenesisConfigView
             return Destination(SevenFScanGenesisConfigView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.SEVENF_SCAN_ROOT_CERT_REQUEST:
+            from seedsigner.views.sevenf_views import SevenFScanRootCertRequestView
+            return Destination(SevenFScanRootCertRequestView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.BACKUP:
             return Destination(SeedBackupView, view_args=dict(seed=self.seed))

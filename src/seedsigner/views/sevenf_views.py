@@ -32,8 +32,9 @@ from seedsigner.chains.base import ReviewField
 from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed
-from seedsigner.models.sevenf import genesis_config, root_ceremony
+from seedsigner.models.sevenf import cert_request, genesis_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.cert_request import CertRequestError
 from seedsigner.models.sevenf.genesis_config import GenesisConfigError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
@@ -131,13 +132,100 @@ class SevenFScanGenesisConfigView(ScanView):
 
 
 
+class SevenFScanRootCertRequestView(ScanView):
+    """ Scans the BBQr-encoded CertRequest the coordinator sends a Root for
+        self-certification (enrollment) -- the entry point for
+        7f-signing-support-root-self-certification. Mirrors
+        SevenFScanGenesisConfigView exactly (same guard_active_chain check,
+        same "file_type on the wire is not authoritative, try to parse it"
+        self-validation doctrine): a genesis-config or Deputy CertRequest
+        accidentally scanned here fails to parse as a role="root" request
+        and is refused the same way, not specially detected.
+
+        Does the fail-closed subject_vk check here, at the scan boundary,
+        rather than deferring it to the review/confirm step: a request for
+        a DIFFERENT Root's key is not this device's business to even show
+        for review (CRITICAL/HIGH findings from adversarial security
+        review, 2026-09-28 -- see 7f-signing-support-x509-cert-request-foundation's
+        backlog notes). Derives using req.kind, never a separately-configured
+        chain, for the same reason SevenFPlugin.sign() re-derives chain_kind
+        from its payload rather than trusting a separate argument. """
+    instructions_text = _mft("Scan Root certificate request")
+    invalid_qr_type_message = _mft("Expected a Root certificate request QR (BBQr, from the coordinator)")
+
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "sevenf"):
+            return
+
+
+    @property
+    def is_valid_qr_type(self):
+        return self.decoder.is_sevenf_bbqr
+
+
+    def _handle_complete_scan(self):
+        data = self.decoder.get_sevenf_bbqr_data()
+
+        try:
+            req = cert_request.parse_cert_request_json(data)
+        except CertRequestError as e:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't parse this as a certificate request: {}").format(e)))
+
+        if req.role != cert_request.ROLE_ROOT:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Expected a Root self-certification request, got a {} request.").format(req.role)))
+
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, req.kind)
+        if not cert_request.subject_matches(req, keys.root_ca.public_key):
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                headline=_("Wrong Key"),
+                reason=_("This request is for a different Root's key. This seed's own Root CA key for "
+                         "{} does not match the subject key in the scanned request.").format(req.kind.name.lower()),
+            ))
+
+        try:
+            tbs_bytes = cert_request.root_tbs_from_request(req)
+        except CertRequestError as e:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't rebuild the certificate body: {}").format(e)))
+
+        return Destination(
+            SevenFCertRequestReviewFieldView,
+            view_args=dict(
+                review_fields=cert_request.review_fields(req),
+                page_title=_("Review Root Certificate"),
+                confirmed_destination=SevenFConfirmSignRootCertView,
+                confirmed_view_args=dict(
+                    seed=self.seed,
+                    chain_kind=req.kind,
+                    tbs_bytes=tbs_bytes,
+                ),
+            ),
+            skip_current_view=True,
+        )
+
+
+
 class SevenFUnsupportedArtefactView(View):
     """ Same role as evm_views.EvmUnsupportedSignRequestView -- a scanned
         artefact that claims to be a 7F ceremony payload but doesn't
-        actually parse as one. """
-    def __init__(self, reason: str):
+        actually parse as one, or (via the optional `headline` override)
+        parses fine but must still be refused for a different reason --
+        e.g. a well-formed CertRequest whose subject_vk doesn't match this
+        device's own derived key (the fail-closed refusal an adversarial
+        security review required: "This request is for Root X, and this
+        database holds Root Y", mirroring sf-root.rs's own hard refusal).
+        `headline` defaults to the original "Can't Parse This" wording so
+        every existing call site is unaffected. """
+    def __init__(self, reason: str, headline: str = None):
         super().__init__()
         self.reason = reason
+        self.headline = headline if headline is not None else _("Can't Parse This")
 
 
     def run(self):
@@ -148,7 +236,7 @@ class SevenFUnsupportedArtefactView(View):
             title=_("Unsupported Artefact"),
             show_back_button=False,
             status_icon_name=SeedSignerIconConstants.ERROR,
-            status_headline=_("Can't Parse This"),
+            status_headline=self.headline,
             text=self.reason,
             button_data=[ButtonOption("OK")],
         )
@@ -379,6 +467,82 @@ class SevenFGenesisSignedView(View):
             show_back_button=False,
             status_headline=_("Success!"),
             text=_("The genesis-config has been signed with the Root CA key."),
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(SevenFExportView)
+
+
+
+class SevenFConfirmSignRootCertView(View):
+    """ Final review step for Root self-certification: confirms which chain
+        and which Root CA address the signature will be attributed to (same
+        confirmation content and same SevenFConfirmSignScreen as genesis
+        signing -- confirming WHICH key signs is identical regardless of
+        WHAT artefact it signs), then performs the actual signing. This is
+        the ONLY caller permitted to pass confirmed=True for this flow, same
+        contract as SevenFConfirmSignView.
+
+        Reuses root_ceremony.sign_with_root_ca() unmodified -- it already
+        signs an arbitrary `message`, so signing a CertRequest's TBS bytes
+        needs no new signing primitive, only a new caller. Writes into
+        controller.sevenf_ceremony_data on success so the existing, already-
+        shipped SevenFExportView/SevenFExportPubkeyQRView/
+        SevenFExportSignedConfigQRView can export the result unmodified --
+        those views read only data["public_key"]/data["signature"], and the
+        RootSig{signer_vk, sig} export shape is the same for a root-cert
+        signature as for a genesis-config one (D11: signature-only, no
+        header). No new export view needed. """
+    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes):
+        super().__init__()
+        self.seed = seed
+        self.chain_kind = chain_kind
+        self.tbs_bytes = tbs_bytes
+
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
+        self.root_ca_address = keys.root_ca.address
+
+
+    def run(self):
+        from seedsigner.gui.screens.sevenf_screens import SevenFConfirmSignScreen
+        selected_menu_num = self.run_screen(
+            SevenFConfirmSignScreen,
+            chain_kind_name=self.chain_kind.name.lower(),
+            address=self.root_ca_address,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        # Operator clicked "Sign" -- the one and only call site allowed to pass
+        # confirmed=True for this flow (root_ceremony.sign_with_root_ca's own docstring).
+        public_key, signature = root_ceremony.sign_with_root_ca(
+            self.seed.seed_bytes,
+            self.chain_kind,
+            self.tbs_bytes,
+            confirmed=True,
+        )
+        self.controller.sevenf_ceremony_data = dict(public_key=public_key, signature=signature)
+        return Destination(SevenFRootCertSignedView)
+
+
+
+class SevenFRootCertSignedView(View):
+    """ Success confirmation for Root self-certification, then on to the
+        same export menu genesis-config signing already uses (see
+        SevenFConfirmSignRootCertView's own docstring for why no new export
+        view is needed). Mirrors SevenFGenesisSignedView exactly, kept as
+        its own small class rather than parameterizing that one -- the two
+        are about different artefacts and giving SevenFGenesisSignedView a
+        title/text override would make its name (and its one existing,
+        hardware-tested call site) misleading for no real code savings. """
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonOption, LargeIconStatusScreen
+        self.run_screen(
+            LargeIconStatusScreen,
+            title=_("Root Certificate Signed"),
+            show_back_button=False,
+            status_headline=_("Success!"),
+            text=_("This Root's own certificate has been signed and is ready to export."),
             button_data=[ButtonOption("OK")],
         )
         return Destination(SevenFExportView)
