@@ -13,7 +13,8 @@ from seedsigner.gui.screens import (RET_CODE__BACK_BUTTON, ButtonListScreen,
 from seedsigner.gui.screens.screen import ButtonOption, ButtonOptionWithoutTranslation
 from seedsigner.models.encode_qr import CompactSeedQrEncoder, GenericStaticQrEncoder, SeedQrEncoder, SpecterLegacyXPubQrEncoder, StaticXpubQrEncoder, UrXpubQrEncoder
 from seedsigner.models.qr_type import QRType
-from seedsigner.models.seed import Seed
+from seedsigner.models.seed import ElectrumSeed, Seed
+from seedsigner.models.seed_storage import PendingSeedFingerprintMismatchError
 from seedsigner.models.settings import Settings, SettingsConstants
 from seedsigner.models.settings_definition import SettingsDefinition
 from seedsigner.models.threads import BaseThread, ThreadsafeCounter
@@ -168,8 +169,11 @@ class LoadSeedView(View):
     TYPE_24WORD = ButtonOption("Enter 24-word seed", FontAwesomeIconConstants.KEYBOARD)
     TYPE_ELECTRUM = ButtonOption("Enter Electrum seed", FontAwesomeIconConstants.KEYBOARD)
     CREATE = ButtonOption("Create a seed", SeedSignerIconConstants.PLUS)
+    RESTORE_FROM_SD = ButtonOption("Restore from encrypted backup")
+    DELETE_BACKUP = ButtonOption("Delete encrypted backup", button_label_color="red")
 
     def run(self):
+        from seedsigner.models import seed_backup
         button_data = [self.SEED_QR]
 
         # 7F ceremony seeds are always 24-word BIP-39 (Patrick's requirements doc,
@@ -189,6 +193,13 @@ class LoadSeedView(View):
 
         button_data.append(self.CREATE)
 
+        # Chain-agnostic (same Gate-1 decision as SeedBackupView's own
+        # BACKUP_TO_SD button): only shown when a backup actually exists on
+        # the card, so there's nothing to offer restoring/deleting otherwise.
+        if seed_backup.backup_exists():
+            button_data.append(self.RESTORE_FROM_SD)
+            button_data.append(self.DELETE_BACKUP)
+
         selected_menu_num = self.run_screen(
             ButtonListScreen,
             title=_("Load a Seed"),
@@ -198,11 +209,11 @@ class LoadSeedView(View):
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
-        
+
         if button_data[selected_menu_num] == self.SEED_QR:
             from .scan_views import ScanSeedQRView
             return Destination(ScanSeedQRView)
-        
+
         elif button_data[selected_menu_num] == self.TYPE_12WORD:
             self.controller.storage.init_pending_mnemonic(num_words=12)
             return Destination(SeedMnemonicEntryView)
@@ -217,6 +228,12 @@ class LoadSeedView(View):
         elif button_data[selected_menu_num] == self.CREATE:
             from .tools_views import ToolsMenuView
             return Destination(ToolsMenuView)
+
+        elif button_data[selected_menu_num] == self.RESTORE_FROM_SD:
+            return Destination(SeedRestoreFromSDEnterPasswordView)
+
+        elif button_data[selected_menu_num] == self.DELETE_BACKUP:
+            return Destination(SeedDeleteBackupConfirmView)
 
 
 
@@ -348,7 +365,10 @@ class SeedFinalizeView(View):
         )
 
         if button_data[selected_menu_num] == self.FINALIZE:
-            seed = self.controller.storage.finalize_pending_seed()
+            try:
+                seed = self.controller.storage.finalize_pending_seed()
+            except PendingSeedFingerprintMismatchError:
+                return Destination(SeedRestoreFingerprintMismatchView)
             return Destination(SeedOptionsView, view_args={"seed": seed}, clear_history=True)
 
         elif button_data[selected_menu_num] == self.PASSPHRASE:
@@ -462,7 +482,10 @@ class SeedReviewPassphraseView(View):
             return Destination(SeedAddPassphraseView)
         
         elif button_data[selected_menu_num] == self.DONE:
-            seed = self.controller.storage.finalize_pending_seed()
+            try:
+                seed = self.controller.storage.finalize_pending_seed()
+            except PendingSeedFingerprintMismatchError:
+                return Destination(SeedRestoreFingerprintMismatchView)
             return Destination(SeedOptionsView, view_args={"seed": seed}, clear_history=True)
             
 
@@ -731,17 +754,28 @@ class SeedOptionsView(View):
 class SeedBackupView(View):
     VIEW_WORDS = ButtonOption("View seed words")
     EXPORT_SEEDQR = ButtonOption("Export as SeedQR")
+    BACKUP_TO_SD = ButtonOption("Backup to encrypted file")
 
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
-    
+
 
     def run(self):
         button_data = [self.VIEW_WORDS]
 
         if self.seed.seedqr_supported:
             button_data.append(self.EXPORT_SEEDQR)
+
+        # Chain-agnostic (Gate-1 decision, 2026-09-29, confirmed via
+        # plan-stage differential review): section 5.7 has no chain
+        # qualifier and this menu is already chain-agnostic for every
+        # other option here, unlike the 7F-ceremony-specific buttons
+        # elsewhere in this file. Not offered for ElectrumSeed -- its
+        # derivation can't be reconstructed through this backup format's
+        # plain Seed(mnemonic=...) restore path (models/seed_backup.py).
+        if not isinstance(self.seed, ElectrumSeed):
+            button_data.append(self.BACKUP_TO_SD)
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
@@ -758,6 +792,321 @@ class SeedBackupView(View):
 
         elif button_data[selected_menu_num] == self.EXPORT_SEEDQR:
             return Destination(SeedTranscribeSeedQRFormatView, view_args={"seed": self.seed})
+
+        elif button_data[selected_menu_num] == self.BACKUP_TO_SD:
+            return Destination(SeedBackupToSDConfirmView, view_args={"seed": self.seed})
+
+
+
+class SeedBackupToSDConfirmView(View):
+    """ No-blind-persist confirmation before writing this seed's full
+        mnemonic, encrypted, to microSD -- this device's first persistence
+        of a full, undived master seed (every prior export in this
+        codebase is a public key, a signature, or a one-way-derived leaf
+        seed -- see models/sevenf/deputy_ca_export.py's own docstring for
+        that distinction). Mirrors sevenf_views.py's
+        SevenFConfirmDeputySeedExportView DireWarningScreen pattern for an
+        analogous, if lower-stakes, secret export. """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+
+    def run(self):
+        from seedsigner.hardware.microsd import MicroSD
+        from seedsigner.models import seed_backup
+
+        if not MicroSD.get_instance().is_inserted:
+            self.run_screen(
+                WarningScreen,
+                title=_("No SD Card"),
+                status_headline=None,
+                text=_("Insert a microSD card to back up your seed."),
+                show_back_button=False,
+                button_data=[ButtonOption("OK")],
+            )
+            return Destination(BackStackView)
+
+        text = _("This will write your full seed, encrypted, to the microSD card.")
+        if seed_backup.backup_exists():
+            text += " " + _("An existing backup on this card will be replaced.")
+
+        selected_menu_num = self.run_screen(
+            DireWarningScreen,
+            title=_("Backup to SD"),
+            status_headline=_("Persisting Secret Material"),
+            text=text,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        return Destination(SeedBackupEnterPasswordView, view_args=dict(seed=self.seed))
+
+
+
+class SeedBackupEnterPasswordView(View):
+    """ Collects the backup password, confirmed by a second entry (a cheap,
+        Argon2-free string comparison to catch a typo before the ~4s
+        encrypt call), then performs the write INLINE in this same view --
+        the password never crosses a view_args hop to a separate view.
+        (An earlier draft of this plan held the password on the Controller
+        between steps; execution-stage adversarial review found that would
+        have logged it via Destination.__repr__'s INFO-level back_stack
+        logging and left it re-executable via the BACK button -- ARCH2-001.) """
+    def __init__(self, seed: Seed, first_password: str = None):
+        super().__init__()
+        self.seed = seed
+        self.first_password = first_password
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import LoadingScreenThread
+        from seedsigner.gui.screens.seed_screens import SeedBackupPasswordScreen
+        from seedsigner.models import seed_backup
+
+        is_confirm_step = self.first_password is not None
+        ret_dict = self.run_screen(
+            SeedBackupPasswordScreen,
+            title=_("Confirm Password") if is_confirm_step else _("Backup Password"),
+        )
+        if "is_back_button" in ret_dict:
+            if is_confirm_step:
+                # Back out of the confirm step to re-enter fresh, not all the way out.
+                return Destination(SeedBackupEnterPasswordView, view_args=dict(seed=self.seed))
+            return Destination(BackStackView)
+
+        password = ret_dict.get("passphrase", "")
+
+        if not is_confirm_step:
+            if not password and not self._confirm_empty_password_ok():
+                return Destination(SeedBackupEnterPasswordView, view_args=dict(seed=self.seed))
+            return Destination(SeedBackupEnterPasswordView, view_args=dict(seed=self.seed, first_password=password))
+
+        if password != self.first_password:
+            self._show_message(_("Try Again"), _("Passwords didn't match. Try again."))
+            return Destination(SeedBackupEnterPasswordView, view_args=dict(seed=self.seed))
+
+        if seed_backup.password_reuses_seed_words(password, self.seed):
+            self._show_message(_("Try Again"), _("This password reuses part of your seed phrase. Choose an independent password."))
+            return Destination(SeedBackupEnterPasswordView, view_args=dict(seed=self.seed))
+
+        loading_screen = LoadingScreenThread(text=_("Encrypting and writing..."))
+        loading_screen.start()
+        try:
+            seed_backup.write_backup(self.seed, password)
+            write_failed = False
+        except (seed_backup.SeedBackupError, OSError):
+            write_failed = True
+        finally:
+            loading_screen.stop()
+
+        if write_failed:
+            self._show_message(_("Backup Failed"), _("Couldn't write the backup. The card may be missing, full, or write-protected."))
+            return Destination(SeedOptionsView, view_args=dict(seed=self.seed), skip_current_view=True)
+
+        return Destination(SeedBackupWrittenView, view_args=dict(seed=self.seed), skip_current_view=True)
+
+
+    def _confirm_empty_password_ok(self) -> bool:
+        # R5a forbids enforcing length/composition -- this is friction, not
+        # a block, matching KeePassXC's own resolved design for the same
+        # tension (a hard minimum drew public criticism; a non-blocking
+        # warning with an explicit override was the fix that stuck).
+        selected_menu_num = self.run_screen(
+            WarningScreen,
+            title=_("No Password"),
+            status_headline=_("No Protection"),
+            text=_("An empty password gives NO protection -- anyone with this card can read your seed."),
+            show_back_button=False,
+            button_data=[ButtonOption("Use empty password"), ButtonOption("Go back")],
+        )
+        return selected_menu_num == 0
+
+
+    def _show_message(self, title: str, text: str):
+        self.run_screen(
+            WarningScreen,
+            title=title,
+            status_headline=None,
+            text=text,
+            show_back_button=False,
+            button_data=[ButtonOption("OK")],
+        )
+
+
+
+class SeedBackupWrittenView(View):
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import LargeIconStatusScreen
+        self.run_screen(
+            LargeIconStatusScreen,
+            title=_("Backup Written"),
+            show_back_button=False,
+            status_headline=_("Success!"),
+            text=_("Your seed has been encrypted and written to the microSD card."),
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(SeedOptionsView, view_args=dict(seed=self.seed), skip_current_view=True)
+
+
+
+class SeedDeleteBackupConfirmView(View):
+    """ Reachable from LoadSeedView, not from any per-seed menu (ARCH2-004):
+        the backup file isn't tied to whichever seed happens to be loaded
+        right now -- it's a single file on the card that may hold a
+        DIFFERENT seed than the one currently in memory. """
+    KEEP = ButtonOption("Keep backup")
+    DELETE = ButtonOption("Delete", button_label_color="red")
+
+    def run(self):
+        button_data = [self.KEEP, self.DELETE]
+        selected_menu_num = self.run_screen(
+            WarningScreen,
+            title=_("Delete Backup?"),
+            status_headline=None,
+            text=_("This permanently deletes the encrypted seed backup on this microSD card. This cannot be undone."),
+            button_data=button_data,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON or button_data[selected_menu_num] == self.KEEP:
+            return Destination(BackStackView)
+
+        from seedsigner.gui.screens.screen import LargeIconStatusScreen
+        from seedsigner.models import seed_backup
+        seed_backup.delete_backup()
+        self.run_screen(
+            LargeIconStatusScreen,
+            title=_("Backup Deleted"),
+            show_back_button=False,
+            status_headline=_("Success!"),
+            text=_("The encrypted backup has been removed from the microSD card."),
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(LoadSeedView, skip_current_view=True)
+
+
+
+class SeedRestoreFromSDEnterPasswordView(View):
+    def run(self):
+        from seedsigner.gui.screens.screen import LoadingScreenThread
+        from seedsigner.gui.screens.seed_screens import SeedBackupPasswordScreen
+        from seedsigner.models import seed_backup
+
+        ret_dict = self.run_screen(SeedBackupPasswordScreen, title=_("Restore Password"))
+        if "is_back_button" in ret_dict:
+            return Destination(BackStackView)
+        password = ret_dict.get("passphrase", "")
+
+        loading_screen = LoadingScreenThread(text=_("Decrypting..."))
+        loading_screen.start()
+        try:
+            restored = seed_backup.read_backup(password)
+            error = None
+        except seed_backup.SeedBackupNotFoundError:
+            restored = None
+            error = _("No backup found on this microSD card.")
+        except (seed_backup.SeedBackupDecryptError, seed_backup.SeedBackupFormatError, OSError):
+            # Deliberately one generic message for both -- wrong password
+            # and a corrupted/tampered file are indistinguishable by
+            # design (same doctrine as encrypted_blob.py).
+            restored = None
+            error = _("Couldn't restore: wrong password or corrupted file.")
+        finally:
+            loading_screen.stop()
+
+        if error:
+            self.run_screen(
+                WarningScreen,
+                title=_("Restore Failed"),
+                status_headline=None,
+                text=error,
+                show_back_button=False,
+                button_data=[ButtonOption("OK")],
+            )
+            return Destination(SeedRestoreFromSDEnterPasswordView, skip_current_view=True)
+
+        # Matches this codebase's own convention: every other load path
+        # (scan, manual entry) silently replaces any prior pending state
+        # rather than asking first (ARCH2-008, YAGNI).
+        self.controller.storage.clear_pending_seed()
+        self.controller.storage.discard_pending_mnemonic()
+
+        if restored.passphrase_required:
+            self.controller.storage.set_pending_seed(restored.seed, expected_fingerprint=restored.expected_fingerprint)
+            if self.settings.get_value(SettingsConstants.SETTING__PASSPHRASE) == SettingsConstants.OPTION__DISABLED:
+                # This backup needs a passphrase regardless of the local
+                # setting -- the backup never stores the passphrase itself,
+                # only a commitment to what the fingerprint should become
+                # once it's re-entered, so there's no way to restore the
+                # right seed without asking (SEC2-002/DIFF2-002).
+                return Destination(SeedRestorePassphraseRequiredNoticeView, skip_current_view=True)
+            return Destination(SeedAddPassphraseView, skip_current_view=True)
+        else:
+            self.controller.storage.set_pending_seed(restored.seed)
+            if self.settings.get_value(SettingsConstants.SETTING__PASSPHRASE) == SettingsConstants.OPTION__REQUIRED:
+                # Matches scan_views.py's own existing SeedQR-scan precedent.
+                return Destination(SeedAddPassphraseView, skip_current_view=True)
+            return Destination(SeedFinalizeView, skip_current_view=True)
+
+
+
+class SeedRestorePassphraseRequiredNoticeView(View):
+    """ Shown only when the backup requires a passphrase but the device's
+        own SETTING__PASSPHRASE is DISABLED -- an explicit, visible
+        interruption rather than silently presenting the passphrase-entry
+        screen as if nothing were unusual (a fleet that disabled
+        passphrase entry deliberately should see why it's being asked for
+        here, not have that policy silently overridden without comment). """
+    def run(self):
+        selected_menu_num = self.run_screen(
+            WarningScreen,
+            title=_("Passphrase Required"),
+            status_headline=None,
+            text=_("This backup was made with a passphrase, which this device's settings currently disable. "
+                   "You must enter it to restore the correct seed."),
+            show_back_button=False,
+            button_data=[ButtonOption("Continue"), ButtonOption("Cancel")],
+        )
+        if selected_menu_num == 0:
+            return Destination(SeedAddPassphraseView, skip_current_view=True)
+
+        self.controller.storage.clear_pending_seed()
+        return Destination(LoadSeedView, skip_current_view=True)
+
+
+
+class SeedRestoreFingerprintMismatchView(View):
+    """ Reached only via SeedStorage.finalize_pending_seed() raising
+        PendingSeedFingerprintMismatchError (models/seed_storage.py) --
+        the fail-closed enforcement that a restored seed's effective
+        fingerprint (passphrase applied) must match what the backup
+        recorded, catching a wrong or skipped passphrase before the wrong
+        wallet is ever presented as valid. """
+    EDIT = ButtonOption("Edit passphrase")
+    DISCARD = ButtonOption("Discard restore", button_label_color="red")
+
+    def run(self):
+        button_data = [self.EDIT, self.DISCARD]
+        selected_menu_num = self.run_screen(
+            WarningScreen,
+            title=_("Doesn't Match"),
+            status_headline=_("Wrong Passphrase?"),
+            text=_("The restored seed doesn't match this backup. Check the passphrase and try again."),
+            show_back_button=False,
+            button_data=button_data,
+        )
+
+        if button_data[selected_menu_num] == self.EDIT:
+            return Destination(SeedAddPassphraseView)
+
+        self.controller.storage.clear_pending_seed()
+        return Destination(LoadSeedView, clear_history=True)
 
 
 

@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from typing import List
 
 from seedsigner.hardware.buttons import HardwareButtons, HardwareButtonsConstants
+from seedsigner.helpers.l10n import mark_for_translation as _mft
 from seedsigner.helpers.qr import QR
 from seedsigner.gui.components import (Button, FontAwesomeIconConstants, Fonts, FormattedAddress, IconButton,
     IconTextLine, SeedSignerIconConstants, TextArea, GUIConstants, reflow_text_into_pages)
@@ -648,6 +649,7 @@ class SeedExportXpubDetailsScreen(WarningEdgesMixin, ButtonListScreen):
 
 @dataclass
 class SeedAddPassphraseScreen(BaseTopNavScreen):
+    title: str = _mft("BIP-39 Passphrase")
     passphrase: str = ""
 
     # Only used by the screenshot generator
@@ -661,7 +663,14 @@ class SeedAddPassphraseScreen(BaseTopNavScreen):
 
 
     def __post_init__(self):
-        self.title = _("BIP-39 Passphrase")
+        # NOTE: title is now a real dataclass field (see above), not
+        # force-overwritten here -- previously this line unconditionally
+        # discarded whatever title a caller passed in (e.g.
+        # SeedAddPassphraseView already passes title=self.seed.passphrase_label,
+        # silently dropped -- Electrum's "Custom Extension" label never
+        # actually showed). Found while reusing this screen for the
+        # encrypted seed-file backup's own password-entry screens, which
+        # need their own titles (ARCH2-006/ARCH2-009).
         super().__post_init__()
 
         keys_lower = "abcdefghijklmnopqrstuvwxyz"
@@ -1046,6 +1055,21 @@ class SeedAddPassphraseScreen(BaseTopNavScreen):
                     self.hw_button2.render()
 
                 self.renderer.show_image()
+
+
+
+@dataclass
+class SeedBackupPasswordScreen(SeedAddPassphraseScreen):
+    """ Password entry for the encrypted seed-file backup (requirements doc
+        section 5.7) -- NOT a BIP-39 passphrase. Reuses
+        SeedAddPassphraseScreen's full alphanumeric keyboard entry
+        unmodified (arbitrary length, no PIN pad, matching R5a's "no
+        enforced length or composition"), under its own title. Callers
+        must never pre-fill `passphrase` from a seed's own BIP-39
+        passphrase (ARCH2-007) -- the two are different secrets with
+        different sensitivity, and this screen's `passphrase` field name
+        is inherited, not a hint that they're interchangeable. """
+    title: str = _mft("Backup Password")
 
 
 
