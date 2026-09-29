@@ -103,6 +103,7 @@ rlp==5.0.0 \
 # ur_types.py's BIP-32 path <-> Keypath conversion) beyond the fixed reference
 # vectors above. Never shipped on-device.
 hypothesis==6.168.0 \
+    --hash=sha256:489d5c060f49f495b64215cae627c71730cffd5ef59dc4d7f431932e6e6d2e67 \
     --hash=sha256:5920d267f7d8cfd376672f2bde5905cdf284d47519582e41ce7c142d48ee46c4
 
 # Transitive dependencies of eth-account/eth-keys/rlp/hypothesis above, test-only,
