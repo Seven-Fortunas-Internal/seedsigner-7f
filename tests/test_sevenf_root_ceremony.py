@@ -16,6 +16,7 @@ from seedsigner.models.sevenf.constants import ChainKind, MASTER_SEED_LEN
 from seedsigner.models.sevenf.root_ceremony import (
     SigningNotConfirmedError,
     derive_root_ceremony_keys,
+    sign_with_devfund,
     sign_with_root_ca,
 )
 
@@ -136,3 +137,38 @@ def test_sign_with_root_ca_requires_confirmed_as_keyword():
         sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, True)  # positional -- must fail
     with pytest.raises(TypeError):
         sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message)  # omitted entirely -- must fail
+
+
+def test_sign_with_devfund_produces_a_verifiable_signature_shape():
+    message = b"devfund-config canonical bytes for testnet"
+    pk, sig = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True)
+
+    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
+    assert pk == keys.devfund.public_key, "sign_with_devfund must use the same key derive_root_ceremony_keys does"
+    assert len(sig) == 3309
+
+
+def test_sign_with_devfund_uses_a_different_key_than_sign_with_root_ca():
+    """ The exact risk this function's own docstring names: using the
+        wrong derived key would silently produce a signature under the
+        wrong identity with no error at signing time. Confirms the two
+        signing functions actually derive from different paths, not just
+        that each is internally self-consistent. """
+    message = b"same message, different intended signer"
+    root_pk, _ = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True)
+    devfund_pk, _ = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True)
+    assert root_pk != devfund_pk
+
+
+def test_sign_with_devfund_refuses_without_confirmation():
+    message = b"devfund-config canonical bytes for testnet"
+    with pytest.raises(SigningNotConfirmedError):
+        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=False)
+
+
+def test_sign_with_devfund_requires_confirmed_as_keyword():
+    message = b"devfund-config canonical bytes for testnet"
+    with pytest.raises(TypeError):
+        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, True)  # positional -- must fail
+    with pytest.raises(TypeError):
+        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message)  # omitted entirely -- must fail

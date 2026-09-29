@@ -1358,3 +1358,171 @@ class TestSevenFDeputySeedExportFlow(FlowTest):
 
         from seedsigner.views.view import BackStackView
         assert destination.View_cls == BackStackView
+
+
+
+def _sample_devfund_canonical_bytes() -> bytes:
+    from seedsigner.models.sevenf.devfund_config import build_canonical_bytes as build_devfund_canonical_bytes
+    return build_devfund_canonical_bytes(ChainKind.TESTNET, "t1devfundexampleaddress", 12_345, 1_790_555_198)
+
+
+class TestSevenFDevFundConfigSigningFlow(FlowTest):
+    """ Mirrors TestSevenFGenesisReviewFlow's own shape exactly: scan ->
+        no-blind-signing review -> confirm+sign -> export -> Home. Simpler
+        than genesis: only one export artifact (the signature), no
+        export-menu loop. """
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "sevenf"
+
+
+    def seed_fixture(self) -> Seed:
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+        return seed
+
+
+    def test_seed_options_view_offers_the_devfund_button_only_in_sevenf_mode(self):
+        seed = self.seed_fixture()
+        for active_chain_id, should_appear in [("sevenf", True), ("bitcoin", False), ("evm", False), (None, False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.SeedOptionsView(seed=seed)
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+            is_present = seed_views.SeedOptionsView.SEVENF_SCAN_DEVFUND_CONFIG in captured["button_data"]
+            assert is_present == should_appear, f"active_chain_id={active_chain_id!r}: expected present={should_appear}, got {is_present}"
+
+
+    def test_seed_options_view_routes_to_scan_devfund_config_view(self):
+        seed = self.seed_fixture()
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEVFUND_CONFIG),
+                FlowStep(sevenf_views.SevenFScanDevFundConfigView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_full_flow_with_real_devfund_key_signs_and_exports(self):
+        """ End-to-end from a real BBQr-encoded devfund-config, through
+            scan -> review (4 fields) -> confirm+sign -> signed -> export
+            -> Home. Confirms the real public_key/signature match a direct
+            derive_root_ceremony_keys()/sign_with_devfund() call -- not a
+            placeholder, and specifically the DEVFUND key, not the Root CA
+            key (the exact confusion risk this flow's own view docstrings
+            flag). """
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_devfund_canonical_bytes()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+
+        captured = {}
+
+        def capture_before_home(view):
+            captured["public_key"] = self.controller.sevenf_ceremony_data["public_key"]
+            captured["signature"] = self.controller.sevenf_ceremony_data["signature"]
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEVFUND_CONFIG),
+                FlowStep(
+                    sevenf_views.SevenFScanDevFundConfigView,
+                    before_run=_load_genesis_config_into_decoder(canonical_bytes),
+                    screen_return_value=0,
+                ),
+                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Network
+                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Devfund address
+                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Effective block
+                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Timestamp (final)
+                FlowStep(sevenf_views.SevenFConfirmSignDevFundView, screen_return_value=0),  # "Sign"
+                FlowStep(sevenf_views.SevenFDevFundConfigSignedView, before_run=capture_before_home, screen_return_value=0),  # "OK"
+                FlowStep(sevenf_views.SevenFExportSignedDevFundConfigQRView, screen_return_value=0),
+                FlowStep(MainMenuView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+        assert captured["public_key"] == keys.devfund.public_key
+        assert captured["public_key"] != keys.root_ca.public_key
+        assert len(captured["signature"]) == 3309
+
+        # Home always wipes flow-scoped state.
+        assert self.controller.sevenf_ceremony_data is None
+
+
+    def test_signed_result_matches_direct_sign_with_devfund_call(self):
+        """ Unit-level cross-check: SevenFConfirmSignDevFundView's output
+            must match a direct devfund_config.parse_canonical_bytes() +
+            sign_with_devfund() call over the same bytes. """
+        from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
+        from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
+
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_devfund_canonical_bytes()
+        fields = parse_devfund_canonical_bytes(canonical_bytes)
+
+        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 0)
+            destination = view.run()
+
+        assert destination.View_cls == sevenf_views.SevenFDevFundConfigSignedView
+        data = self.controller.sevenf_ceremony_data
+        keys = derive_root_ceremony_keys(seed.seed_bytes, fields.network)
+        expected_pk, expected_sig = sign_with_devfund(seed.seed_bytes, fields.network, canonical_bytes, confirmed=True)
+        assert data["public_key"] == keys.devfund.public_key == expected_pk
+        assert len(data["signature"]) == len(expected_sig) == 3309
+
+
+    def test_scan_rejects_a_payload_that_isnt_valid_devfund_config(self):
+        seed = self.seed_fixture()
+        garbage = b"not a devfund config at all, but still valid BBQr transport bytes"
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEVFUND_CONFIG),
+                FlowStep(
+                    sevenf_views.SevenFScanDevFundConfigView,
+                    before_run=_load_genesis_config_into_decoder(garbage),
+                    screen_return_value=0,
+                ),
+                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_back_button_on_confirm_sign_screen_returns_to_back_stack_without_signing(self):
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_devfund_canonical_bytes()
+        from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
+        fields = parse_devfund_canonical_bytes(canonical_bytes)
+
+        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
+            destination = view.run()
+
+        from seedsigner.views.view import BackStackView
+        assert destination.View_cls == BackStackView
+        assert self.controller.sevenf_ceremony_data is None
+
+
+    def test_confirm_sign_view_shows_the_real_devfund_address_not_root_ca(self):
+        from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
+
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_devfund_canonical_bytes()
+        fields = parse_devfund_canonical_bytes(canonical_bytes)
+
+        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        assert view.devfund_address == keys.devfund.address
+        assert view.devfund_address != keys.root_ca.address

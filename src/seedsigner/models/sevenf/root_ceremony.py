@@ -106,3 +106,36 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         ML_DSA_LEAF_ROLE,
         message,
     )
+
+
+def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool) -> tuple[bytes, bytes]:
+    """ Sign `message` with the devfund key for `chain_kind` -- the
+        devfund-config twin of sign_with_root_ca() above, same enforced
+        review-before-sign gate and same rationale (see that function's own
+        docstring; not repeated here). The ONLY difference is which
+        derived key signs: devfund_purpose_path, not root_ca_purpose_path --
+        the two keys are derived from different paths off the same seed
+        (root_ceremony.derive_root_ceremony_keys() already derives both),
+        so using the wrong one here would silently produce a signature
+        under the wrong identity with no error at signing time. Callers
+        must be as careful about which of these two functions they call as
+        they are about the `confirmed` gate itself.
+
+        `confirmed` is REQUIRED (keyword-only, no default) and must be
+        `True`. views.sevenf_views.SevenFConfirmSignDevFundView is the only
+        intended caller allowed to pass confirmed=True, after the operator
+        has approved every field in devfund_config.review_fields(), paged
+        by the same SevenFCertRequestReviewFieldView this codebase already
+        reuses for every other artefact type. """
+    if not confirmed:
+        raise SigningNotConfirmedError(
+            "sign_with_devfund refuses to sign without confirmed=True -- "
+            "only the review screen may set this, after the operator has "
+            "approved every displayed field."
+        )
+    return mldsa.derive_and_sign(
+        seed_bytes,
+        devfund_purpose_path(chain_kind),
+        ML_DSA_LEAF_ROLE,
+        message,
+    )
