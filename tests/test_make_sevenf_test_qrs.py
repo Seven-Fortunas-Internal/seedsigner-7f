@@ -5,11 +5,32 @@
     cert_request), so a change to either side of the encode/decode pair -- or a
     mistake in the tool's own payload construction -- fails a test instead of
     silently producing an artifact that only looks right.
+
+    Requires firmware/mldsa7f's compiled library (same as tests/test_sevenf_mldsa.py
+    and friends) -- skips cleanly if it's missing rather than failing the suite.
 """
 import importlib.util
 import os
 
+import pytest
+
+from seedsigner.models.sevenf import mldsa
+
 TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "tools")
+
+
+def _lib_available() -> bool:
+    try:
+        mldsa._lib_handle()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _lib_available(),
+    reason="firmware/mldsa7f not built -- run `cargo build --release` in firmware/mldsa7f/ first",
+)
 
 
 def _load_tool_module():
