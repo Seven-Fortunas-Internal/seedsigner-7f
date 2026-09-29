@@ -612,6 +612,275 @@ class TestSevenFUnsupportedArtefactViewHeadline:
         assert view.headline == "Wrong Key"
 
 
+class TestSevenFDeputyCrossCertificationFlow(FlowTest):
+    """ The Deputy cross-certification flow (7f-signing-support-deputy-cross-certification):
+        SeedOptionsView's "7F: Cross-Certify Deputy" button ->
+        SevenFScanRootRequestForDeputyView (re-scan the Root's own request) ->
+        SevenFScanDeputyCertRequestView (scan the Deputy's request) ->
+        SevenFCertRequestReviewFieldView (12 fields: Root's own identity,
+        then the Deputy's) -> SevenFConfirmSignRootCertView ->
+        SevenFRootCertSignedView (Deputy-specific wording) -> SevenFExportView. """
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "sevenf"
+
+
+    def seed_fixture(self) -> Seed:
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+        return seed
+
+
+    def test_seed_options_view_offers_the_cross_certify_button_only_in_sevenf_mode(self):
+        seed = self.seed_fixture()
+        for active_chain_id, should_appear in [("sevenf", True), ("bitcoin", False), ("evm", False), (None, False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.SeedOptionsView(seed=seed)
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+            is_present = seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT in captured["button_data"]
+            assert is_present == should_appear, f"active_chain_id={active_chain_id!r}: expected present={should_appear}, got {is_present}"
+
+
+    def test_seed_options_view_routes_to_scan_root_request_for_deputy_view(self):
+        seed = self.seed_fixture()
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
+                FlowStep(sevenf_views.SevenFScanRootRequestForDeputyView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_full_flow_with_real_matching_keys_signs_and_exports(self):
+        """ End-to-end: scan the Root's own request (matching this seed's
+            real derived key) -> scan a Deputy request for the same chain ->
+            review all 12 fields -> confirm+sign -> Deputy-specific signed
+            screen -> export menu. Confirms the real public_key/signature
+            (the Root's, not the Deputy's -- the Root is always the
+            signer) and the Deputy-specific success wording. """
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        root_req_json = _sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex())
+        deputy_req_json = _sample_cert_request_json(role=ROLE_DEPUTY, subject_vk=(bytes([0xCD]) * 1952).hex(), serial=(bytes([0x22]) * 16).hex())
+
+        captured = {}
+
+        def capture_signed_screen_args(view):
+            captured["title"] = view.title
+            captured["text"] = view.text
+
+        def capture_before_home(view):
+            captured["public_key"] = self.controller.sevenf_ceremony_data["public_key"]
+            captured["signature"] = self.controller.sevenf_ceremony_data["signature"]
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
+                FlowStep(
+                    sevenf_views.SevenFScanRootRequestForDeputyView,
+                    before_run=_load_cert_request_into_decoder(root_req_json),
+                    screen_return_value=0,
+                ),
+                FlowStep(
+                    sevenf_views.SevenFScanDeputyCertRequestView,
+                    before_run=_load_cert_request_into_decoder(deputy_req_json),
+                    screen_return_value=0,
+                ),
+                # 12 review pages: 6 "Issuing Root: ..." fields, then 6 "Deputy: ..." fields.
+                *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(12)],
+                FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
+                FlowStep(
+                    sevenf_views.SevenFRootCertSignedView,
+                    before_run=lambda view: (capture_signed_screen_args(view), capture_before_home(view)),
+                    screen_return_value=0,
+                ),  # "OK"
+                FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
+                FlowStep(MainMenuView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+        assert captured["title"] == "Deputy Certificate Signed"
+        assert "Deputy" in captured["text"]
+        # The signer is the ROOT, not the Deputy -- confirms this cross-certification's
+        # signature is attributed to the Root key, never the Deputy's own.
+        assert captured["public_key"] == keys.root_ca.public_key
+        assert len(captured["signature"]) == 3309
+
+        assert self.controller.sevenf_ceremony_data is None  # Home always wipes flow-scoped state
+
+
+    def test_signed_tbs_matches_direct_deputy_tbs_from_request_call(self):
+        """ Unit-level cross-check: the TBS bytes SevenFScanDeputyCertRequestView
+            builds must match a direct cert_request.deputy_tbs_from_request()
+            call over the same two requests -- confirms this isn't a
+            placeholder or a different TBS construction. """
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        root_req = cert_request_module.parse_cert_request_json(_sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex()))
+        deputy_req_json = _sample_cert_request_json(role=ROLE_DEPUTY, subject_vk=(bytes([0xCD]) * 1952).hex(), serial=(bytes([0x22]) * 16).hex())
+        deputy_req = cert_request_module.parse_cert_request_json(deputy_req_json)
+
+        expected_tbs = cert_request_module.deputy_tbs_from_request(
+            keys.root_ca.public_key, root_req.kind, root_req.not_before, root_req.days, deputy_req,
+        )
+
+        class _FakeDecoder:
+            def get_sevenf_bbqr_data(self):
+                return deputy_req_json
+
+        view = sevenf_views.SevenFScanDeputyCertRequestView(seed=seed, root_req=root_req, root_ca_pubkey=keys.root_ca.public_key)
+        view.decoder = _FakeDecoder()
+        destination = view._handle_complete_scan()
+        assert destination.view_args["confirmed_view_args"]["tbs_bytes"] == expected_tbs
+
+
+    def test_review_fields_are_labeled_and_ordered_root_then_deputy(self):
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        root_req_json = _sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex())
+        deputy_req_json = _sample_cert_request_json(role=ROLE_DEPUTY, subject_vk=(bytes([0xCD]) * 1952).hex())
+
+        view1 = sevenf_views.SevenFScanRootRequestForDeputyView(seed=seed)
+
+        class _FakeDecoder:
+            def __init__(self, data):
+                self._data = data
+            def get_sevenf_bbqr_data(self):
+                return self._data
+
+        view1.decoder = _FakeDecoder(root_req_json)
+        destination1 = view1._handle_complete_scan()
+
+        view2 = sevenf_views.SevenFScanDeputyCertRequestView(**destination1.view_args)
+        view2.decoder = _FakeDecoder(deputy_req_json)
+        destination2 = view2._handle_complete_scan()
+
+        fields = destination2.view_args["review_fields"]
+        assert len(fields) == 12
+        assert [f.label for f in fields[:6]] == [
+            "Issuing Root: Role", "Issuing Root: Subject key id", "Issuing Root: Chain",
+            "Issuing Root: Valid from", "Issuing Root: Valid for", "Issuing Root: Serial",
+        ]
+        assert [f.label for f in fields[6:]] == [
+            "Deputy: Role", "Deputy: Subject key id", "Deputy: Chain",
+            "Deputy: Valid from", "Deputy: Valid for", "Deputy: Serial",
+        ]
+        assert fields[0].value == "root"
+        assert fields[6].value == "deputy"
+
+
+    def test_scan_1_rejects_a_deputy_request(self):
+        """ SevenFScanRootRequestForDeputyView must refuse a role="deputy"
+            request just like SevenFScanRootCertRequestView does (shared
+            helper) -- the FIRST scan is always the Root's own request. """
+        seed = self.seed_fixture()
+        req_json = _sample_cert_request_json(role=ROLE_DEPUTY, subject_vk=(bytes([0xCD]) * 1952).hex())
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
+                FlowStep(
+                    sevenf_views.SevenFScanRootRequestForDeputyView,
+                    before_run=_load_cert_request_into_decoder(req_json),
+                    screen_return_value=0,
+                ),
+                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_scan_1_fail_closed_refuses_a_different_roots_key(self):
+        seed = self.seed_fixture()
+        wrong_vk = (bytes([0xEE]) * 1952).hex()
+        req_json = _sample_cert_request_json(subject_vk=wrong_vk)
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
+                FlowStep(
+                    sevenf_views.SevenFScanRootRequestForDeputyView,
+                    before_run=_load_cert_request_into_decoder(req_json),
+                    screen_return_value=0,
+                ),
+                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_scan_2_rejects_a_root_request(self):
+        """ SevenFScanDeputyCertRequestView must refuse a role="root"
+            request -- the SECOND scan is always the Deputy's request. """
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+        root_req_parsed = cert_request_module.parse_cert_request_json(_sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex()))
+
+        view = sevenf_views.SevenFScanDeputyCertRequestView(seed=seed, root_req=root_req_parsed, root_ca_pubkey=keys.root_ca.public_key)
+
+        class _FakeDecoder:
+            def get_sevenf_bbqr_data(self):
+                return _sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex())  # role="root" again
+
+        view.decoder = _FakeDecoder()
+        destination = view._handle_complete_scan()
+        assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
+
+
+    def test_scan_2_rejects_a_chain_kind_mismatch(self):
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+        root_req_parsed = cert_request_module.parse_cert_request_json(_sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex()))
+
+        view = sevenf_views.SevenFScanDeputyCertRequestView(seed=seed, root_req=root_req_parsed, root_ca_pubkey=keys.root_ca.public_key)
+
+        class _FakeDecoder:
+            def get_sevenf_bbqr_data(self):
+                return _sample_cert_request_json(role=ROLE_DEPUTY, subject_vk=(bytes([0xCD]) * 1952).hex(), kind="mainnet")
+
+        view.decoder = _FakeDecoder()
+        destination = view._handle_complete_scan()
+        assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
+        assert destination.view_args["headline"] == "Chain Mismatch"
+
+
+    def test_back_button_on_confirm_sign_screen_does_not_sign(self):
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        root_req = cert_request_module.parse_cert_request_json(_sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex()))
+        deputy_req = cert_request_module.parse_cert_request_json(
+            _sample_cert_request_json(role=ROLE_DEPUTY, subject_vk=(bytes([0xCD]) * 1952).hex(), serial=(bytes([0x22]) * 16).hex()))
+        tbs_bytes = cert_request_module.deputy_tbs_from_request(keys.root_ca.public_key, root_req.kind, root_req.not_before, root_req.days, deputy_req)
+
+        view = sevenf_views.SevenFConfirmSignRootCertView(
+            seed=seed, chain_kind=root_req.kind, tbs_bytes=tbs_bytes,
+            signed_view_args=dict(title="Deputy Certificate Signed", text="whatever"),
+        )
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
+            destination = view.run()
+
+        from seedsigner.views.view import BackStackView
+        assert destination.View_cls == BackStackView
+        assert self.controller.sevenf_ceremony_data is None
+
+
 class TestSevenFScanEntryPoint(FlowTest):
     """ The wizard's real entry point: SeedOptionsView's "7F: Sign Genesis
         Config" button -> SevenFScanGenesisConfigView -> (valid payload)
