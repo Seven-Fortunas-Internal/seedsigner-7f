@@ -562,6 +562,7 @@ class SeedOptionsView(View):
     SEVENF_SCAN_GENESIS_CONFIG = ButtonOption("7F: Sign Genesis Config")
     SEVENF_SCAN_ROOT_CERT_REQUEST = ButtonOption("7F: Self-Certify Root")
     SEVENF_SCAN_DEPUTY_CROSS_CERT = ButtonOption("7F: Cross-Certify Deputy")
+    SEVENF_EXPORT_DEPUTY_SEED = ButtonOption("7F: Export Deputy Seed")
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")
@@ -653,6 +654,7 @@ class SeedOptionsView(View):
             button_data.append(self.SEVENF_SCAN_GENESIS_CONFIG)
             button_data.append(self.SEVENF_SCAN_ROOT_CERT_REQUEST)
             button_data.append(self.SEVENF_SCAN_DEPUTY_CROSS_CERT)
+            button_data.append(self.SEVENF_EXPORT_DEPUTY_SEED)
 
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)
@@ -710,6 +712,10 @@ class SeedOptionsView(View):
         elif button_data[selected_menu_num] == self.SEVENF_SCAN_DEPUTY_CROSS_CERT:
             from seedsigner.views.sevenf_views import SevenFScanRootRequestForDeputyView
             return Destination(SevenFScanRootRequestForDeputyView, view_args=dict(seed=self.seed))
+
+        elif button_data[selected_menu_num] == self.SEVENF_EXPORT_DEPUTY_SEED:
+            from seedsigner.views.sevenf_views import SevenFSelectChainKindForDeputyExportView
+            return Destination(SevenFSelectChainKindForDeputyExportView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.BACKUP:
             return Destination(SeedBackupView, view_args=dict(seed=self.seed))

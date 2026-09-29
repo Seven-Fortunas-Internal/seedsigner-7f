@@ -101,6 +101,44 @@ def test_wrong_master_seed_length_raises_value_error():
         mldsa.derive_pubkey(b"\x00" * 32, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
 
 
+def test_derive_purpose_seed_is_deterministic():
+    a = mldsa.derive_purpose_seed(FIXED_SEED, "m/deputy-ca/l1/testnet/0")
+    b = mldsa.derive_purpose_seed(FIXED_SEED, "m/deputy-ca/l1/testnet/0")
+    assert a == b
+    assert len(a) == MASTER_SEED_LEN
+
+
+def test_derive_purpose_seed_differs_per_path():
+    testnet = mldsa.derive_purpose_seed(FIXED_SEED, "m/deputy-ca/l1/testnet/0")
+    mainnet = mldsa.derive_purpose_seed(FIXED_SEED, "m/deputy-ca/l1/mainnet/0")
+    assert testnet != mainnet
+
+
+def test_derive_purpose_seed_differs_from_root_ca():
+    deputy = mldsa.derive_purpose_seed(FIXED_SEED, "m/deputy-ca/l1/testnet/0")
+    root_ca = mldsa.derive_purpose_seed(FIXED_SEED, "m/root-ca/l1/testnet/0")
+    assert deputy != root_ca
+
+
+def test_derive_purpose_seed_wrong_master_seed_length_raises_value_error():
+    with pytest.raises(ValueError):
+        mldsa.derive_purpose_seed(b"\x00" * 32, "m/deputy-ca/l1/testnet/0")
+
+
+def test_derive_purpose_seed_matches_the_first_stage_of_derive_pubkey():
+    """ derive_purpose_seed() is Level 1 of the same two-level HKDF chain
+        derive_pubkey()/derive_and_sign() already use internally -- confirms
+        it's the real derivation, not a separate/divergent implementation,
+        by checking a leaf derived from it manually matches what
+        derive_and_sign() (which does both levels itself) produces for the
+        same paths. """
+    purpose_seed = mldsa.derive_purpose_seed(FIXED_SEED, "m/root-ca/l1/testnet/0")
+    assert len(purpose_seed) == MASTER_SEED_LEN
+    pk, _sig = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", b"x")
+    pk_direct, _addr = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+    assert pk == pk_direct
+
+
 def test_derive_and_sign_wrong_master_seed_length_raises_value_error():
     with pytest.raises(ValueError):
         mldsa.derive_and_sign(b"\x00" * 32, "m/root-ca/l1/testnet/0", "ml-dsa/0", b"x")

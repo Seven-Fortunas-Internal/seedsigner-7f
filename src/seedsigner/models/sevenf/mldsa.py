@@ -1,8 +1,16 @@
 """
-    Python ctypes bridge to firmware/mldsa7f's C ABI (src/ffi.rs). Only
-    exposes derive_pubkey/derive_and_sign -- no raw-secret-key API, matching
-    docs/7f-integration/README.md's stated design ("Only exposes
-    derive_pubkey/derive_and_sign; no raw-secret-key API").
+    Python ctypes bridge to firmware/mldsa7f's C ABI (src/ffi.rs).
+    derive_pubkey/derive_and_sign match docs/7f-integration/README.md's
+    original "no raw-secret-key API" design.
+
+    derive_purpose_seed is ONE deliberate, narrow exception, added for the
+    Root-to-Deputy child-seed handoff (`m/deputy-ca/l1/<chain_kind>/0`,
+    confirmed against 7fchain's real `sf-root export`/`sf-deputy init`) --
+    see that function's own docstring and ffi.rs's matching "One deliberate,
+    narrow exception" doc comment. No other caller should use it for
+    anything else, and its result must be encrypted (see
+    seedsigner.models.sevenf.encrypted_blob) before it ever leaves the
+    device.
 
     The compiled library search order:
       1. SEEDSIGNER_MLDSA7F_LIB env var, an explicit path override (tests/dev).
@@ -103,6 +111,13 @@ def _lib_handle() -> ctypes.CDLL:
             ctypes.c_char_p, ctypes.c_size_t,   # sig_out
         ]
         lib.mldsa7f_derive_and_sign.restype = ctypes.c_int32
+
+        lib.mldsa7f_derive_purpose_seed.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
+            ctypes.c_char_p, ctypes.c_size_t,   # purpose_path
+            ctypes.c_char_p, ctypes.c_size_t,   # out
+        ]
+        lib.mldsa7f_derive_purpose_seed.restype = ctypes.c_int32
         _lib = lib
     return _lib
 
@@ -165,3 +180,35 @@ def derive_and_sign(master_seed: bytes, purpose_path: str, role_path: str, messa
         raise MlDsaError(rc, "derive_and_sign")
 
     return pk_buf.raw[:ML_DSA_PK_LEN], sig_buf.raw[:ML_DSA_SIG_LEN]
+
+
+def derive_purpose_seed(master_seed: bytes, purpose_path: str) -> bytes:
+    """ Derive the raw purpose seed for `purpose_path` from the master seed.
+
+        THE ONE RAW-SECRET-EXPORTING FUNCTION IN THIS MODULE -- see this
+        module's own docstring and ffi.rs's matching doc comment for why
+        this is a deliberate, narrow, sanctioned exception (D4a: exporting a
+        derived LEAF seed is permitted, the master seed itself never is),
+        scoped specifically to the Root-to-Deputy child-seed handoff.
+
+        The caller MUST encrypt the result (see
+        seedsigner.models.sevenf.encrypted_blob.encrypt()) before it leaves
+        the device by any means -- this function returns plaintext secret
+        material and does no encryption itself. Raises MlDsaError on any
+        failure. """
+    if len(master_seed) != MASTER_SEED_LEN:
+        raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
+
+    lib = _lib_handle()
+    out_buf = ctypes.create_string_buffer(MASTER_SEED_LEN)
+    purpose_bytes = purpose_path.encode("utf-8")
+
+    rc = lib.mldsa7f_derive_purpose_seed(
+        master_seed, len(master_seed),
+        purpose_bytes, len(purpose_bytes),
+        out_buf, MASTER_SEED_LEN,
+    )
+    if rc != 0:
+        raise MlDsaError(rc, "derive_purpose_seed")
+
+    return out_buf.raw[:MASTER_SEED_LEN]

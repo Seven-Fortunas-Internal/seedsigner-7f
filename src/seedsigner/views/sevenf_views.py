@@ -799,3 +799,163 @@ class SevenFExportSignedConfigQRView(View):
             qr_encoder=BBQrEncoder(data=json_bytes, file_type="J"),  # 'J': BBQr JSON
         )
         return Destination(SevenFExportView, skip_current_view=True)
+
+
+
+class SevenFSelectChainKindForDeputyExportView(View):
+    """ First step of Root-to-Deputy child-seed export
+        (7f-signing-support-deputy-ca-seed-export): pick which chain_kind's
+        deputy-ca path to export. Unlike every other 7F flow in this file,
+        there is no scanned artefact to read chain_kind from -- this is a
+        proactive export the Root operator initiates locally, not a
+        response to a coordinator-supplied request (D4a). """
+    TESTNET = ButtonOption("Testnet")
+    MAINNET = ButtonOption("Mainnet")
+    DEVNET = ButtonOption("Devnet")
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "sevenf"):
+            return
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        button_data = [self.TESTNET, self.MAINNET, self.DEVNET]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Export Deputy Seed"),
+            is_button_text_centered=True,
+            button_data=button_data,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if button_data[selected_menu_num] == self.TESTNET:
+            chain_kind = ChainKind.TESTNET
+        elif button_data[selected_menu_num] == self.MAINNET:
+            chain_kind = ChainKind.MAINNET
+        else:
+            chain_kind = ChainKind.DEVNET
+
+        return Destination(
+            SevenFConfirmDeputySeedExportView,
+            view_args=dict(seed=self.seed, chain_kind=chain_kind),
+        )
+
+
+
+class SevenFConfirmDeputySeedExportView(View):
+    """ No-blind-export confirmation: this is the first device feature that
+        ever exports secret seed material off the airgapped device (D4a),
+        so the operator must see exactly which path is about to leave,
+        before it happens, the same doctrine every other 7F flow in this
+        file applies to signing. Reuses DireWarningScreen exactly as
+        SeedWordsWarningView does for viewing seed words (seed_views.py) --
+        text differs, mechanism doesn't.
+
+        On confirmation, wraps deputy_ca_export.build_export() in a
+        LoadingScreenThread (the confirmed real pattern from
+        seed_views.py's xpub-generation flow: start the spinner, run the
+        blocking call, `finally: stop()`) -- the real, measured Argon2id
+        cost is ~4 seconds (firmware/spikes/ceremony-crypto-bench), long
+        enough to need a progress indicator. """
+    def __init__(self, seed: Seed, chain_kind: ChainKind):
+        super().__init__()
+        self.seed = seed
+        self.chain_kind = chain_kind
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import DireWarningScreen, LoadingScreenThread
+        from seedsigner.models.sevenf import deputy_ca_export
+
+        path = deputy_ca_export.deputy_ca_purpose_path(self.chain_kind)
+        selected_menu_num = self.run_screen(
+            DireWarningScreen,
+            title=_("Export Deputy Seed"),
+            status_headline=_("Exporting Secret Material"),
+            text=_(
+                "This will derive and export the {} deputy-ca child seed ({}) from this "
+                "Root seed. Anyone who obtains it can act as this network's Deputy."
+            ).format(self.chain_kind.name.lower(), path),
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        loading_screen = LoadingScreenThread(text=_("Deriving and encrypting..."))
+        loading_screen.start()
+        try:
+            words, envelope = deputy_ca_export.build_export(self.seed.seed_bytes, self.chain_kind)
+        finally:
+            loading_screen.stop()
+
+        self.controller.sevenf_ceremony_data = dict(
+            seed=self.seed, chain_kind=self.chain_kind, words=words, envelope=envelope,
+        )
+        return Destination(SevenFDeputyBootstrapWordsView)
+
+
+
+class SevenFDeputyBootstrapWordsView(View):
+    """ Displays the fresh 8-word bootstrap passphrase that encrypts the
+        exported seed blob. Reuses seed_screens.SeedWordsScreen (the same
+        screen SeedWordsView uses for a seed's own mnemonic) with all 8
+        words on a single page, rather than paginating: split-transcription
+        across pages risks the operator recording only part of the
+        passphrase, and 8 words fit the screen the same way a 12-word
+        seed's first page already does.
+
+        The split-channel warning (passphrase and encrypted blob must
+        travel to the Deputy machine separately) is in the body text: this
+        passphrase is single-use envelope protection for one ceremony
+        step, not a seed phrase, so it doesn't need its own DireWarningScreen
+        gate the way viewing an actual seed's words does. """
+    def __init__(self):
+        super().__init__()
+        data = self.controller.sevenf_ceremony_data
+        self.words: list = data["words"]
+
+
+    def run(self):
+        from seedsigner.gui.screens import seed_screens
+
+        selected_menu_num = self.run_screen(
+            seed_screens.SeedWordsScreen,
+            title=_("Bootstrap Passphrase"),
+            words=self.words,
+            page_index=0,
+            num_pages=1,
+            button_data=[ButtonOption("Continue")],
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        return Destination(SevenFExportDeputySeedQRView)
+
+
+
+class SevenFExportDeputySeedQRView(View):
+    """ Exports the encrypted envelope as BBQr-encoded JSON -- the
+        passphrase from SevenFDeputyBootstrapWordsView must reach the
+        Deputy machine via a DIFFERENT channel than this QR (standard
+        secret-splitting hygiene for exactly this handoff; see this
+        module's own top docstring). Matches SevenFExportSignedConfigQRView's
+        own BBQr-JSON export pattern. """
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import BBQrEncoder
+        data = self.controller.sevenf_ceremony_data
+        envelope_bytes = data["envelope"].encode("utf-8")
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=BBQrEncoder(data=envelope_bytes, file_type="J"),  # 'J': BBQr JSON
+        )
+        return Destination(MainMenuView, skip_current_view=True)
