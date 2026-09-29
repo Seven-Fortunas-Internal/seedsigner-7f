@@ -17,4 +17,12 @@ regexes = [
   # (optimism-rpc.publicnode.com) -- genuinely zero value, not just
   # assumed safe from its name.
   '''0x4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318''',
+
+  # keys.root_ca.address / keys.devfund.address in tests/test_sevenf_root_ceremony.py,
+  # flagged by gitleaks' generic-api-key entropy heuristic. Not secrets: these are
+  # 7fchain ADDRESSES (public by design, same as a Bitcoin address), derived from
+  # FIXED_SEED = bytes([0x2A] * MASTER_SEED_LEN) -- a trivial, all-identical-byte
+  # test constant defined one line above, itself not a real seed.
+  '''t1w65hh4c5ft3anmvc5nd57209vd9pw88un6ekd2hkqavajwc''',
+  '''t1wxrtaq8t5cuuvea5gm9uzfagggxpasrpc5m93jkvmaqs7ea''',
 ]
