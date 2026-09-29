@@ -41,15 +41,25 @@
         what's ever read before parsing; the shared primitive
         (mldsa7f's encrypted_blob.rs) independently pins Argon2 parameters
         against a crafted envelope's inflated memory/iteration cost.
+        read_backup() also fully reconstructs and validates a real Seed
+        object before returning, rather than handing the caller raw,
+        unvalidated fields -- a malformed mnemonic or unrecognized
+        wordlist_language_code is remapped to the same generic
+        SeedBackupFormatError, never left to surface as a raw, uncaught
+        InvalidSeedException from a different layer.
       - Atomic write: write_backup() writes to a temp file, verifies it by
         actually decrypting it back and comparing the recovered mnemonic
         word-for-word against the original, and only then atomically
-        replaces the real backup path (os.replace). The real backup is
-        never truncated or touched until the new one is independently
+        replaces the real backup path (os.replace), then fsyncs the
+        containing directory so the rename itself survives a crash (ext4
+        and similar filesystems don't guarantee a rename's directory-entry
+        update is durable without an explicit directory fsync -- found by
+        execution-stage adversarial review, SEC-EXEC-002). The real backup
+        is never truncated or touched until the new one is independently
         confirmed good -- closing a data-loss failure mode three separate
-        reviews converged on (SEC-002/ARCH-003/ADV-001): open(path, 'w')
-        truncates before writing, so an interrupted overwrite could
-        destroy a good backup and leave nothing.
+        plan-stage reviews converged on (SEC-002/ARCH-003/ADV-001):
+        open(path, 'w') truncates before writing, so an interrupted
+        overwrite could destroy a good backup and leave nothing.
       - ElectrumSeed is refused at backup time: its derivation (a
         different PBKDF2 salt/scheme, see models/seed.py's ElectrumSeed)
         isn't reconstructible through this module's plain
@@ -76,8 +86,9 @@ import json
 import os
 import time
 import unicodedata
+from typing import Any, Dict, List
 
-from seedsigner.models.seed import ElectrumSeed, Seed
+from seedsigner.models.seed import ElectrumSeed, InvalidSeedException, Seed
 from seedsigner.models.settings import Settings, SettingsConstants
 from seedsigner.models.sevenf import encrypted_blob
 
@@ -101,7 +112,7 @@ MAX_BACKUP_FILE_BYTES = 65_536
 # fingerprint computed at backup time and one computed at restore time are
 # always comparable regardless of what network setting happens to be
 # active on either device at either moment.
-_FINGERPRINT_NETWORK = SettingsConstants.MAINNET
+FINGERPRINT_NETWORK = SettingsConstants.MAINNET
 
 
 class SeedBackupError(Exception):
@@ -111,7 +122,9 @@ class SeedBackupError(Exception):
 class SeedBackupFormatError(SeedBackupError):
     """ The plaintext isn't a seedsigner-encrypted-seed-backup document (a
         different backup format, or corrupted/malformed) -- includes a
-        wrong `type`/`version`, or JSON that doesn't parse at all. """
+        wrong `type`/`version`, JSON that doesn't parse at all, a mnemonic
+        that doesn't reconstruct a valid Seed, or a self-consistency
+        fingerprint mismatch (see read_backup()). """
 
 
 class SeedBackupPasswordReusesSeedError(SeedBackupError):
@@ -135,9 +148,13 @@ class SeedBackupDecryptError(SeedBackupError):
 
 
 class RestoredBackup:
-    def __init__(self, mnemonic: list, wordlist_language_code: str, passphrase_required: bool, expected_fingerprint: str):
-        self.mnemonic = mnemonic
-        self.wordlist_language_code = wordlist_language_code
+    """ `seed` is already a fully validated, real Seed object -- read_backup()
+        never hands the caller raw, unvalidated mnemonic/wordlist fields
+        (ARCH2-005: this is the first code path decrypting untrusted-media
+        input, so validation belongs at this module's own boundary, not
+        left to whatever the caller happens to do with the fields). """
+    def __init__(self, seed: Seed, passphrase_required: bool, expected_fingerprint: str):
+        self.seed = seed
         self.passphrase_required = passphrase_required
         self.expected_fingerprint = expected_fingerprint
 
@@ -172,18 +189,46 @@ def delete_backup() -> bool:
 
 
 def _effective_fingerprint(seed: Seed) -> str:
-    return seed.get_fingerprint(network=_FINGERPRINT_NETWORK)
+    return seed.get_fingerprint(network=FINGERPRINT_NETWORK)
+
+
+def matches_expected_fingerprint(seed: Seed, expected_fingerprint: str) -> bool:
+    """ True iff `seed`'s effective fingerprint (computed the same fixed-
+        network way build_backup_plaintext() did) matches
+        `expected_fingerprint`. The fingerprint isn't a secret (it's
+        already shown on-screen elsewhere, e.g. SeedFinalizeView), so a
+        plain comparison is fine -- no constant-time compare needed. """
+    return _effective_fingerprint(seed) == expected_fingerprint
+
+
+# Unicode category "Cf" (format characters: zero-width space, ZWJ, BOM,
+# etc.) render invisibly or as nothing, so a password that LOOKS identical
+# to a seed word on-screen could still differ from it by one of these
+# characters and silently bypass password_reuses_seed_words() below (found
+# by execution-stage adversarial review, PY-004). Stripped before any
+# comparison, not just normalized -- NFKD/casefold alone don't remove them.
+def _strip_format_characters(text: str) -> str:
+    return "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
 
 
 def password_reuses_seed_words(password: str, seed: Seed) -> bool:
     """ R5b, non-negotiable per the requirements doc: "The device never
         accepts any part of the seed phrase as the password for the
-        file." Catches both a password typed as one of the seed's own
-        words (matched case/whitespace-insensitively) and a password built
-        by concatenating contiguous seed words with no separator (the
-        exact "using the first words of the phrase as the password"
-        scenario the requirements doc names). """
-    normalized_password = unicodedata.normalize("NFKD", password).strip().casefold()
+        file." Three checks, in order: (1) any whitespace-delimited token
+        of the password exactly matches one of the seed's own words; (2)
+        the password, with whitespace removed, is embedded anywhere inside
+        the concatenated mnemonic -- catching both a password built purely
+        from contiguous seed words AND (deliberately broader than that
+        alone) any substring that happens to cross a word boundary, e.g.
+        the tail of one word concatenated with the head of the next: safe
+        to over-reject here, since this direction only makes the check
+        stricter; (3) the actually-critical direction found missing by
+        execution-stage adversarial review (SEC-EXEC-001): any of the
+        seed's own words embedded anywhere INSIDE a larger password (padded
+        with other characters, digits, or punctuation), e.g. "xabandonx",
+        "MyAbandon1!", "abandon,about" all contain a full seed word but
+        matched neither of the first two checks. """
+    normalized_password = _strip_format_characters(unicodedata.normalize("NFKD", password)).strip().casefold()
     if not normalized_password:
         return False
 
@@ -198,10 +243,20 @@ def password_reuses_seed_words(password: str, seed: Seed) -> bool:
     if password_no_spaces and password_no_spaces in mnemonic_no_spaces:
         return True
 
+    if any(word and word in password_no_spaces for word in words):
+        return True
+
     return False
 
 
 def build_backup_plaintext(seed: Seed) -> bytes:
+    if isinstance(seed, ElectrumSeed):
+        # Defense-in-depth: write_backup() already refuses an ElectrumSeed
+        # before ever calling this function, but this function has no
+        # other caller today that could otherwise rely on that -- kept in
+        # sync so it's never possible to build backup plaintext for a seed
+        # type this module's own restore path can't reconstruct (PY-008).
+        raise SeedBackupUnsupportedSeedTypeError("Electrum seeds cannot be restored through this backup format")
     return json.dumps({
         "type": BACKUP_TYPE,
         "version": BACKUP_FORMAT_VERSION,
@@ -213,13 +268,15 @@ def build_backup_plaintext(seed: Seed) -> bytes:
     }).encode("utf-8")
 
 
-def parse_backup_plaintext(data: bytes) -> dict:
+def parse_backup_plaintext(data: bytes) -> Dict[str, Any]:
     """ Strict validation, refusing rather than guessing (ARCH-005): a
         sibling feature's own encrypted-blob plaintext (e.g.
         deputy_ca_export's KeyDatabase shape) must never be silently
         accepted here just because it happened to decrypt under some
         password -- the `type`/`version` check is what tells the two
-        apart. """
+        apart. Only checks field TYPES/SHAPE; read_backup() does the
+        further step of actually reconstructing a Seed from the mnemonic
+        field and validating that succeeds. """
     try:
         parsed = json.loads(data.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -247,22 +304,25 @@ def write_backup(seed: Seed, password: str) -> None:
     """ Encrypts and writes `seed`'s full mnemonic to backup_path(), under
         `password`. Raises SeedBackupUnsupportedSeedTypeError for an
         ElectrumSeed, SeedBackupPasswordReusesSeedError per R5b, or
-        SeedBackupError for any encryption/write failure. The real backup
-        path is never touched until the write is verified good (see this
-        module's own docstring). """
-    if isinstance(seed, ElectrumSeed):
-        raise SeedBackupUnsupportedSeedTypeError("Electrum seeds cannot be restored through this backup format")
+        SeedBackupError for any encryption/write failure -- every failure
+        mode is a SeedBackupError subclass, never a raw
+        encrypted_blob.EncryptedBlobError leaking past this module's own
+        boundary (PY-001). The real backup path is never touched until the
+        write is verified good (see this module's own docstring). """
     if password_reuses_seed_words(password, seed):
         raise SeedBackupPasswordReusesSeedError("the password must be independent of the seed phrase")
 
-    plaintext = build_backup_plaintext(seed)
+    plaintext = build_backup_plaintext(seed)  # raises SeedBackupUnsupportedSeedTypeError for ElectrumSeed
     passphrase_bytes = password.encode("utf-8")
-    envelope_json = encrypted_blob.encrypt(plaintext, passphrase_bytes)
+    try:
+        envelope_json = encrypted_blob.encrypt(plaintext, passphrase_bytes)
+    except encrypted_blob.EncryptedBlobError as e:
+        raise SeedBackupError("encryption failed") from e
 
     path = backup_path()
     tmp_path = path + ".tmp"
     try:
-        with open(tmp_path, "w") as f:
+        with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(envelope_json)
             f.flush()
             os.fsync(f.fileno())
@@ -272,25 +332,46 @@ def write_backup(seed: Seed, password: str) -> None:
         # using the SAME in-memory password (no re-entry), so a keyboard-
         # state mismatch between two separate entry screens can never
         # produce a false-negative here (ADV-003).
-        with open(tmp_path, "r") as f:
+        with open(tmp_path, "r", encoding="utf-8") as f:
             written_envelope = f.read()
-        recovered_plaintext = encrypted_blob.decrypt(written_envelope, passphrase_bytes)
+        try:
+            recovered_plaintext = encrypted_blob.decrypt(written_envelope, passphrase_bytes)
+        except encrypted_blob.EncryptedBlobError as e:
+            raise SeedBackupError("post-write verification failed") from e
         if json.loads(recovered_plaintext)["mnemonic"] != seed.mnemonic_list:
             raise SeedBackupError("post-write verification mismatch")
 
         os.replace(tmp_path, path)
+
+        # Make the rename itself crash-durable, not just the temp file's
+        # contents (SEC-EXEC-002): a rename's directory-entry update isn't
+        # guaranteed durable across a crash without an explicit directory
+        # fsync on filesystems like ext4/FAT32 -- relevant here specifically
+        # because the target is a microSD card that can be pulled or
+        # power-cycled at any time.
+        dir_fd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
     except Exception:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        # Best-effort cleanup -- must never mask the ORIGINAL failure with
+        # a secondary one from the cleanup itself (PY-002: e.g. a TOCTOU
+        # race on the exists-check, or a permission error on remove).
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
         raise
 
 
 def read_backup(password: str) -> RestoredBackup:
     """ Decrypts backup_path() under `password`. Raises
         SeedBackupNotFoundError if no backup exists, SeedBackupFormatError
-        for an oversized or malformed file, or SeedBackupDecryptError for
-        a wrong password or a corrupted/tampered file (deliberately
-        indistinguishable). """
+        for an oversized, malformed, or self-inconsistent file, or
+        SeedBackupDecryptError for a wrong password or a corrupted/
+        tampered file (deliberately indistinguishable). """
     path = backup_path()
     if not os.path.exists(path):
         raise SeedBackupNotFoundError(f"no backup file at {path}")
@@ -298,7 +379,7 @@ def read_backup(password: str) -> RestoredBackup:
     if os.path.getsize(path) > MAX_BACKUP_FILE_BYTES:
         raise SeedBackupFormatError("backup file is larger than any real backup this device produces")
 
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         envelope_json = f.read()
 
     try:
@@ -307,9 +388,30 @@ def read_backup(password: str) -> RestoredBackup:
         raise SeedBackupDecryptError("wrong password or corrupted file") from e
 
     parsed = parse_backup_plaintext(plaintext)
-    return RestoredBackup(
-        mnemonic=parsed["mnemonic"],
-        wordlist_language_code=parsed["wordlist_language_code"],
-        passphrase_required=parsed["passphrase_required"],
-        expected_fingerprint=parsed["expected_fingerprint"],
-    )
+
+    # Fully reconstruct and validate a real Seed here, at this module's own
+    # untrusted-input boundary, rather than handing the caller raw fields
+    # and hoping it does the same validation correctly (ARCH2-005). A bad
+    # wordlist_language_code raises a plain Exception (Seed.get_wordlist,
+    # models/seed.py), not a custom type -- caught broadly here on purpose,
+    # since this is the one place in the module responsible for turning
+    # "anything could be in this untrusted, decrypted plaintext" into
+    # either a validated Seed or a single well-typed error.
+    try:
+        seed = Seed(mnemonic=parsed["mnemonic"], wordlist_language_code=parsed["wordlist_language_code"])
+    except (InvalidSeedException, Exception) as e:
+        raise SeedBackupFormatError("backup contents did not reconstruct a valid seed") from e
+
+    passphrase_required = parsed["passphrase_required"]
+    expected_fingerprint = parsed["expected_fingerprint"]
+
+    # Cheap self-consistency check for the common (no-passphrase) case:
+    # the bare seed's own fingerprint must already match what was recorded
+    # at backup time. Catches a future NFKD/wordlist-normalization drift or
+    # a corrupted-but-still-authenticated field -- when a passphrase IS
+    # required, this can't be checked yet (the passphrase hasn't been
+    # entered), so that check is the caller's job once it has one.
+    if not passphrase_required and not matches_expected_fingerprint(seed, expected_fingerprint):
+        raise SeedBackupFormatError("backup's recorded fingerprint doesn't match its own seed")
+
+    return RestoredBackup(seed=seed, passphrase_required=passphrase_required, expected_fingerprint=expected_fingerprint)
