@@ -1,5 +1,8 @@
 import math
+import re
+import zlib
 
+from base64 import b32encode
 from embit import bip32
 from embit.networks import NETWORKS
 from binascii import hexlify
@@ -15,7 +18,9 @@ from seedsigner.models.seed import Seed
 from seedsigner.models.settings import SettingsConstants
 
 from urtypes.crypto import PSBT as UR_PSBT
-from urtypes.crypto import Account, HDKey, Output, Keypath, PathComponent, SCRIPT_EXPRESSION_TAG_MAP
+from urtypes.crypto import Account, HDKey, Output, Keypath, PathComponent, SCRIPT_EXPRESSION_TAG_MAP, CoinInfo
+
+from seedsigner.chains.evm.ur_types import EthSignature, build_account_hdkey_cbor
 
 
 
@@ -238,7 +243,11 @@ class BaseSimpleAnimatedQREncoder(BaseQrEncoder):
 
 
 @dataclass
-class SpecterXPubQrEncoder(BaseSimpleAnimatedQREncoder, BaseXpubQrEncoder):
+class SpecterLegacyXPubQrEncoder(BaseSimpleAnimatedQREncoder, BaseXpubQrEncoder):
+    """
+    Legacy "pXofY" format. Included here for compatibility with much older versions of
+    Specter Desktop. Can probably eventually be removed.
+    """
     @property
     def qr_max_fragment_size(self):
         density_mapping = {
@@ -344,11 +353,16 @@ class UrXpubQrEncoder(BaseFountainQrEncoder, BaseXpubQrEncoder):
             return Keypath(arr, self.root.my_fingerprint, len(arr))
             
         origin = derivation_to_keypath(self.derivation)
+
+        # Implemts "use_info" member on HDKey class (urtypes/crypto packages-libs folder) construct, 
+        # so if working on TESTNET, Xpub can be exported accordingly. Default case, MAINNET: None value.
+        self.use_info = None if self.network == SettingsConstants.MAINNET else CoinInfo(type=None, network=1)
         
         self.ur_hdkey = HDKey({ 'key': self.xpub.key.serialize(),
         'chain_code': self.xpub.chain_code,
         'origin': origin,
-        'parent_fingerprint': self.xpub.fingerprint})
+        'parent_fingerprint': self.xpub.fingerprint,
+        'use_info': self.use_info })
 
         ur_outputs = []
 
@@ -395,3 +409,140 @@ class UrPsbtQrEncoder(BaseFountainQrEncoder):
         super().__post_init__()
         qr_ur_bytes = UR("crypto-psbt", UR_PSBT(self.psbt.serialize()).to_cbor())
         self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)
+
+
+
+@dataclass
+class UrEthSignatureQrEncoder(BaseFountainQrEncoder):
+    """ ERC-4527 response to a scanned eth-sign-request (see
+        views/evm_views.py's EvmScanSignRequestView / EvmSignedUrQRView and
+        chains/evm/ur_types.py). Small payload (well under one QR frame), but
+        BaseFountainQrEncoder handles that the same as PSBT/xpub above -- no reason
+        for a separate static-only code path for this one type. """
+    eth_signature: EthSignature = None
+
+    def __post_init__(self):
+        super().__post_init__()
+        qr_ur_bytes = UR("eth-signature", self.eth_signature.to_cbor())
+        self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)
+
+
+
+@dataclass
+class UrEvmConnectQrEncoder(BaseFountainQrEncoder):
+    """ ERC-4527 "Connect" QR (plan Phase 2's deferred half, see
+        views/evm_views.py's EvmConnectQRView): a crypto-hdkey UR exporting the
+        account-level public key, what a real requester scans to import a
+        Keystone-compatible watch-only account. Unlike UrEthSignatureQrEncoder
+        above, this one is built from the raw seed bytes, not a pre-built payload
+        -- see chains/evm/ur_types.py's build_account_hdkey_cbor for why only
+        key/chain_code/origin are set. """
+    seed_bytes: bytes = None
+    account: int = 0
+
+    def __post_init__(self):
+        super().__post_init__()
+        qr_ur_bytes = UR("crypto-hdkey", build_account_hdkey_cbor(self.seed_bytes, self.account))
+        self.ur2_encode = UREncoder(ur=qr_ur_bytes, max_fragment_len=self.qr_max_fragment_size)
+        # Narrow scope: seed_bytes is only needed to build qr_ur_bytes above --
+        # nothing below this point (or in QRDisplayScreen, which holds this encoder
+        # for as long as the QR is on screen) reads it again. Drop this object's
+        # own reference now rather than keeping a second, unnecessary live pointer
+        # to the raw seed alive for the whole QR-display session. This doesn't
+        # zeroize the underlying bytes (they're immutable, and models.seed.Seed
+        # keeps its own reference alive for the whole active-seed session
+        # regardless) -- it only avoids this encoder adding its own copy of that
+        # exposure window on top.
+        self.seed_bytes = None
+
+
+
+"""**************************************************************************************
+    BBQr encoder (7F ceremony artefacts) -- see decode_qr.py's SevenFBBQrDecoder for the
+    matching decode path, and docs/7f-integration/root-key-ceremony-plan.md's
+    "Superseding authority" section for why BBQr rather than UR2 fountain (frame-count
+    arithmetic; UR2 fountain is too slow for these payload sizes at any usable QR density).
+    BBQr was decode-only in this codebase before this addition -- SeedSigner ships no
+    encoder for it at all. Wire format: https://github.com/coinkite/BBQr/blob/master/BBQr.md
+**************************************************************************************"""
+@dataclass
+class BBQrEncoder(BaseSimpleAnimatedQREncoder):
+    """
+        Encodes arbitrary bytes as one or more BBQr-formatted QR strings.
+        `file_type` is a single BBQr file-type character (e.g. 'B' for
+        generic binary, 'J' for JSON, 'C' for CBOR -- see the spec's file-type
+        table; 'P' is reserved for PSBT and not this device's concern).
+        `bbqr_encoding` selects the BBQr encoding character: 'Z' (default,
+        zlib-compressed then base32 -- smallest for compressible payloads
+        like JSON), '2' (base32, no compression), or 'H' (hex, largest but
+        trivially human-checkable). Not named `encoding` to avoid shadowing
+        Python's own string-encoding vocabulary in this file.
+    """
+    data: bytes = None
+    file_type: str = "B"
+    bbqr_encoding: str = "Z"
+    max_bytes_per_segment: int = 300  # conservative default for a 240x240 display; tune per docs/7f-integration/root-key-ceremony-plan.md's density guidance once a real screen is in hand
+
+    # base-36 digits, per the BBQr spec's segment-numbering scheme.
+    _BASE36 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+    def __post_init__(self):
+        if self.bbqr_encoding not in ("Z", "2", "H"):
+            raise ValueError(f"unsupported BBQr encoding: {self.bbqr_encoding!r}")
+        if not re.match(r"^[A-Z0-9]$", self.file_type):
+            raise ValueError(f"file_type must be a single BBQr-spec character, got {self.file_type!r}")
+        super().__post_init__()
+
+
+    @classmethod
+    def _to_base36_pair(cls, n: int) -> str:
+        if not (0 <= n < 36 * 36):
+            raise ValueError(f"BBQr segment numbering supports at most {36*36} segments, got index {n}")
+        return cls._BASE36[n // 36] + cls._BASE36[n % 36]
+
+
+    def _create_parts(self):
+        payload = self.data if self.data is not None else b""
+
+        if self.bbqr_encoding == "Z":
+            compressor = zlib.compressobj(level=9, wbits=-10)
+            underlying = compressor.compress(payload) + compressor.flush()
+        else:
+            underlying = payload
+
+        # Chunk the *underlying* bytes (post-compression for 'Z') so each
+        # segment independently encodes/decodes to a whole number of bytes --
+        # matching how SevenFBBQrDecoder/_bbqr_decode_segments reconstructs
+        # each segment on its own before concatenating (see that module's
+        # own docstring for why per-segment independence matters here).
+        if self.bbqr_encoding == "H":
+            # Chunking by whole raw bytes always produces an even-length hex
+            # string per chunk (2 hex chars/byte) -- no parity concern.
+            # Halve the target so the *encoded* (2x-larger) string per
+            # segment stays close to max_bytes_per_segment.
+            chunk_bytes = max(1, self.max_bytes_per_segment // 2)
+        else:
+            # base32 expands 5 raw bytes to 8 characters -- size chunks in
+            # raw-byte terms so the *encoded* chunk stays under the target.
+            chunk_bytes = max(5, (self.max_bytes_per_segment * 5) // 8)
+
+        if not underlying:
+            byte_chunks = [b""]
+        else:
+            byte_chunks = [underlying[i:i + chunk_bytes] for i in range(0, len(underlying), chunk_bytes)]
+
+        total = len(byte_chunks)
+        if total > 36 * 36:
+            raise ValueError(f"payload needs {total} BBQr segments, exceeding the spec's {36*36}-segment maximum")
+
+        total_str = self._to_base36_pair(total)
+
+        self.parts = []
+        for i, chunk in enumerate(byte_chunks):
+            if self.bbqr_encoding == "H":
+                encoded_chunk = chunk.hex().upper()
+            else:
+                encoded_chunk = b32encode(chunk).decode("ascii").rstrip("=")
+
+            header = f"B${self.bbqr_encoding}{self.file_type}{total_str}{self._to_base36_pair(i)}"
+            self.parts.append(header + encoded_chunk)

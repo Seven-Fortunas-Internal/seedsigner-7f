@@ -1,6 +1,8 @@
+import gettext
 import logging
 import json
 import os
+import pathlib
 import platform
 
 from typing import List
@@ -36,6 +38,19 @@ class Settings(Singleton):
                 with open(Settings.SETTINGS_FILENAME) as settings_file:
                     settings.update(json.load(settings_file))
 
+            # Setup multilanguage support
+            path = os.path.join(
+                pathlib.Path(__file__).parent.resolve().parent.resolve(),
+                "resources",
+                "seedsigner-translations",
+                "l10n"
+            )
+            gettext.bindtextdomain('messages', localedir=path)
+            gettext.textdomain('messages')
+
+            # Load default/persistent locale setting
+            settings.load_locale()
+
         return cls._instance
 
 
@@ -66,6 +81,10 @@ class Settings(Singleton):
         for entry in data.split()[split_index:]:
             abbreviated_name, value = entry.split("=")
 
+            # Empty values ("some_setting= other_setting=E") are invalid
+            if value == "":
+                raise InvalidSettingsQRData(f"{abbreviated_name} cannot be empty")
+
             # Parse multi-value settings; integer-ize where needed
             if "," in value:
                 values_updated = []
@@ -88,6 +107,7 @@ class Settings(Singleton):
                 values = [value]
             else:
                 values = value
+
             for v in values:
                 if v not in [opt[0] for opt in settings_entry.selection_options]:
                     if settings_entry.attr_name == SettingsConstants.SETTING__PERSISTENT_SETTINGS and v == SettingsConstants.OPTION__ENABLED:
@@ -108,7 +128,8 @@ class Settings(Singleton):
     
 
     def save(self):
-        if self._data[SettingsConstants.SETTING__PERSISTENT_SETTINGS] == SettingsConstants.OPTION__ENABLED:
+        from seedsigner.hardware.microsd import MicroSD
+        if self._data[SettingsConstants.SETTING__PERSISTENT_SETTINGS] == SettingsConstants.OPTION__ENABLED and MicroSD.get_instance().is_inserted:
             with open(Settings.SETTINGS_FILENAME, 'w') as settings_file:
                 json.dump(self._data, settings_file, indent=4)
                 # SeedSignerOS makes removing the microsd possible, flush and then fsync forces persistent settings to disk
@@ -138,14 +159,16 @@ class Settings(Singleton):
                 # Clean the incoming data, if necessary
                 if entry.type == SettingsConstants.TYPE__MULTISELECT:
                     if type(new_settings[entry.attr_name]) == str:
-                        # Break comma-separated SettingsQR input into List
-                        new_settings[entry.attr_name] = new_settings[entry.attr_name].split(",")
+                        # Break comma-separated multiselect options into List; avoid empty
+                        # values.
+                        new_settings[entry.attr_name] = [value for value in new_settings[entry.attr_name].split(",") if value.strip()]
 
-        # Can't just merge the _data dict; have to replace keys they have in common
-        #   (otherwise list values will be merged instead of replaced).
+                    if not new_settings[entry.attr_name]:
+                        # Multiselect cannot be empty; load defaults to avoid issues
+                        new_settings[entry.attr_name] = entry.default_value
+
         for key, value in new_settings.items():
-            self._data.pop(key, None)
-            self._data[key] = value
+            self.set_value(key, value)
 
 
     def set_value(self, attr_name: str, value: any):
@@ -155,7 +178,9 @@ class Settings(Singleton):
             Note that for multiselect, the value must be a List.
         """
         if attr_name not in self._data:
-            raise Exception(f"Setting for {attr_name} not found")
+            # Outdated settings
+            print(f"Setting {attr_name} not recognized. Ignoring.")
+            return
 
         if SettingsDefinition.get_settings_entry(attr_name).type == SettingsConstants.TYPE__MULTISELECT:
             if type(value) != list:
@@ -171,15 +196,22 @@ class Settings(Singleton):
                 
         self._data[attr_name] = value
         self.save()
-    
 
-    def get_value(self, attr_name: str):
+        # Special handling for localization
+        if attr_name == SettingsConstants.SETTING__LOCALE:
+            self.load_locale()
+
+
+    def get_value(self, attr_name: str, default_if_none: bool = None):
         """
             Returns the attr's current value.
 
             Note that for multiselect, the current value is a List.
         """
         if attr_name not in self._data:
+            if default_if_none:
+                return SettingsDefinition.get_settings_entry(attr_name).default_value
+
             raise Exception(f"Setting for {attr_name} not found")
         return self._data[attr_name]
 
@@ -222,13 +254,22 @@ class Settings(Singleton):
         return display_names
 
 
+    def load_locale(self):
+        locale = self.get_value(SettingsConstants.SETTING__LOCALE)
+        os.environ['LANGUAGE'] = locale
+
+        # Re-initialize with the new locale
+        print(f"Set LANGUAGE locale to {os.environ['LANGUAGE']}")
+
+
+
     """
         Intentionally keeping the properties very limited to avoid an expectation of
         boilerplate property code for every SettingsEntry.
 
         It's more cumbersome, but instead use:
 
-        settings.get_value(SettingsConstants.SETTING__MY_SETTING_ATTR)
+        Settings.get_instance().get_value(SettingsConstants.SETTING__MY_SETTING_ATTR)
     """
     @property
     def debug(self) -> bool:

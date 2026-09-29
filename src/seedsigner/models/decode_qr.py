@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import re
+import zlib
 
 from binascii import a2b_base64, b2a_base64
 from enum import IntEnum
@@ -11,6 +12,7 @@ from pyzbar.pyzbar import ZBarSymbol
 from urtypes.crypto import PSBT as UR_PSBT
 from urtypes.crypto import Account, Output
 from urtypes.bytes import Bytes
+from base64 import b32encode, b32decode
 
 from seedsigner.helpers.ur2.ur_decoder import URDecoder
 from seedsigner.models.qr_type import QRType
@@ -62,7 +64,7 @@ class DecodeQR:
         if self.qr_type == None:
             self.qr_type = qr_type
 
-            if self.qr_type in [QRType.PSBT__UR2, QRType.OUTPUT__UR, QRType.ACCOUNT__UR, QRType.BYTES__UR]:
+            if self.qr_type in [QRType.PSBT__UR2, QRType.OUTPUT__UR, QRType.ACCOUNT__UR, QRType.BYTES__UR, QRType.EVM__ETH_SIGN_REQUEST_UR]:
                 self.decoder = URDecoder() # BCUR Decoder
 
             elif self.qr_type == QRType.PSBT__SPECTER:
@@ -74,6 +76,12 @@ class DecodeQR:
             elif self.qr_type == QRType.PSBT__BASE43:
                 self.decoder = Base43PsbtQrDecoder() # Single Segment Base43
 
+            elif self.qr_type == QRType.PSBT__BBQR:
+                self.decoder = BBQRPsbtQrDecoder() # BBQr Decoder
+
+            elif self.qr_type == QRType.SEVENF__BBQR:
+                self.decoder = SevenFBBQrDecoder() # BBQr Decoder, non-PSBT file types
+
             elif self.qr_type in [QRType.SEED__SEEDQR, QRType.SEED__COMPACTSEEDQR, QRType.SEED__MNEMONIC, QRType.SEED__FOUR_LETTER_MNEMONIC, QRType.SEED__UR2]:
                 self.decoder = SeedQrDecoder(wordlist_language_code=self.wordlist_language_code)          
 
@@ -82,6 +90,9 @@ class DecodeQR:
 
             elif self.qr_type == QRType.BITCOIN_ADDRESS:
                 self.decoder = BitcoinAddressQrDecoder() # Single Segment bitcoin address
+
+            elif self.qr_type == QRType.EVM_ADDRESS:
+                self.decoder = EvmAddressQrDecoder() # Single Segment EVM (0x...) address
 
             elif self.qr_type == QRType.SIGN_MESSAGE:
                 self.decoder = SignMessageQrDecoder() # Single Segment sign message request
@@ -119,7 +130,7 @@ class DecodeQR:
             # it's already str data
             qr_str = data
 
-        if self.qr_type in [QRType.PSBT__UR2, QRType.OUTPUT__UR, QRType.ACCOUNT__UR, QRType.BYTES__UR]:
+        if self.qr_type in [QRType.PSBT__UR2, QRType.OUTPUT__UR, QRType.ACCOUNT__UR, QRType.BYTES__UR, QRType.EVM__ETH_SIGN_REQUEST_UR]:
             added_part = self.decoder.receive_part(qr_str)
             if self.decoder.is_complete():
                 self.complete = True
@@ -135,6 +146,20 @@ class DecodeQR:
             if rt == DecodeQRStatus.COMPLETE:
                 self.complete = True
             return rt
+
+
+    def get_eth_sign_request(self):
+        """ Returns a chains.evm.ur_types.EthSignRequest, or None. Same
+            decoder.result_message().cbor -> urtypes-class.from_cbor() bridge
+            get_data_psbt() below already uses for PSBT-over-UR2. """
+        if self.complete and self.qr_type == QRType.EVM__ETH_SIGN_REQUEST_UR:
+            from seedsigner.chains.evm.ur_types import EthSignRequest
+            cbor = self.decoder.result_message().cbor
+            try:
+                return EthSignRequest.from_cbor(cbor)
+            except Exception:
+                return None
+        return None
 
 
     # TODO: Refactor all of these specific `get_` to just something generic like
@@ -196,6 +221,25 @@ class DecodeQR:
             return self.decoder.get_address_type()
 
 
+    def get_evm_address(self):
+        """ Returns the EIP-55 checksummed address string, or None. """
+        if self.is_evm_address:
+            return self.decoder.get_address()
+
+
+    def get_sevenf_bbqr_data(self) -> bytes | None:
+        """ Returns the raw decoded bytes of a scanned 7F ceremony artefact
+            (genesis-config canonical bytes today; devfund-config etc. once
+            those parsers exist) -- self.decoder.file_type distinguishes
+            which artefact it claims to be, but callers must not trust that
+            claim over independently re-validating the bytes themselves
+            (e.g. genesis_config.parse_canonical_bytes()'s own domain-tag
+            check) -- same self-validation principle as every other
+            decoder wrapper in this class. """
+        if self.is_sevenf_bbqr:
+            return self.decoder.get_data()
+
+
     def get_qr_data(self) -> dict:
         """
         This provides a single access point for external code to retrieve the QR data,
@@ -226,10 +270,10 @@ class DecodeQR:
         if not self.decoder:
             return 0
 
-        if self.qr_type in [QRType.PSBT__UR2, QRType.OUTPUT__UR, QRType.ACCOUNT__UR, QRType.BYTES__UR]:
+        if self.qr_type in [QRType.PSBT__UR2, QRType.OUTPUT__UR, QRType.ACCOUNT__UR, QRType.BYTES__UR, QRType.EVM__ETH_SIGN_REQUEST_UR]:
             return int(self.decoder.estimated_percent_complete(weight_mixed_frames=weight_mixed_frames) * 100)
 
-        elif self.qr_type in [QRType.PSBT__SPECTER]:
+        elif self.qr_type in [QRType.PSBT__SPECTER, QRType.PSBT__BBQR, QRType.SEVENF__BBQR]:
             if self.decoder.total_segments == None:
                 return 0
             return int((self.decoder.collected_segments / self.decoder.total_segments) * 100)
@@ -262,6 +306,7 @@ class DecodeQR:
             QRType.PSBT__SPECTER,
             QRType.PSBT__BASE64,
             QRType.PSBT__BASE43,
+            QRType.PSBT__BBQR,
         ]
 
 
@@ -289,7 +334,23 @@ class DecodeQR:
     @property
     def is_sign_message(self):
         return self.qr_type == QRType.SIGN_MESSAGE
-        
+
+
+    @property
+    def is_eth_sign_request(self):
+        return self.qr_type == QRType.EVM__ETH_SIGN_REQUEST_UR
+
+
+    @property
+    def is_evm_address(self):
+        return self.qr_type == QRType.EVM_ADDRESS
+
+
+    @property
+    def is_sevenf_bbqr(self):
+        return self.qr_type == QRType.SEVENF__BBQR
+
+
 
     @property
     def is_wallet_descriptor(self):
@@ -326,9 +387,6 @@ class DecodeQR:
 
     @staticmethod
     def detect_segment_type(s, wordlist_language_code=None):
-        # print("-------------- DecodeQR.detect_segment_type --------------")
-        # print(type(s))
-        # print(len(s))
 
         try:
             # Convert to str data
@@ -337,6 +395,9 @@ class DecodeQR:
                 # are strings.
                 # TODO: Convert the test suite rather than handle here?
                 s = s.decode('utf-8')
+
+            logger.debug(f"segment string: {s}")
+            logger.debug(f"segment string length: {len(s)}")
 
             # PSBT
             if re.search("^UR:CRYPTO-PSBT/", s, re.IGNORECASE):
@@ -348,6 +409,9 @@ class DecodeQR:
             elif re.search("^UR:CRYPTO-ACCOUNT/", s, re.IGNORECASE):
                 return QRType.ACCOUNT__UR
 
+            elif re.search("^UR:ETH-SIGN-REQUEST/", s, re.IGNORECASE):
+                return QRType.EVM__ETH_SIGN_REQUEST_UR
+
             elif re.search(r'^p(\d+)of(\d+) ([A-Za-z0-9+\/=]+$)', s, re.IGNORECASE): #must be base64 characters only in segment
                 return QRType.PSBT__SPECTER
 
@@ -356,6 +420,17 @@ class DecodeQR:
 
             elif DecodeQR.is_base64_psbt(s):
                 return QRType.PSBT__BASE64
+
+            elif re.search(r"^B\$[2HZ]P[0-9A-Z]{4}", s): # https://github.com/coinkite/BBQr/blob/master/BBQr.md#spliting-the-data
+                return QRType.PSBT__BBQR
+
+            elif re.search(r"^B\$[2HZ][TJCUBX][0-9A-Z]{4}", s):
+                # Same BBQr wire format, any of the spec's other file-type bytes
+                # (T=tx, J=JSON, C=CBOR, U=UTF8 text, B=generic binary, X=executable) --
+                # 7F ceremony artefacts use 'B'. The 'P' (PSBT) case above is
+                # unchanged and takes priority so existing Bitcoin PSBT scanning
+                # is unaffected by this addition.
+                return QRType.SEVENF__BBQR
 
             # Wallet Descriptor
             desc_str = s.replace("\n","").replace(" ","")
@@ -381,6 +456,14 @@ class DecodeQR:
             elif DecodeQR.is_bitcoin_address(s):
                 return QRType.BITCOIN_ADDRESS
 
+            # EVM Address -- the QR's own format already reveals the chain (0x prefix
+            # + 40 hex chars is unambiguous, never a valid Bitcoin address), so no
+            # active_chain_id awareness is needed at detection time, only at whether
+            # it's in scope to act on once decoded (see evm_views.py's
+            # EvmVerifyAddressStartView).
+            elif DecodeQR.is_evm_address_format(s):
+                return QRType.EVM_ADDRESS
+
             # message signing
             elif s.startswith("signmessage"):
                 return QRType.SIGN_MESSAGE
@@ -398,11 +481,11 @@ class DecodeQR:
                 _4LETTER_WORDLIST = []
 
             if all(x in wordlist for x in s.strip().split(" ")):
-                # checks if all words in list are in bip39 word list
+                # checks if all words in list are in BIP-39 word list
                 return QRType.SEED__MNEMONIC
 
             elif all(x in _4LETTER_WORDLIST for x in s.strip().split(" ")):
-                # checks if all 4 letter words are in list are in 4 letter bip39 word list
+                # checks if all 4 letter words are in list are in 4 letter BIP-39 word list
                 return QRType.SEED__FOUR_LETTER_MNEMONIC
 
             elif DecodeQR.is_base43_psbt(s):
@@ -414,6 +497,14 @@ class DecodeQR:
             pass
 
         # Is it byte data?
+        if not isinstance(s, bytes):
+            try:
+                # TODO: remove this check & conversion once above cast to str is removed
+                s = s.encode()
+            except UnicodeError:
+                # Couldn't convert back to bytes; shouldn't happen
+                raise Exception("Conversion to bytes failed")
+
         # 32 bytes for 24-word CompactSeedQR; 16 bytes for 12-word CompactSeedQR
         if len(s) == 32 or len(s) == 16:
             try:
@@ -499,11 +590,22 @@ class DecodeQR:
     def is_bitcoin_address(s):
         if re.search(r'^bitcoin\:.*', s, re.IGNORECASE):
             return True
-        elif re.search(r'^((bc1|tb1|bcr|[123]|[mn])[a-zA-HJ-NP-Z0-9]{25,62})$', s):
-            # TODO: Handle regtest bcrt?
+        elif re.search(r'^((bc1|tb1|bcr|[123]|[mn])[a-zA-HJ-NP-Z0-9]{25,62})$', s, re.IGNORECASE):
             return True
         else:
             return False
+
+
+    @staticmethod
+    def is_evm_address_format(s):
+        """ Named _format, not is_evm_address (unlike is_bitcoin_address's own naming)
+            -- DecodeQR already has an instance *property* called is_evm_address
+            (checking self.qr_type), and this project avoids anything that could look
+            like it's guessing at a decode result vs. reporting one. Deliberately no
+            "ethereum:" URI-scheme prefix support (unlike is_bitcoin_address's
+            "bitcoin:" handling) -- no evidence any real requester (MetaMask/Rabby/etc.)
+            shows one for a receiving address; add it if/when a real QR needs it. """
+        return re.search(r'^0x[0-9a-fA-F]{40}$', s) is not None
 
 
     @staticmethod
@@ -654,8 +756,9 @@ class BaseAnimatedQrDecoder(BaseQrDecoder):
         elif self.total_segments != self.total_segment_nums(segment):
             raise Exception('Segment total changed unexpectedly')
 
-        if self.segments[self.current_segment_num(segment) - 1] == None:
-            self.segments[self.current_segment_num(segment) - 1] = self.parse_segment(segment)
+        current_segment_num = self.current_segment_num(segment)
+        if self.segments[current_segment_num - 1] == None:
+            self.segments[current_segment_num - 1] = self.parse_segment(segment)
             self.collected_segments += 1
             if self.total_segments == self.collected_segments:
                 if self.is_valid:
@@ -701,6 +804,108 @@ class SpecterPsbtQrDecoder(BaseAnimatedQrDecoder):
 
     def parse_segment(self, segment) -> str:
         return segment.split(" ")[-1].strip()
+
+
+
+def _bbqr_decode_segments(segments: list, encoding: str) -> bytes | None:
+    """
+        Shared BBQr payload reconstruction, used by both BBQRPsbtQrDecoder
+        (file-type 'P') and SevenFBBQrDecoder (7F's non-PSBT file types) --
+        the reconstruction logic is identical regardless of file type; only
+        what the caller does with the resulting bytes differs.
+        https://github.com/coinkite/BBQr/blob/master/BBQr.md
+    """
+    if not encoding:
+        return None
+
+    if encoding == 'H':
+        return b''.join(bytes.fromhex(s) for s in segments)
+
+    # base32 decode, but insert padding for API
+    rv = b''
+    for p in segments:
+        padding = (8 - (len(p) % 8)) % 8
+        rv += b32decode(p + (padding*'='))
+
+    if encoding == 'Z':
+        # decompress
+        z = zlib.decompressobj(wbits=-10)
+        rv = z.decompress(rv)
+        rv += z.flush()
+
+    return rv
+
+
+
+class BaseBBQrDecoder(BaseAnimatedQrDecoder):
+    """
+        Shared BBQr header-parsing logic (encoding/file-type/segment
+        numbering), independent of what the decoded bytes mean. Subclasses
+        exist per file-type only so DecodeQR's dispatch can distinguish
+        "this was a PSBT" from "this was a 7F ceremony artefact" without
+        parsing the payload itself.
+    """
+    def __init__(self):
+        super().__init__()
+        self.encoding = None
+        self.file_type = None
+
+
+    def get_data(self) -> bytes | None:
+        logger.debug(f"{self.__class__.__name__} get_data")
+        if self.complete:
+            return _bbqr_decode_segments(self.segments, self.encoding)
+
+        return None
+
+
+    def current_segment_num(self, segment) -> int:
+        current_segment = int(segment[6:8], 36) + 1
+        logger.debug(f"{self.__class__.__name__} current_segment_num {current_segment}")
+        return current_segment
+
+
+    def total_segment_nums(self, segment) -> int:
+        total_segments = int(segment[4:6], 36)
+        logger.debug(f"{self.__class__.__name__} total_segment_nums {total_segments}")
+        return total_segments
+
+
+    def parse_segment(self, segment) -> str:
+        self.encoding = segment[2]
+        self.file_type = segment[3]
+        data = segment[8:]
+        return data.strip()
+
+
+
+class BBQRPsbtQrDecoder(BaseBBQrDecoder):
+    """
+        Used to decode BBQR Animated PSBT encoding (file-type 'P').
+        Unchanged in behavior from before this file's SEVENF__BBQR
+        addition -- header parsing and payload reconstruction now live in
+        BaseBBQrDecoder/_bbqr_decode_segments, shared with SevenFBBQrDecoder,
+        but this class's own get_data()/current_segment_num()/
+        total_segment_nums()/parse_segment() outputs are identical to the
+        pre-refactor version for the same input.
+    """
+    pass
+
+
+
+class SevenFBBQrDecoder(BaseBBQrDecoder):
+    """
+        Decodes BBQr-encoded 7F ceremony artefacts (genesis-config,
+        devfund-config, enrollment/signature exports) -- any BBQr file-type
+        byte other than 'P' (see the SEVENF__BBQR detection regex above).
+        Inherits BaseBBQrDecoder's parse_segment()/get_data() unchanged --
+        this subclass exists only so DecodeQR's dispatch can distinguish
+        "this was a PSBT" from "this was a 7F artefact" (self.file_type is
+        available on either class if a caller needs to branch on it).
+        Backs 7f-signing-support-bbqr-encoding /
+        docs/7f-integration/root-key-ceremony-plan.md.
+    """
+    pass
 
 
 
@@ -932,61 +1137,72 @@ class BitcoinAddressQrDecoder(BaseSingleFrameQrDecoder):
 
 
     def add(self, segment, qr_type=QRType.BITCOIN_ADDRESS):
-        r = re.search(r'((bc1q|tb1q|bcrt1q|bc1p|tb1p|bcrt1p|[123]|[mn])[a-zA-HJ-NP-Z0-9]{25,64})', segment)
-        if r != None:
-            self.address = r.group(1)
-        
-            if re.search(r'^((bc1q|tb1q|bcrt1q|bc1p|tb1p|bcrt1p|[123]|[mn])[a-zA-HJ-NP-Z0-9]{25,64})$', self.address) != None:
-                self.complete = True
-                self.collected_segments = 1
-                
-                # get address type
-                r = re.search(r'^((bc1q|tb1q|bcrt1q|bc1p|tb1p|bcrt1p|[123]|[mn])[a-zA-HJ-NP-Z0-9]{25,64})$', self.address)
-                if r != None:
-                    r = r.group(2)
-                
-                if r == "1":
-                    # Legacy P2PKH. mainnet
-                    self.address_type = (SettingsConstants.LEGACY_P2PKH, SettingsConstants.MAINNET)
+        """
+            Input may be prefixed with "bitcoin:" but will be ignored.
 
-                elif r == "m" or r == "n":
-                    self.address_type = (SettingsConstants.LEGACY_P2PKH, SettingsConstants.TESTNET)
+            RegEx searches for a recognizable bitcoin address.
+                * The `^` ensures that the specified address prefixes can only match at
+                    the beginning of the address.
 
-                elif r == "3":
-                    # Nested segwit single sig (p2sh-p2wpkh), nested segwit multisig (p2sh-p2wsh), or legacy multisig (p2sh); mainnet
-                    # TODO: Would be more correct to use a P2SH constant
-                    self.address_type = (SettingsConstants.NESTED_SEGWIT, SettingsConstants.MAINNET)
+            Result will yield the following match groups:
+                * group 1: complete address
+                * group 2: address prefix
+        """
+        address_match = re.search(r'^((bc1q|tb1q|bcrt1q|bc1p|tb1p|bcrt1p|[123]|[mn])[a-zA-HJ-NP-Z0-9]{25,64})', segment.split(":")[-1], re.IGNORECASE)
+        if address_match != None:
+            self.address = address_match.group(1)
+            self.complete = True
+            self.collected_segments = 1
+            
+            # Have to handle wallets that uppercase bech32 addresses.
+            # Note that it's safe to lowercase the prefix for ALL addr formats.
+            addr_prefix = address_match.group(2).lower()
+            
+            if addr_prefix == "1":
+                # Legacy P2PKH. mainnet
+                self.address_type = (SettingsConstants.LEGACY_P2PKH, SettingsConstants.MAINNET)
 
-                elif r == "2":
-                    # Nested segwit single sig (p2sh-p2wpkh), nested segwit multisig (p2sh-p2wsh), or legacy multisig (p2sh); testnet / regtest
-                    self.address_type = (SettingsConstants.NESTED_SEGWIT, SettingsConstants.TESTNET)
+            elif addr_prefix in ["m", "n"]:
+                self.address_type = (SettingsConstants.LEGACY_P2PKH, SettingsConstants.TESTNET)
 
-                elif r == "bc1q":
-                    # Native Segwit (single sig or multisig), mainnet 
-                    self.address_type = (SettingsConstants.NATIVE_SEGWIT, SettingsConstants.MAINNET)
+            elif addr_prefix == "3":
+                # Nested segwit single sig (p2sh-p2wpkh), nested segwit multisig (p2sh-p2wsh), or legacy multisig (p2sh); mainnet
+                # TODO: Would be more correct to use a P2SH constant
+                self.address_type = (SettingsConstants.NESTED_SEGWIT, SettingsConstants.MAINNET)
 
-                elif r == "tb1q":
-                    # Native Segwit (single sig or multisig), testnet
-                    self.address_type = (SettingsConstants.NATIVE_SEGWIT, SettingsConstants.TESTNET)
+            elif addr_prefix == "2":
+                # Nested segwit single sig (p2sh-p2wpkh), nested segwit multisig (p2sh-p2wsh), or legacy multisig (p2sh); testnet / regtest
+                self.address_type = (SettingsConstants.NESTED_SEGWIT, SettingsConstants.TESTNET)
 
-                elif r == "bcrt1q":
-                    # Native Segwit (single sig or multisig), regtest
-                    self.address_type = (SettingsConstants.NATIVE_SEGWIT, SettingsConstants.REGTEST)
+            elif addr_prefix == "bc1q":
+                # Native Segwit (single sig or multisig), mainnet 
+                self.address_type = (SettingsConstants.NATIVE_SEGWIT, SettingsConstants.MAINNET)
 
-                elif r == "bc1p":
-                    # Native Segwit (single sig or multisig), mainnet 
-                    self.address_type = (SettingsConstants.TAPROOT, SettingsConstants.MAINNET)
+            elif addr_prefix == "tb1q":
+                # Native Segwit (single sig or multisig), testnet
+                self.address_type = (SettingsConstants.NATIVE_SEGWIT, SettingsConstants.TESTNET)
 
-                elif r == "tb1p":
-                    # Native Segwit (single sig or multisig), testnet
-                    self.address_type = (SettingsConstants.TAPROOT, SettingsConstants.TESTNET)
+            elif addr_prefix == "bcrt1q":
+                # Native Segwit (single sig or multisig), regtest
+                self.address_type = (SettingsConstants.NATIVE_SEGWIT, SettingsConstants.REGTEST)
 
-                elif r == "bcrt1p":
-                    # Native Segwit (single sig or multisig), regtest
-                    self.address_type = (SettingsConstants.TAPROOT, SettingsConstants.REGTEST)
-                
-                return DecodeQRStatus.COMPLETE
+            elif addr_prefix == "bc1p":
+                self.address_type = (SettingsConstants.TAPROOT, SettingsConstants.MAINNET)
 
+            elif addr_prefix == "tb1p":
+                self.address_type = (SettingsConstants.TAPROOT, SettingsConstants.TESTNET)
+
+            elif addr_prefix == "bcrt1p":
+                self.address_type = (SettingsConstants.TAPROOT, SettingsConstants.REGTEST)
+            # Note: there is no final "else" here because the regex won't return any other matches.
+
+            # If the addr type is case-insensitive, ensure we return it lowercase
+            if self.address_type[0] in [SettingsConstants.NATIVE_SEGWIT, SettingsConstants.TAPROOT]:
+                self.address = self.address.lower()
+
+            return DecodeQRStatus.COMPLETE
+
+        logger.debug(f"Invalid address: {segment}")
         return DecodeQRStatus.INVALID
 
 
@@ -1003,6 +1219,44 @@ class BitcoinAddressQrDecoder(BaseSingleFrameQrDecoder):
             else:
                 return "Unknown"
         return None
+
+
+
+class EvmAddressQrDecoder(BaseSingleFrameQrDecoder):
+    """
+        Decodes single frame representing an EVM (0x...) address. Simpler than
+        BitcoinAddressQrDecoder above -- one address format, no script-type/network
+        inference (EVM addresses are chain-agnostic across every EVM network; which
+        network a transaction targets is a property of the transaction, not the
+        address -- see chains/evm/constants.py's own NETWORKS list, none of which
+        change address derivation or formatting).
+    """
+    def __init__(self):
+        super().__init__()
+        self.address = None
+
+
+    def add(self, segment, qr_type=QRType.EVM_ADDRESS):
+        """ RegEx re-confirms the exact format already matched by
+            DecodeQR.is_evm_address_format() at detection time -- not just relied on
+            from the caller, matching this codebase's own doctrine elsewhere. Result
+            is normalized to EIP-55 checksum casing regardless of the scanned QR's own
+            casing (real requesters may show all-lowercase, all-uppercase, or
+            checksum-cased addresses interchangeably). """
+        address_match = re.search(r'^0x[0-9a-fA-F]{40}$', segment)
+        if address_match is not None:
+            from seedsigner.chains.evm.crypto import address_bytes_to_checksum
+            self.address = address_bytes_to_checksum(bytes.fromhex(segment[2:]))
+            self.complete = True
+            self.collected_segments = 1
+            return DecodeQRStatus.COMPLETE
+
+        logger.debug(f"Invalid EVM address: {segment}")
+        return DecodeQRStatus.INVALID
+
+
+    def get_address(self):
+        return self.address
 
 
 

@@ -1,0 +1,76 @@
+rules:
+  - id: evm-derivation-path-self-validation
+    languages: [python]
+    severity: HIGH
+    message: >
+      A `derivation_path` read off a decoded/scanned object (e.g. an
+      EthSignRequest straight from external CBOR) flows into a signing call or
+      is stashed for later signing (`.sign(...)`, or a `derivation_path=...`
+      entry in the multichain hand-off dict) without first being checked by
+      `validate_derivation_path(...)` in this function. This violates the
+      codebase's self-validation rule (chains/evm/plugin.py,
+      docs/multi-chain/README.md): a scanned request's crypto-keypath is fully
+      attacker-controlled and could name any BIP-32 path on this seed -- e.g. a
+      path also used for Bitcoin -- turning the EVM sign flow into a
+      general-purpose signing oracle over the whole seed. Call
+      `validate_derivation_path(<path>)` on the exact value before it is used
+      for a signing decision or handed off to a later signing step.
+    metadata:
+      category: security
+      confidence: MEDIUM
+      references:
+        - src/seedsigner/chains/evm/plugin.py (validate_derivation_path)
+      subcategory:
+        - vuln
+      technology:
+        - python
+    paths:
+      include:
+        - "**/src/seedsigner/chains/evm/*.py"
+        - "**/src/seedsigner/views/evm_views.py"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: dict(..., derivation_path=$PATH, ...)
+              - metavariable-pattern:
+                  metavariable: $PATH
+                  pattern: $OBJ.derivation_path
+              - pattern-not-inside:
+                  pattern-either:
+                    - pattern: |
+                        $VALIDATOR.validate_derivation_path($PATH)
+                        ...
+                        $VAR = dict(..., derivation_path=$PATH, ...)
+                    - pattern: |
+                        validate_derivation_path($PATH)
+                        ...
+                        $VAR = dict(..., derivation_path=$PATH, ...)
+                    - pattern: |
+                        try:
+                            $VALIDATOR.validate_derivation_path($PATH)
+                        except ValueError as $E:
+                            ...
+                        ...
+                        $VAR = dict(..., derivation_path=$PATH, ...)
+          - patterns:
+              - pattern: $PLUGIN.sign($SEED, $PATH, ...)
+              - metavariable-pattern:
+                  metavariable: $PATH
+                  pattern: $OBJ.derivation_path
+              - pattern-not-inside:
+                  pattern-either:
+                    - pattern: |
+                        $VALIDATOR.validate_derivation_path($PATH)
+                        ...
+                        return $PLUGIN.sign($SEED, $PATH, ...)
+                    - pattern: |
+                        validate_derivation_path($PATH)
+                        ...
+                        return $PLUGIN.sign($SEED, $PATH, ...)
+                    - pattern: |
+                        try:
+                            $VALIDATOR.validate_derivation_path($PATH)
+                        except ValueError as $E:
+                            ...
+                        ...
+                        return $PLUGIN.sign($SEED, $PATH, ...)

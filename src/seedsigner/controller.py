@@ -1,4 +1,6 @@
+from datetime import datetime
 import logging
+import os
 import time
 import traceback
 
@@ -11,10 +13,11 @@ from seedsigner.models.psbt_parser import PSBTParser
 from seedsigner.models.seed import Seed
 from seedsigner.models.seed_storage import SeedStorage
 from seedsigner.models.settings import Settings
+from seedsigner.models.settings import SettingsConstants
 from seedsigner.models.singleton import Singleton
 from seedsigner.models.threads import BaseThread
 from seedsigner.views.screensaver import ScreensaverScreen
-from seedsigner.views.view import Destination
+from seedsigner.views.view import Destination, View
 
 
 logger = logging.getLogger(__name__)
@@ -60,7 +63,7 @@ class BackgroundImportThread(BaseThread):
         def time_import(module_name):
             last = time.time()
             import_module(module_name)
-            # print(time.time() - last, module_name)
+            # print(f"{time.time() - last:0.4f}: {module_name}")
 
         time_import('embit')
         time_import('seedsigner.helpers.embit_utils')
@@ -70,13 +73,13 @@ class BackgroundImportThread(BaseThread):
         from seedsigner.models.seed_storage import SeedStorage
         Controller.get_instance()._storage = SeedStorage()
 
+        time_import('numpy')  # used by PiVideoStream; by far the slowest import (2.29s)
+        time_import('seedsigner.hardware.pivideostream') 
+
         # Get MainMenuView ready to respond quickly
         time_import('seedsigner.views.scan_views')
-
         time_import('seedsigner.views.seed_views')
-
         time_import('seedsigner.views.tools_views')
-
         time_import('seedsigner.views.settings_views')
 
 
@@ -99,8 +102,6 @@ class Controller(Singleton):
         rather than at the top in order avoid circular imports.
     """
 
-    VERSION = "0.8.0"
-
     # Declare class member vars with type hints to enable richer IDE support throughout
     # the code.
     _storage: SeedStorage = None   # TODO: Rename "storage" to something more indicative of its temp, in-memory state
@@ -122,7 +123,25 @@ class Controller(Singleton):
     address_explorer_data: dict = None
 
     sign_message_data: dict = None
+
+    # Multi-chain (Phase 1 UI-walkthrough demo; mocked data, no real crypto yet).
+    # See docs/multi-chain/README.md in the diy-seedsigner repo.
+    multichain_data: dict = None
+
+    # 7fchain federation root-key ceremony (docs/7f-integration/root-key-ceremony-plan.md).
+    # Not a ChainRegistry plugin -- a standalone ceremony-device tool, independent
+    # of the boot-time chain chooser below -- so it gets its own flow-state dict
+    # rather than reusing multichain_data.
+    sevenf_ceremony_data: dict = None
     # TODO: end refactor section
+
+    # Boot-time chain selection (see docs/multi-chain/boot-chain-selection-plan.md):
+    # "bitcoin" or "evm", set once per power-on session by ChainChooserView.
+    # Deliberately declared OUTSIDE the flow-scoped attrs above -- MainMenuView's own
+    # reset block (below, in start()) wipes those on every Home visit, but this one
+    # must survive Home visits within the same session; only a real reboot (a fresh
+    # Controller instance) may clear it. None means "not yet chosen this session."
+    active_chain_id: str = None
 
     # Destination placeholder for when we need to jump out to a side flow but intend to
     # return navigation to the main flow (e.g. PSBT flow, load multisig descriptor,
@@ -132,6 +151,8 @@ class Controller(Singleton):
     FLOW__VERIFY_SINGLESIG_ADDR = "singlesig_addr"
     FLOW__ADDRESS_EXPLORER = "address_explorer"
     FLOW__SIGN_MESSAGE = "sign_message"
+    FLOW__EVM_SIGN = "evm_sign"
+    FLOW__EVM_ADDRESS_EXPLORER = "evm_address_explorer"
     resume_main_flow: str = None
 
     back_stack: BackStack = None
@@ -147,20 +168,20 @@ class Controller(Singleton):
         else:
             # Instantiate the one and only Controller instance
             return cls.configure_instance()
+    
+
+    @classmethod
+    def reset_instance(cls):
+        """
+            Currently used by the screenshot generator, but could potentially be used to
+            wipe and reset the state of the device.
+        """
+        cls._instance = None
+        cls.configure_instance()
 
 
     @classmethod
-    def configure_instance(cls, disable_hardware=False):
-        """
-            - `disable_hardware` is only meant to be used by the test suite so that it
-            can keep re-initializing a Controller in however many tests it needs to. But
-            this is only possible if the hardware isn't already being reserved. Without
-            this you get:
-
-            RuntimeError: Conflicting edge detection already enabled for this GPIO channel
-
-            each time you try to re-initialize a Controller.
-        """
+    def configure_instance(cls):
         from seedsigner.gui.renderer import Renderer
         from seedsigner.hardware.microsd import MicroSD
 
@@ -171,6 +192,11 @@ class Controller(Singleton):
         # Instantiate the one and only Controller instance
         controller = cls.__new__(cls)
         cls._instance = controller
+
+        # Check for libraqm support and log the status if not supported
+        from PIL import features
+        if not features.check('raqm'):
+            logger.warning("libraqm support: NOT AVAILABLE - Complex text rendering may be limited")
 
         # models
         controller.settings = Settings.get_instance()
@@ -211,18 +237,8 @@ class Controller(Singleton):
         return self._storage
 
 
-    def get_seed(self, seed_num: int) -> Seed:
-        if seed_num < len(self.storage.seeds):
-            return self.storage.seeds[seed_num]
-        else:
-            raise Exception(f"There is no seed_num {seed_num}; only {len(self.storage.seeds)} in memory.")
-
-
-    def discard_seed(self, seed_num: int):
-        if seed_num < len(self.storage.seeds):
-            del self.storage.seeds[seed_num]
-        else:
-            raise Exception(f"There is no seed_num {seed_num}; only {len(self.storage.seeds)} in memory.")
+    def discard_seed(self, seed: Seed):
+        self.storage.seeds.remove(seed)
 
 
     def pop_prev_from_back_stack(self):
@@ -247,11 +263,11 @@ class Controller(Singleton):
             * initial_destination: The first View to run. If None, the MainMenuView is
             used. Only used by the test suite.
         """
-        from seedsigner.views import MainMenuView, BackStackView
-        from seedsigner.views.screensaver import OpeningSplashScreen
+        from seedsigner.views import MainMenuView, BackStackView, RemoveMicroSDWarningView, ChainChooserView
+        from seedsigner.views.screensaver import OpeningSplashView
         from seedsigner.gui.toast import RemoveSDCardToastManagerThread
 
-        OpeningSplashScreen().start()
+        OpeningSplashView().run()
 
         """ Class references can be stored as variables in python!
 
@@ -285,7 +301,20 @@ class Controller(Singleton):
                 next_destination = Destination(MainMenuView)
             
             # Set up our one-time toast notification tip to remove the SD card
-            self.activate_toast(RemoveSDCardToastManagerThread())
+            if self.settings.get_value(SettingsConstants.SETTING__MICROSD_TOAST_TIMER) == SettingsConstants.MICROSD_TOAST_TIMER_FIVE_SECONDS:
+                self.activate_toast(RemoveSDCardToastManagerThread())
+            elif self.settings.get_value(SettingsConstants.SETTING__MICROSD_TOAST_TIMER) == SettingsConstants.MICROSD_TOAST_TIMER_FOREVER:
+                next_destination = Destination(RemoveMicroSDWarningView)
+
+            # Boot-time chain chooser: must be the LAST assignment in this block, after
+            # the microSD-toast-timer branch above, not before it -- that branch
+            # unconditionally overwrites next_destination, so checking active_chain_id
+            # first would let a device with MICROSD_TOAST_TIMER_FOREVER set silently
+            # skip the chooser for the entire session (found by adversarial review,
+            # see docs/multi-chain/boot-chain-selection-plan.md). Only fires on a true
+            # fresh boot (initial_destination is the test-suite-only override).
+            if self.active_chain_id is None and not initial_destination:
+                next_destination = Destination(ChainChooserView)
 
             while True:
                 # Destination(None) is a special case; render the Home screen
@@ -304,6 +333,8 @@ class Controller(Singleton):
                     self.psbt = None
                     self.psbt_parser = None
                     self.psbt_seed = None
+                    self.multichain_data = None
+                    self.sevenf_ceremony_data = None
                 
                 logger.info(f"\nback_stack: {self.back_stack}")
 
@@ -459,10 +490,25 @@ class Controller(Singleton):
             if ", line " in traceback_line:
                 line_info = traceback_line.split("/")[-1].replace("\"", "").replace("line ", "")
                 break
-        
+
         error = [
             exception_type,
             line_info,
             exception_msg,
         ]
         return Destination(UnhandledExceptionView, view_args={"error": error}, clear_history=True)
+
+
+    @property
+    def is_screensaver_start_allowed(self) -> bool:
+        """
+            Determines whether the screensaver is allowed to start.
+
+            The screensaver can start only if:
+            - It is not currently running.
+            - The current active view allows screensaver activity.
+        """
+        from seedsigner.views import MainMenuView
+        # Confusingly, the top item in the `BackStack` is actually the *current* View
+        active_view = self.back_stack[-1].view if self.back_stack else MainMenuView()
+        return not self.is_screensaver_running and active_view.is_screensaver_allowed

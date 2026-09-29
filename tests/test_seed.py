@@ -83,3 +83,37 @@ def test_electrum_seed_rejects_most_bip39_mnemonics():
 	mnemonic = "only gain spot output unknown craft simple cram absorb suggest ridge famous".split()
 	Seed(mnemonic)
 	ElectrumSeed(mnemonic)
+
+
+def test_invalid_word_does_not_leak_into_exception_message_or_log(caplog):
+	"""
+	Zeroize-audit regression: embit's bip39.mnemonic_to_bytes() raises
+	ValueError("Word '<word>' is not in the dictionary") for an unrecognized word.
+	Seed._generate_seed() must not let that literal word reach the
+	InvalidSeedException's message or the log -- both are shown/logged verbatim
+	elsewhere (Controller.handle_exception's crash screen; the app log file).
+	"""
+	import logging
+	caplog.set_level(logging.INFO)
+
+	bad_word = "notarealbip39word"
+	mnemonic = ["abandon"] * 11 + [bad_word]
+
+	with pytest.raises(InvalidSeedException) as exc_info:
+		Seed(mnemonic=mnemonic)
+
+	assert bad_word not in str(exc_info.value)
+	assert bad_word not in caplog.text
+
+
+def test_seed_eq_compares_seed_bytes():
+	mnemonic_a = "obscure bone gas open exotic abuse virus bunker shuffle nasty ship dash".split()
+	mnemonic_b = "test test test test test test test test test test test junk".split()
+
+	seed_a1 = Seed(mnemonic=mnemonic_a)
+	seed_a2 = Seed(mnemonic=mnemonic_a)
+	seed_b = Seed(mnemonic=mnemonic_b)
+
+	assert seed_a1 == seed_a2
+	assert seed_a1 != seed_b
+	assert seed_a1 != "not a seed"

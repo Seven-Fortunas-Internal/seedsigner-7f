@@ -1,0 +1,732 @@
+"""
+    EVM chain UI: address display and sign-request review/sign. Real BIP-32/secp256k1
+    derivation, real EIP-1559 RLP decode, real ECDSA signing (see chains/evm/) -- the
+    review screens (including the anti-scam warnings) are the concrete no-blind-signing
+    mechanism, not a placeholder. See docs/multi-chain/README.md's "Architecture:
+    chain-plugin model", docs/multi-chain/research/anti-scam-ux.md for why these
+    specific fields/warnings exist, and docs/multi-chain/evm-first-class-plan.md for
+    what's still ahead (real ERC-4527 scan-and-sign, replacing the fixed
+    demo-scenario menu below).
+
+    Follows the same file-pairing convention as the rest of this codebase
+    (seed_views.py <-> seed_screens.py); see gui/screens/evm_screens.py for the paired
+    Screen classes. Reached directly from SeedOptionsView's flattened EVM actions
+    (Address/Connect, Scan sign request, Sign request) once the operator has chosen
+    "Ethereum / EVM" at boot (see ChainChooserView in view.py and
+    docs/multi-chain/boot-chain-selection-plan.md) -- there is no longer an
+    intermediate chain-picker or per-plugin options submenu (both retired along with
+    SETTING__MULTICHAIN_ENABLED; see that same plan doc's adversarial review findings).
+
+    Real camera-based scan-and-sign (ERC-4527) is built (EvmScanSignRequestView
+    below) and is the primary send path; the fixed demo-scenario menu
+    (EvmSignSelectView/EvmSignStartView) stays as a dev/testing convenience
+    alongside it, not the only way to sign.
+"""
+import logging
+import os
+
+from gettext import gettext as _
+
+from seedsigner.helpers.l10n import mark_for_translation as _mft
+from seedsigner.chains.base import ReviewField
+from seedsigner.chains.evm.constants import NETWORKS
+from seedsigner.chains.evm.plugin import DEMO_SCENARIOS, DERIVATION_PATH_TEMPLATE
+from seedsigner.chains.evm.ur_types import DATA_TYPE_TYPED_TRANSACTION, EthSignature, EthSignRequest
+from seedsigner.gui.components import FontAwesomeIconConstants, SeedSignerIconConstants
+from seedsigner.gui.screens import DireWarningScreen, LargeIconStatusScreen, RET_CODE__BACK_BUTTON, WarningScreen
+from seedsigner.gui.screens.screen import ButtonListScreen, ButtonOption
+from seedsigner.models.seed import Seed
+from seedsigner.models.settings import SettingsConstants
+from seedsigner.views.scan_views import ScanView
+from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
+
+logger = logging.getLogger(__name__)
+
+# BIP-32 non-hardened child index range -- same constraint SeedBIP85SelectChildIndexView
+# already enforces for the same underlying reason (see gui/screens/evm_screens.py's
+# EvmSelectAddressIndexScreen docstring).
+_MAX_ADDRESS_INDEX = 2**31
+
+
+_SCENARIO_MENU = [
+    ("transfer", "Ordinary transfer"),
+    ("approve_unlimited", "Token approval (unlimited)"),
+    ("usdc_transfer", "USDC transfer"),
+    ("permit", "Permit (off-chain signature)"),
+]
+
+
+
+"""****************************************************************************
+    EVM Address Display Views
+****************************************************************************"""
+class EvmNetworkView(View):
+    """ Entry point for EVM address display -- reached directly from
+        SeedOptionsView.EVM_ADDRESS now that EvmOptionsView/MultiChainOptionsView are
+        retired (see module docstring). """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "evm"):
+            return
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        button_data = [ButtonOption(n.display_name) for n in NETWORKS]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("EVM Network"),
+            is_button_text_centered=True,
+            button_data=button_data,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        network = NETWORKS[selected_menu_num]
+        return Destination(EvmSelectAddressIndexView, view_args=dict(seed=self.seed, network_id=network.network_id))
+
+
+
+class EvmSelectAddressIndexView(View):
+    """ Shared index picker for both places that need one: deriving a receive
+        address (network_id set) and signing a menu-picked demo scenario
+        (scenario_key set) -- exactly one of the two is set, matching the
+        one-destination-in/one-destination-out shape every other forked step in
+        this codebase already uses (e.g. SeedBIP85SelectChildIndexView). """
+    def __init__(self, seed: Seed, network_id: str = None, scenario_key: str = None):
+        super().__init__()
+        self.seed = seed
+        self.network_id = network_id
+        self.scenario_key = scenario_key
+
+
+    def run(self):
+        from seedsigner.gui.screens.evm_screens import EvmSelectAddressIndexScreen
+        ret = self.run_screen(EvmSelectAddressIndexScreen)
+
+        if ret == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if not ret or not 0 <= int(ret) < _MAX_ADDRESS_INDEX:
+            return Destination(
+                EvmInvalidAddressIndexView,
+                view_args=dict(seed=self.seed, network_id=self.network_id, scenario_key=self.scenario_key),
+                skip_current_view=True,
+            )
+
+        address_index = int(ret)
+        if self.network_id is not None:
+            return Destination(EvmAddressView, view_args=dict(
+                seed=self.seed, network_id=self.network_id, address_index=address_index))
+        else:
+            return Destination(EvmSignStartView, view_args=dict(
+                seed=self.seed, scenario_key=self.scenario_key, address_index=address_index))
+
+
+
+class EvmInvalidAddressIndexView(View):
+    def __init__(self, seed: Seed, network_id: str = None, scenario_key: str = None):
+        super().__init__()
+        self.seed = seed
+        self.network_id = network_id
+        self.scenario_key = scenario_key
+
+
+    def run(self):
+        self.run_screen(
+            DireWarningScreen,
+            title=_("Index Error"),
+            show_back_button=False,
+            status_icon_name=SeedSignerIconConstants.ERROR,
+            status_headline=_("Invalid Address Index"),
+            text=_("Address index must be between 0 and 2^31-1."),
+            button_data=[ButtonOption("Try again")],
+        )
+
+        return Destination(
+            EvmSelectAddressIndexView,
+            view_args=dict(seed=self.seed, network_id=self.network_id, scenario_key=self.scenario_key),
+            skip_current_view=True,
+        )
+
+
+
+class EvmAddressView(View):
+    def __init__(self, seed: Seed, network_id: str, address_index: int):
+        super().__init__()
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.constants import NETWORKS_BY_ID
+
+        self.seed = seed
+        self.network = NETWORKS_BY_ID[network_id]
+        self.derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=address_index)
+        address = ChainRegistry.get("evm").derive_address(seed.seed_bytes, self.derivation_path)
+        self.address = address.address
+
+
+    def run(self):
+        from seedsigner.gui.screens.evm_screens import EvmAddressScreen
+        selected_menu_num = self.run_screen(
+            EvmAddressScreen,
+            derivation_path=self.derivation_path,
+            address=self.address,
+            network_name=self.network.display_name,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        # Button order fixed in EvmAddressScreen.__post_init__: 0 = "Export Address
+        # QR", 1 = "Export Connect QR".
+        if selected_menu_num == 1:
+            return Destination(EvmConnectQRView, view_args=dict(seed=self.seed))
+
+        return Destination(EvmAddressQRView, view_args=dict(address=self.address))
+
+
+
+class EvmAddressQRView(View):
+    def __init__(self, address: str):
+        super().__init__()
+        self.address = address
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import GenericStaticQrEncoder
+        qr_encoder = GenericStaticQrEncoder(data=self.address)
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=qr_encoder,
+        )
+
+        # Exiting/Canceling the QR display screen always returns Home, same
+        # convention used throughout the codebase (ToolsAddressExplorerAddressView,
+        # SeedSignMessageSignedMessageQRView, the 7F work's SevenFAddressQRView).
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
+class EvmConnectQRView(View):
+    """ Plan Phase 2's deferred "Export Connect QR": a crypto-hdkey UR for the
+        account-level (m/44'/60'/0') public key, what a real requester
+        (MetaMask/Rabby/etc.) scans to import this device as a Keystone-compatible
+        watch-only account -- after which *it* derives whichever change/index
+        address it needs, without a further QR round-trip. Always account 0, same
+        single-account convention DERIVATION_PATH_TEMPLATE.format(account=0, ...)
+        already uses everywhere else in this module. """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import UrEvmConnectQrEncoder
+        from seedsigner.models.settings import SettingsConstants
+        qr_encoder = UrEvmConnectQrEncoder(
+            seed_bytes=self.seed.seed_bytes,
+            account=0,
+            qr_density=self.settings.get_value(SettingsConstants.SETTING__QR_DENSITY),
+        )
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=qr_encoder,
+        )
+
+        # Exiting/Canceling the QR display screen always returns Home, same
+        # convention as EvmAddressQRView/EvmSignedUrQRView above.
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
+class EvmVerifyAddressStartView(View):
+    """ Reached from Home's Scan button (scan_views.py's is_evm_address branch) when
+        an EVM (0x...) address QR is scanned, in EVM mode. Checks each loaded seed
+        across a bounded index range for a match -- deliberately NOT Bitcoin's own
+        unbounded, background-threaded brute-force search
+        (seed_views.py's SeedAddressVerificationView): EVM derivation (secp256k1 +
+        Keccak-256) is fast enough that even `_VERIFY_INDEX_LIMIT` x (loaded seeds)
+        derivations complete synchronously, well within one screen render, so no
+        background thread/live-progress/skip-10/cancel UI is needed -- and an
+        unbounded loop with none of that UI would have no way to ever terminate on a
+        genuine non-match. See docs/multi-chain/tools-evm-address-explorer-and-verify-address-plan.md
+        for the "how far do we search" decision this bound represents. """
+    # Matches the common BIP-44 gap-limit convention most wallets already use as a
+    # default for when to stop looking for used receive addresses -- not tied to any
+    # actual on-chain gap-limit semantics for EVM (which has none; every EVM address
+    # is usable immediately, unlike Bitcoin's receive/change gap concept). Just a
+    # reasonable, explicit, documented bound rather than an arbitrary or unbounded one.
+    _VERIFY_INDEX_LIMIT = 20
+
+
+    def __init__(self, address: str):
+        super().__init__()
+        self.address = address
+
+        if guard_active_chain(self, "evm"):
+            return
+
+        from seedsigner.chains import ChainRegistry
+        plugin = ChainRegistry.get("evm")
+
+        self.matched_seed = None
+        self.matched_derivation_path = None
+        for seed in self.controller.storage.seeds:
+            for index in range(self._VERIFY_INDEX_LIMIT):
+                derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=index)
+                derived = plugin.derive_address(seed.seed_bytes, derivation_path)
+                if derived.address == self.address:
+                    self.matched_seed = seed
+                    self.matched_derivation_path = derivation_path
+                    break
+            if self.matched_seed is not None:
+                break
+
+
+    def run(self):
+        if self.matched_seed is not None:
+            fingerprint = self.matched_seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+            self.run_screen(
+                LargeIconStatusScreen,
+                title=_("Address Verified"),
+                status_headline=_("Verified"),
+                text=_("This address belongs to seed {} at {}.").format(fingerprint, self.matched_derivation_path),
+            )
+        else:
+            self.run_screen(
+                WarningScreen,
+                title=_("Not Verified"),
+                status_headline=_("No Match Found"),
+                text=_("This address doesn't match any loaded seed within the first {} addresses.").format(self._VERIFY_INDEX_LIMIT),
+            )
+
+        return Destination(MainMenuView, clear_history=True)
+
+
+
+"""****************************************************************************
+    EVM Sign Views
+****************************************************************************"""
+class EvmSelectSeedView(View):
+    """ Reached from Home's catch-all Scan button (scan_views.py's
+        ScanView._handle_complete_scan(), is_eth_sign_request branch) when no seed
+        context is known yet -- the EVM-side twin of PSBTSelectSeedView
+        (psbt_views.py). Double-scan design (see
+        docs/multi-chain/scan-recognizes-eth-sign-request-plan.md): this view only
+        ever uses the decoded `eth_sign_request` to build a seed-selection hint, then
+        discards it -- the operator scans the same QR again inside
+        EvmScanSignRequestView below for the real, fully-validated review. No new
+        Controller-level slot for a decoded-but-seed-less request is needed. """
+    SCAN_SEED = ButtonOption("Scan a seed", SeedSignerIconConstants.QRCODE)
+    TYPE_12WORD = ButtonOption("Enter 12-word seed", FontAwesomeIconConstants.KEYBOARD)
+    TYPE_24WORD = ButtonOption("Enter 24-word seed", FontAwesomeIconConstants.KEYBOARD)
+
+
+    def __init__(self, eth_sign_request: EthSignRequest):
+        super().__init__()
+        self.eth_sign_request = eth_sign_request
+
+        if guard_active_chain(self, "evm"):
+            return
+
+
+    def run(self):
+        from seedsigner.controller import Controller
+        from seedsigner.chains import ChainRegistry
+        from seedsigner.chains.evm.crypto import address_bytes_to_checksum
+
+        seeds = self.controller.storage.seeds
+        button_data = []
+        for seed in seeds:
+            button_str = seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+
+            # Partial hint only -- EthSignRequest.address is optional and
+            # attacker-controlled (unlike PSBT's real input-fingerprint check), so a
+            # mismatch is flagged, never used to hide/block a seed outright. A
+            # malformed/non-EVM derivation_path must not crash seed selection --
+            # validate_derivation_path()/is_real_transaction_payload() are what
+            # actually gate signing, inside EvmScanSignRequestView's own second scan.
+            if self.eth_sign_request.address is not None:
+                try:
+                    plugin = ChainRegistry.get("evm")
+                    derived = plugin.derive_address(seed.seed_bytes, self.eth_sign_request.derivation_path)
+                    hinted_address = address_bytes_to_checksum(self.eth_sign_request.address)
+                    if derived.address != hinted_address:
+                        # TRANSLATOR_NOTE: Inserts fingerprint w/"?" to indicate the address hint doesn't match this seed
+                        button_str = _("{} (?)").format(button_str)
+                except Exception as e:
+                    logger.info("Couldn't compute address hint for seed selection: %r", e)
+
+            button_data.append(ButtonOption(button_str, SeedSignerIconConstants.FINGERPRINT))
+
+        button_data += [self.SCAN_SEED, self.TYPE_12WORD, self.TYPE_24WORD]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Select Signer"),
+            button_data=button_data,
+            is_bottom_list=True,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        if len(seeds) > 0 and selected_menu_num < len(seeds):
+            # Seed already loaded -- proceed straight to the second (real) scan.
+            return Destination(EvmScanSignRequestView, view_args=dict(seed=seeds[selected_menu_num]))
+
+        # None of the loaded seeds were selected; the operator needs to
+        # scan/type a new one first, then resume back here once it's ready.
+        self.controller.resume_main_flow = Controller.FLOW__EVM_SIGN
+
+        if button_data[selected_menu_num] == self.SCAN_SEED:
+            from seedsigner.views.scan_views import ScanSeedQRView
+            return Destination(ScanSeedQRView)
+
+        elif button_data[selected_menu_num] in [self.TYPE_12WORD, self.TYPE_24WORD]:
+            from seedsigner.views.seed_views import SeedMnemonicEntryView
+            num_words = 12 if button_data[selected_menu_num] == self.TYPE_12WORD else 24
+            self.controller.storage.init_pending_mnemonic(num_words=num_words)
+            return Destination(SeedMnemonicEntryView)
+
+
+
+class EvmScanSignRequestView(ScanView):
+    """ Real free-form send: scans an ERC-4527 eth-sign-request QR -- what
+        MetaMask/Rabby/etc. actually produce -- instead of picking from the fixed
+        demo-scenario menu below. Reached with the seed already known (this is a
+        per-seed submenu item, unlike the top-level catch-all Scan button PSBT
+        uses, which has to ask which seed applies after scanning) -- overrides
+        _handle_complete_scan() rather than duplicating ScanView's shared
+        scan-screen scaffolding (see scan_views.py). """
+    instructions_text = _mft("Scan sign request")
+    invalid_qr_type_message = _mft("Expected an eth-sign-request QR (from MetaMask, Rabby, etc.)")
+
+
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "evm"):
+            return
+
+
+    @property
+    def is_valid_qr_type(self):
+        return self.decoder.is_eth_sign_request
+
+
+    def _handle_complete_scan(self):
+        eth_sign_request = self.decoder.get_eth_sign_request()
+        if eth_sign_request is None:
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("Couldn't decode the scanned request.")))
+
+        if eth_sign_request.data_type != DATA_TYPE_TYPED_TRANSACTION:
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("Only real EIP-1559 transactions are supported today "
+                         "(request type {} isn't).").format(eth_sign_request.data_type)))
+
+        from seedsigner.chains import ChainRegistry
+        plugin = ChainRegistry.get("evm")
+
+        # data_type above is just as attacker-controlled as every other field on a
+        # scanned request -- it could claim DATA_TYPE_TYPED_TRANSACTION while
+        # sign_data is actually shaped like the still-mocked permit JSON demo below,
+        # which parse_sign_request()/sign() would otherwise silently accept (see
+        # EvmPlugin.is_real_transaction_payload()'s docstring for the full failure
+        # mode this closes). Check the actual dispatch signal, not the claimed one.
+        if not plugin.is_real_transaction_payload(eth_sign_request.sign_data):
+            logger.warning("Refusing scanned sign request: data_type claimed a real "
+                            "transaction but sign_data's payload doesn't match")
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("The scanned request claims a real transaction but its "
+                         "payload doesn't match -- refusing rather than guess.")))
+
+        # Self-validation: crypto-keypath is fully attacker-controlled (it comes
+        # straight off the scanned CBOR) -- refuse anything outside this plugin's
+        # own m/44'/60'/{account}'/0/{index} namespace here, early and with a clear
+        # message, rather than letting an unrelated BIP-32 path (e.g. one this same
+        # seed also uses for Bitcoin) reach EvmConfirmAddressView/EvmSignedUrQRView.
+        # sign() re-validates this independently too (chains/evm/plugin.py) so it's
+        # never the *only* control, matching this codebase's existing
+        # not-just-relied-on-from-the-caller doctrine.
+        try:
+            plugin.validate_derivation_path(eth_sign_request.derivation_path)
+        except ValueError as e:
+            logger.warning("Refusing scanned sign request: %r", e)
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(reason=str(e)))
+
+        try:
+            parsed = plugin.parse_sign_request(eth_sign_request.sign_data)
+        except Exception as e:
+            logger.warning("Couldn't parse scanned sign request: %r", e, exc_info=True)
+            return Destination(EvmUnsupportedSignRequestView, view_args=dict(
+                reason=_("Couldn't parse the transaction: {}").format(e)))
+
+        # Self-validation: this request itself names which derivation path/address
+        # it wants signed with (crypto-keypath) -- surface it as its own review
+        # field, not just inside EvmConfirmAddressView's final screen. Unlike the
+        # demo menu below (where the operator always picks the index), this path
+        # comes from untrusted external input.
+        fields = [ReviewField(label="Derivation Path", value=eth_sign_request.derivation_path)] + list(parsed.review_fields)
+
+        self.controller.multichain_data = dict(
+            seed=self.seed,
+            chain_id="evm",
+            derivation_path=eth_sign_request.derivation_path,
+            payload=eth_sign_request.sign_data,
+            fields=fields,
+            eth_sign_request=eth_sign_request,
+        )
+        return Destination(EvmConfirmPayloadView, view_args=dict(page_num=0), skip_current_view=True)
+
+
+
+class EvmUnsupportedSignRequestView(View):
+    def __init__(self, reason: str):
+        super().__init__()
+        self.reason = reason
+
+
+    def run(self):
+        self.run_screen(
+            DireWarningScreen,
+            title=_("Unsupported Request"),
+            show_back_button=False,
+            status_icon_name=SeedSignerIconConstants.ERROR,
+            status_headline=_("Can't Sign This Request"),
+            text=self.reason,
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
+class EvmSignSelectView(View):
+    """ Fixed demo-scenario menu, kept as a testing convenience now that
+        EvmScanSignRequestView above is the real, primary way to sign -- pick one
+        of three demo sign-request scenarios, chosen directly from the anti-scam
+        research (see module docstring) rather than one arbitrary example. """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "evm"):
+            return
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        button_data = [ButtonOption(label) for _key, label in _SCENARIO_MENU]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Sign Request"),
+            is_button_text_centered=True,
+            button_data=button_data,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        scenario_key, _label = _SCENARIO_MENU[selected_menu_num]
+        return Destination(EvmSelectAddressIndexView, view_args=dict(seed=self.seed, scenario_key=scenario_key))
+
+
+
+class EvmSignStartView(View):
+    """ Entry point for a menu-picked sign request: parses the chosen scenario via the
+        EvmPlugin -- the same call path a real scanned request would go through --
+        and stashes the result for the paged review. """
+    def __init__(self, seed: Seed, scenario_key: str, address_index: int):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "evm"):
+            return
+
+        from seedsigner.chains import ChainRegistry
+        plugin = ChainRegistry.get("evm")
+        payload = DEMO_SCENARIOS[scenario_key]
+        parsed = plugin.parse_sign_request(payload)
+
+        # Derivation path is a wallet-side choice, not part of the signed payload
+        # itself (a real transaction/permit carries no such field) -- the view layer
+        # owns it, same as EvmAddressView already does. Account 0, operator-picked
+        # index (see EvmSelectAddressIndexView) -- a real scanned ERC-4527 request
+        # would eventually let the incoming crypto-keypath name this instead.
+        derivation_path = DERIVATION_PATH_TEMPLATE.format(account=0, index=address_index)
+
+        self.controller.multichain_data = dict(
+            seed=seed,
+            chain_id="evm",
+            derivation_path=derivation_path,
+            payload=payload,
+            fields=parsed.review_fields,
+        )
+
+
+    def run(self):
+        return Destination(EvmConfirmPayloadView, view_args=dict(page_num=0), skip_current_view=True)
+
+
+
+class EvmConfirmPayloadView(View):
+    """ Pages through the sign request's review fields one concern per screen -- the
+        concrete mechanism for no-blind-signing. Warning-flagged fields (unlimited
+        approval, off-chain permit signature, first-time address) render distinctly --
+        see gui/screens/evm_screens.py's EvmReviewFieldScreen. """
+    def __init__(self, page_num: int = 0):
+        super().__init__()
+        self.page_num = page_num
+        data = self.controller.multichain_data
+        self.fields: list[ReviewField] = data["fields"]
+
+        if self.page_num >= len(self.fields):
+            raise Exception("Bug in EVM review field paging")
+
+
+    def run(self):
+        from seedsigner.gui.screens.evm_screens import EvmReviewFieldScreen
+        field = self.fields[self.page_num]
+        is_final_page = self.page_num == len(self.fields) - 1
+
+        selected_menu_num = self.run_screen(
+            EvmReviewFieldScreen,
+            page_title=_("Review Sign Request"),
+            label_text=field.label,
+            value_text=field.value,
+            warning_detail=field.warning_detail,
+            is_warning=field.is_warning,
+            page_num=self.page_num,
+            num_pages=len(self.fields),
+            is_final_page=is_final_page,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            if self.page_num == 0:
+                self.controller.multichain_data = None
+            return Destination(BackStackView)
+
+        if is_final_page:
+            return Destination(EvmConfirmAddressView)
+        else:
+            return Destination(EvmConfirmPayloadView, view_args=dict(page_num=self.page_num + 1))
+
+
+
+class EvmConfirmAddressView(View):
+    def __init__(self):
+        super().__init__()
+        from seedsigner.chains import ChainRegistry
+
+        data = self.controller.multichain_data
+        self.seed = data["seed"]
+        self.derivation_path = data["derivation_path"]
+        address = ChainRegistry.get("evm").derive_address(self.seed.seed_bytes, self.derivation_path)
+        self.address = address.address
+
+
+    def run(self):
+        from seedsigner.gui.screens.evm_screens import EvmConfirmSignScreen
+        selected_menu_num = self.run_screen(
+            EvmConfirmSignScreen,
+            derivation_path=self.derivation_path,
+            address=self.address,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        # User clicked "Sign". A real scanned request needs an eth-signature UR
+        # response (what MetaMask/etc. actually expect back); the demo-menu path
+        # keeps the existing plain-text EVM-DEMO-SIG: QR.
+        if self.controller.multichain_data.get("eth_sign_request") is not None:
+            return Destination(EvmSignedUrQRView)
+        return Destination(EvmSignedQRView)
+
+
+
+class EvmSignedUrQRView(View):
+    """ Real ERC-4527 response: encodes the device's signature as an eth-signature
+        UR, matched back to the incoming request via its request_id (see
+        chains/evm/ur_types.py) -- what a real requester actually needs back, unlike
+        EvmSignedQRView's EVM-DEMO-SIG: plain text, which nothing outside
+        tools/broadcast_evm_demo.py understands. """
+    def __init__(self):
+        super().__init__()
+        from seedsigner.chains import ChainRegistry
+
+        data = self.controller.multichain_data
+        eth_sign_request = data["eth_sign_request"]
+        plugin = ChainRegistry.get("evm")
+        signature = plugin.sign(data["seed"].seed_bytes, data["derivation_path"], payload=data["payload"])
+
+        # request-id is optional on the request but required on the response --
+        # generate one in the rare case a requester omitted it, so correlation is
+        # still possible even though this specific requester didn't ask for it.
+        request_id = eth_sign_request.request_id or os.urandom(16)
+
+        self.eth_signature = EthSignature(request_id=request_id, signature=signature.signature_bytes, origin="seedsigner")
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import UrEthSignatureQrEncoder
+        from seedsigner.models.settings import SettingsConstants
+
+        qr_encoder = UrEthSignatureQrEncoder(
+            eth_signature=self.eth_signature,
+            qr_density=self.settings.get_value(SettingsConstants.SETTING__QR_DENSITY),
+        )
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=qr_encoder,
+        )
+
+        # cleanup
+        self.controller.multichain_data = None
+
+        # Exiting/Canceling the QR display screen always returns Home
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
+class EvmSignedQRView(View):
+    """ Real signature for the transfer/approve_unlimited demo scenarios (real
+        RLP-encoded transactions, signed for real -- see chains/evm/plugin.py); the
+        permit scenario still gets a FAKE os.urandom signature, since permit signing
+        itself is still Phase 1 (see plugin.py's module docstring). """
+    def __init__(self):
+        super().__init__()
+        from seedsigner.chains import ChainRegistry
+
+        data = self.controller.multichain_data
+        plugin = ChainRegistry.get("evm")
+        signature = plugin.sign(data["seed"].seed_bytes, data["derivation_path"], payload=data["payload"])
+        self.encoded_signature = plugin.encode_response(signature).decode()
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import GenericStaticQrEncoder
+        qr_encoder = GenericStaticQrEncoder(data=f"EVM-DEMO-SIG:{self.encoded_signature}")
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=qr_encoder,
+        )
+
+        # cleanup
+        self.controller.multichain_data = None
+
+        # Exiting/Canceling the QR display screen always returns Home
+        return Destination(MainMenuView, skip_current_view=True)

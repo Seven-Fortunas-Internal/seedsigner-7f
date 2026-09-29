@@ -1,3 +1,22 @@
-coverage==7.3.1
+coverage==7.6.12
 pytest==7.4.2
 pytest-cov==4.1.0
+# Reference Ethereum implementations, test-only -- cross-verify
+# seedsigner.chains.evm.crypto (test_evm_crypto.py) against the same libraries
+# web3.py itself uses. Never shipped on-device.
+eth-account==0.14.0
+eth-keys==0.8.0
+# Transitive dependency of eth-account (via eth-keyfile) -- needs the `Crypto`
+# namespace specifically, separate from and in addition to the app's own
+# pycryptodomex (`Cryptodome` namespace) dependency in requirements.txt. The two
+# coexist fine (different top-level import names, same underlying project).
+pycryptodome==3.23.0
+# Reference RLP implementation, test-only -- cross-verify
+# seedsigner.chains.evm.rlp_codec (test_evm_rlp_codec.py) against it. Never shipped
+# on-device (see requirements.txt's note on why we don't use it there).
+rlp==5.0.0
+# Property-based testing, test-only -- generates adversarial/edge-case inputs for
+# the hand-rolled binary codecs (rlp_codec.py, crypto.py's EIP-55 checksum,
+# ur_types.py's BIP-32 path <-> Keypath conversion) beyond the fixed reference
+# vectors above. Never shipped on-device.
+hypothesis==6.168.0

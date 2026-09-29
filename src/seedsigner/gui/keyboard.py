@@ -1,13 +1,18 @@
 from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 from typing import Tuple
+from gettext import gettext as _
 
-from seedsigner.gui.components import Fonts, GUIConstants
+from seedsigner.gui.components import Fonts, GUIConstants, SeedSignerIconConstants
 from seedsigner.hardware.buttons import HardwareButtonsConstants
 
 
 
 class Keyboard:
+    """
+    Note that it is up to the calling Screen to manage the Renderer.lock. The Keyboard
+    and its child Keys should NOT attempt to manage the lock.
+    """
     WRAP_TOP = "wrap_top"
     WRAP_BOTTOM = "wrap_bottom"
     WRAP_LEFT = "wrap_left"
@@ -25,54 +30,79 @@ class Keyboard:
     ENTER_RIGHT = "enter_right"
 
     REGULAR_KEY_FONT = "regular"
-    COMPACT_KEY_FONT = "compact"
+    ICON_KEY_FONT = GUIConstants.ICON_FONT_NAME__SEEDSIGNER
 
     KEY_BACKSPACE = {
         "code": "DEL",
-        "letter": "del",
-        "font": COMPACT_KEY_FONT,
-        "size": 2,
+         "letter": SeedSignerIconConstants.DELETE,
+         "font": ICON_KEY_FONT,
+        "size": 3,
     }
+    KEY_BACKSPACE_2 = {
+         "code": "DEL",
+         "letter": SeedSignerIconConstants.DELETE,
+         "font": ICON_KEY_FONT,
+         "size": 2,
+    }
+    KEY_BACKSPACE_4 = {
+        "code": "DEL",
+         "letter": SeedSignerIconConstants.DELETE,
+         "font": ICON_KEY_FONT,
+        "size": 4,
+    }
+    KEY_BACKSPACE_5 = {
+        "code": "DEL",
+         "letter": SeedSignerIconConstants.DELETE,
+         "font": ICON_KEY_FONT,
+        "size": 5,
+    }
+    KEY_BACKSPACE_6 = {
+        "code": "DEL",
+         "letter": SeedSignerIconConstants.DELETE,
+         "font": ICON_KEY_FONT,
+        "size": 6,
+    }   
+
     KEY_SPACE = {
         "code": "SPACE",
-        "letter": "space",
-        "font": COMPACT_KEY_FONT,
+        "letter": SeedSignerIconConstants.SPACE,
+        "font": ICON_KEY_FONT,
         "size": 1,
     }
     KEY_SPACE_2 = {
         "code": "SPACE",
-        "letter": "space",
-        "font": COMPACT_KEY_FONT,
+        "letter": SeedSignerIconConstants.SPACE,
+        "font": ICON_KEY_FONT,
         "size": 2,
     }
-    KEY_SPACE_3 = {
-        "code": "SPACE",
-        "letter": "space",
-        "font": COMPACT_KEY_FONT,
-        "size": 3,
-    }
-    KEY_SPACE_4 = {
-        "code": "SPACE",
-        "letter": "space",
-        "font": COMPACT_KEY_FONT,
-        "size": 4,
-    }
+    # KEY_SPACE_3 = {  # Unused definitions
+    #     "code": "SPACE",
+    #     "letter": SeedSignerIconConstants.SPACE,
+    #     "font": ICON_KEY_FONT,
+    #     "size": 3,
+    # }
+    # KEY_SPACE_4 = {
+    #     "code": "SPACE",
+    #     "letter": SeedSignerIconConstants.SPACE,
+    #     "font": ICON_KEY_FONT,
+    #     "size": 4,
+    # }
     KEY_SPACE_5 = {
         "code": "SPACE",
-        "letter": "space",
-        "font": COMPACT_KEY_FONT,
+        "letter": SeedSignerIconConstants.SPACE,
+        "font": ICON_KEY_FONT,
         "size": 5,
     }
     KEY_CURSOR_LEFT = {
         "code": "CURSOR_LEFT",
-        "letter": "<",
-        "font": REGULAR_KEY_FONT,
+        "letter": SeedSignerIconConstants.CHEVRON_LEFT,
+        "font": ICON_KEY_FONT,
         "size": 1,
     }
     KEY_CURSOR_RIGHT = {
         "code": "CURSOR_RIGHT",
-        "letter": ">",
-        "font": REGULAR_KEY_FONT,
+        "letter": SeedSignerIconConstants.CHEVRON_RIGHT,
+        "font": ICON_KEY_FONT,
         "size": 1,
     }
     KEY_PREVIOUS_PAGE = {
@@ -114,9 +144,11 @@ class Keyboard:
 
         def render_key(self):
             font = self.keyboard.font
+            text_height = self.keyboard.text_height
             if self.is_additional_key:
-                if Keyboard.ADDITIONAL_KEYS[self.code]["font"] == Keyboard.COMPACT_KEY_FONT:
-                    font = self.keyboard.additonal_key_compact_font
+                if Keyboard.ADDITIONAL_KEYS[self.code]["font"] == Keyboard.ICON_KEY_FONT:
+                    font = self.keyboard.icon_key_font
+                    text_height = self.keyboard.icon_key_height
 
             outline_color = "#333"
             if not self.is_active:
@@ -150,9 +182,6 @@ class Keyboard:
                 radius=4
             )
 
-            # Fixed-width fonts will all have same height, ignoring below baseline (e.g. "Q" or "q")
-            (left, top, right, bottom) = font.getbbox("X", anchor="ls")
-            text_height = -1 * top
             self.keyboard.draw.text(
                 (
                     self.screen_x + int(self.keyboard.key_width * self.size / 2),
@@ -193,7 +222,6 @@ class Keyboard:
         self.auto_wrap = auto_wrap
         self.background_color = GUIConstants.BUTTON_BACKGROUND_COLOR
         self.deactivated_background_color = GUIConstants.BACKGROUND_COLOR
-        self.additional_key_deactivated_background_color = GUIConstants.BACKGROUND_COLOR
         self.highlight_color = highlight_color
 
         # Does the specified layout work?
@@ -208,7 +236,15 @@ class Keyboard:
 
         # Set up the rendering and state params
         self.active_keys = list(self.charset)
-        self.additonal_key_compact_font = Fonts.get_font("RobotoCondensed-Bold", 18)
+        self.icon_key_font = Fonts.get_font(GUIConstants.ICON_FONT_NAME__SEEDSIGNER, 26)
+
+        # Fixed-width fonts will all have same height, ignoring below baseline (e.g. "Q" or "q")
+        (left, top, right, bottom) = self.font.getbbox("X", anchor="ls")
+        self.text_height = -1 * top
+
+        (left, top, right, bottom) = self.icon_key_font.getbbox(SeedSignerIconConstants.DELETE + SeedSignerIconConstants.SPACE, anchor="ls")
+        self.icon_key_height = -1 * top
+
         self.x_start = rect[0]
         self.y_start = rect[1]
         self.x_gap = 2
@@ -217,7 +253,6 @@ class Keyboard:
         self.y_gap = 2
         self.key_height = int((rect[3] - rect[1]) / rows) - self.y_gap
         self.height = rows * (self.key_height) + (rows - 1) * self.y_gap
-        self.additional_key_entered_from_x = None
 
         # Two-dimensional list of Key obj row data
         self.keys = []
@@ -372,15 +407,11 @@ class Keyboard:
             next_y += 1
 
 
-    def update_from_input(self, input, enter_from=None):
+    def update_from_input(self, input):
         """
             Managing code must handle its own input/update loop since other action buttons
             will be active on the same screen outside of the keyboard rect (e.g. "Ok",
             "Back", etc). Pass relevant input here to update the keyboard.
-
-            `enter_from` tells the keyboard that the external UI has caused a loop back
-            navigation.
-            (e.g. pressing up from a submit button below the keyboard = ENTER_BOTTOM)
 
             Returns the character currently highlighted or one of the EXIT_* codes if the
             user has navigated off the keyboard past an edge that is not in `auto_wrap`.
@@ -552,7 +583,6 @@ class TextEntryDisplay(TextEntryDisplayConstants):
 
         if self.cursor_mode == TextEntryDisplay.CURSOR_MODE__BLOCK:
             cursor_block_width = 18
-            cursor_block_height = 33
 
             # Draw n-1 of the selected letters
             (left, top, right, bottom) = self.font.getbbox(self.cur_text[:-1], anchor="ls")

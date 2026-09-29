@@ -96,12 +96,42 @@ class QR:
         else:
             border_str = "3"
 
-        cmd = f"""qrencode -m {border_str} -s 3 -l L --foreground=000000 --background={background_color} -t PNG -o "/tmp/qrcode.png" "{str(data)}" """
-        rv = subprocess.call(cmd, shell=True)
+        # Argument list, NOT a shell string -- found live 2026-09-27 (7F hardware
+        # walkthrough): the previous `shell=True` + f-string version interpolated
+        # `data` directly inside a double-quoted shell command. Every BBQr segment
+        # starts with a literal "B$" (see models/encode_qr.py's BBQrEncoder), and
+        # inside a double-quoted shell string "$" triggers variable expansion --
+        # the shell greedily consumes the entire alphanumeric run after "$" as an
+        # (unset) environment variable name and replaces it with an empty string,
+        # silently truncating every BBQr segment down to just "B" before it ever
+        # reached qrencode. No prior data type happened to contain a shell
+        # metacharacter this early in its content (hex/base64/UR strings don't),
+        # so this was a latent bug until BBQr -- the first format whose own wire
+        # format guarantees one. Passing argv as a list bypasses the shell
+        # entirely, so no data value can be reinterpreted regardless of what
+        # characters it contains.
+        cmd = [
+            "qrencode",
+            "-m", border_str,
+            "-s", "3",
+            "-l", "L",
+            "--foreground=000000",
+            f"--background={background_color}",
+            "-t", "PNG",
+            "-o", "/tmp/qrcode.png",
+            str(data),
+        ]
+        try:
+            rv = subprocess.call(cmd)
+        except FileNotFoundError:
+            # Without shell=True, a missing `qrencode` binary raises here instead
+            # of the shell reporting a non-zero exit code -- preserve the
+            # original fall-back-to-pure-Python behavior for that case too.
+            rv = 1
 
         # if qrencode fails, fall back to only encoder
         if rv != 0:
             return self.qrimage(data,width,height,border)
-        img = Image.open("/tmp/qrcode.png").resize((width,height), Image.NEAREST).convert("RGBA")
+        img = Image.open("/tmp/qrcode.png").resize((width,height), Image.Resampling.NEAREST).convert("RGBA")
 
         return img

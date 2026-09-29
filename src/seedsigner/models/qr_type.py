@@ -6,6 +6,7 @@ class QRType:
     PSBT__SPECTER = "psbt__specter"
     PSBT__BASE43 = "psbt__base43"
     PSBT__UR2 = "psbt__ur2"
+    PSBT__BBQR = "psbt__bbqr"
 
     SEED__SEEDQR = "seed__seedqr"
     SEED__COMPACTSEEDQR = "seed__compactseedqr"
@@ -20,6 +21,7 @@ class QRType:
     XPUB__UR = "xpub__ur"
 
     BITCOIN_ADDRESS = "bitcoin_address"
+    EVM_ADDRESS = "evm_address"
 
     SIGN_MESSAGE = "sign_message"
 
@@ -30,5 +32,16 @@ class QRType:
     OUTPUT__UR = "output__ur"
     ACCOUNT__UR = "account__ur"
     BYTES__UR = "bytes__ur"
+
+    # ERC-4527 (see chains/evm/ur_types.py) -- the QR protocol MetaMask/Rabby/etc.
+    # already speak for QR-based hardware wallets.
+    EVM__ETH_SIGN_REQUEST_UR = "evm__eth_sign_request_ur"
+
+    # 7F ceremony artefacts (genesis-config, devfund-config, enrollment/signature
+    # exports) travel as BBQr, per docs/7f-integration/root-key-ceremony-plan.md's
+    # "Superseding authority" section -- BBQr's own file-type byte is 'B' (generic
+    # binary), not 'P' (PSBT), which is the only file-type the existing BBQr
+    # decoder recognized before this addition.
+    SEVENF__BBQR = "sevenf__bbqr"
 
     INVALID = "invalid"

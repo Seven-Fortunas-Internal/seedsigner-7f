@@ -1,22 +1,52 @@
 import sys
+import types
 from dataclasses import dataclass
 from unittest.mock import MagicMock, Mock, patch
 from typing import Callable
 
 # Prevent importing modules w/Raspi hardware dependencies.
 # These must precede any SeedSigner imports.
+#
+# numpy is only in the Raspi requirements, not needed for tests -- but IS
+# imported (just imported, no attributes ever touched) by
+# Controller.BackgroundImportThread via time_import('numpy'). A plain
+# MagicMock() used to stand in for the whole module, but that breaks any code
+# that later does `import numpy.random` or `isinstance(x, numpy.ndarray)` --
+# notably Hypothesis's own entropy management (hypothesis/internal/entropy.py),
+# which does both unconditionally whenever "numpy" is truthy in sys.modules,
+# triggered by any property-based test that happens to run in the same pytest
+# session as this module. A MagicMock has no __path__ (so `numpy.random` isn't
+# a real submodule, "'numpy' is not a package") and MagicMock attribute access
+# returns more MagicMocks (so `numpy.ndarray` isn't a real type,
+# "isinstance() arg 2 must be a type"). Build a minimal real stub instead: a
+# real (never-instantiated) `ndarray` type and a real `numpy.random` submodule
+# with the three callables Hypothesis's NumpyRandomWrapper expects -- enough
+# structure to satisfy every consumer above without needing actual numpy.
+_numpy_stub = types.ModuleType('numpy')
+_numpy_stub.ndarray = type('ndarray', (), {})
+_numpy_random_stub = types.ModuleType('numpy.random')
+_numpy_random_stub.seed = lambda *args, **kwargs: None
+_numpy_random_stub.get_state = lambda: None
+_numpy_random_stub.set_state = lambda state: None
+_numpy_stub.random = _numpy_random_stub
+
+sys.modules['numpy'] = _numpy_stub
+sys.modules['numpy.random'] = _numpy_random_stub
 sys.modules['seedsigner.gui.renderer'] = MagicMock()
 sys.modules['seedsigner.gui.screens.screensaver'] = MagicMock()
 sys.modules['seedsigner.gui.toast'] = MagicMock()
 sys.modules['seedsigner.views.screensaver'] = MagicMock()
 sys.modules['seedsigner.hardware.buttons'] = MagicMock()
-sys.modules['seedsigner.hardware.camera'] = MagicMock()
+sys.modules['seedsigner.hardware.camera.Camera'] = MagicMock()
+sys.modules['seedsigner.hardware.pivideostream'] = MagicMock()
+sys.modules['seedsigner.hardware.st7789_mpy'] = MagicMock()
+sys.modules['seedsigner.hardware.ili9341'] = MagicMock()
 
 from seedsigner.controller import Controller, FlowBasedTestException, StopFlowBasedTest
-from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON, RET_CODE__POWER_BUTTON
+from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON, RET_CODE__POWER_BUTTON, ButtonOption
 from seedsigner.hardware.microsd import MicroSD
 from seedsigner.models.settings import Settings
-from seedsigner.views.view import Destination, MainMenuView, UnhandledExceptionView, View
+from seedsigner.views.view import Destination, MainMenuView, View
 
 import logging
 logger = logging.getLogger(__name__)
@@ -80,6 +110,16 @@ class BaseTest:
         Controller._instance = None
         Controller.configure_instance()
 
+        # Default every fresh Controller to Bitcoin mode (see
+        # docs/multi-chain/boot-chain-selection-plan.md): 52 of 81 existing
+        # run_sequence() calls start at MainMenuView with initial_destination=None,
+        # which would otherwise route to the new ChainChooserView instead of the
+        # expected first FlowStep. Set here (not just in setup_method()) because
+        # several tests call BaseTest.reset_controller() mid-test to simulate a fresh
+        # boot, bypassing setup_method() entirely. EVM-specific tests override this
+        # explicitly in their own setup.
+        Controller.get_instance().active_chain_id = "bitcoin"
+
 
     def setup_method(self):
         """ Guarantee a clean/default Controller, Settings, & MicroSD state for each test case """
@@ -137,6 +177,12 @@ class FlowStep:
     def __post_init__(self):
         if self.screen_return_value is not None and self.button_data_selection is not None:
             raise Exception("Can't specify both `screen_return_value` and `button_data_selection`")
+
+
+
+class FlowTestInvalidButtonDataInstanceTypeException(FlowBasedTestException):
+    """ The button_data contained an item that was not a ButtonOption instance """
+    pass
 
 
 
@@ -249,6 +295,12 @@ class FlowTest(BaseTest):
                     Just returns the return value specified in the test sequence.
                     """
                     cur_flow_step = sequence[0]
+
+                    if "button_data" in kwargs:
+                        # Verify that they are all proper ButtonOption instances
+                        for button_option in kwargs.get("button_data"):
+                            if not isinstance(button_option, ButtonOption):
+                                raise FlowTestInvalidButtonDataInstanceTypeException(f"button_data must be a list of ButtonOption instances, not {type(button_option)}: {button_option}")
 
                     if cur_flow_step.button_data_selection:
                         # We're mocking out the View.run_screen() method, so we'll get all of the

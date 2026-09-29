@@ -1,21 +1,13 @@
-from dataclasses import dataclass
 import hashlib
 import logging
-import os
 import time
 
-from embit.descriptor import Descriptor
-from PIL import Image
-from PIL.ImageOps import autocontrast
+from gettext import gettext as _
 
-from seedsigner.controller import Controller
-from seedsigner.gui.components import FontAwesomeIconConstants, GUIConstants, SeedSignerIconConstants
-from seedsigner.gui.screens import (RET_CODE__BACK_BUTTON, ButtonListScreen, WarningScreen)
-from seedsigner.gui.screens.tools_screens import (ToolsCalcFinalWordDoneScreen, ToolsCalcFinalWordFinalizePromptScreen,
-    ToolsCalcFinalWordScreen, ToolsCoinFlipEntryScreen, ToolsDiceEntropyEntryScreen, ToolsImageEntropyFinalImageScreen,
-    ToolsImageEntropyLivePreviewScreen, ToolsAddressExplorerAddressTypeScreen)
-from seedsigner.helpers import embit_utils, mnemonic_generation
-from seedsigner.models.encode_qr import GenericStaticQrEncoder
+from seedsigner.gui.components import FontAwesomeIconConstants, GUIConstants, SeedSignerIconConstants, resize_image_to_fill
+from seedsigner.gui.screens import RET_CODE__BACK_BUTTON, ButtonListScreen
+from seedsigner.gui.screens.screen import ButtonOption
+from seedsigner.helpers import mnemonic_generation
 from seedsigner.models.seed import Seed
 from seedsigner.models.settings_definition import SettingsConstants
 from seedsigner.views.seed_views import SeedDiscardView, SeedFinalizeView, SeedMnemonicEntryView, SeedOptionsView, SeedWordsWarningView, SeedExportXpubScriptTypeView
@@ -25,19 +17,42 @@ from .view import View, Destination, BackStackView
 logger = logging.getLogger(__name__)
 
 
+
 class ToolsMenuView(View):
-    IMAGE = (" New seed", FontAwesomeIconConstants.CAMERA)
-    DICE = ("New seed", FontAwesomeIconConstants.DICE)
-    KEYBOARD = ("Calc 12th/24th word", FontAwesomeIconConstants.KEYBOARD)
-    ADDRESS_EXPLORER = "Address Explorer"
-    VERIFY_ADDRESS = "Verify address"
+    IMAGE = ButtonOption("New seed", FontAwesomeIconConstants.CAMERA)
+    DICE = ButtonOption("New seed", FontAwesomeIconConstants.DICE)
+    KEYBOARD = ButtonOption("Calc 12th/24th word", FontAwesomeIconConstants.KEYBOARD)
+    ADDRESS_EXPLORER = ButtonOption("Address explorer")
+    VERIFY_ADDRESS = ButtonOption("Verify address")
 
     def run(self):
-        button_data = [self.IMAGE, self.DICE, self.KEYBOARD, self.ADDRESS_EXPLORER, self.VERIFY_ADDRESS]
+        button_data = [self.IMAGE, self.DICE, self.KEYBOARD]
+
+        # Address Explorer now has a real EVM-mode equivalent (see
+        # ToolsAddressExplorerSelectSourceView, which branches internally on
+        # active_chain_id) -- shown in bitcoin/evm modes. Verify Address stays
+        # Bitcoin-only: its EVM equivalent needs no separate Tools entry at all --
+        # Home's Scan button already recognizes a scanned EVM address QR directly
+        # (see scan_views.py's is_evm_address branch), matching how PSBT signing
+        # itself has no separate Tools entry either. The entropy/word-calc tools
+        # above stay chain-agnostic.
+        #
+        # Explicit allow-list, not "show unless bitcoin/evm-specific" -- found live
+        # 2026-09-27 (7F hardware walkthrough): this button used to be unconditional,
+        # and ToolsAddressExplorerSelectSourceView's own internal branching is a
+        # binary bitcoin/evm check with no case for a third active_chain_id value,
+        # so a sevenf-mode operator tapping it fell through to the *bitcoin* xpub
+        # export path -- wrong chain entirely. 7F has no address-explorer concept
+        # (the ceremony derives exactly one Root CA/devfund key per chain_kind,
+        # determined by the scanned genesis-config, not browsed by the operator).
+        if self.controller.active_chain_id in ("bitcoin", "evm"):
+            button_data.append(self.ADDRESS_EXPLORER)
+        if self.controller.active_chain_id == "bitcoin":
+            button_data.append(self.VERIFY_ADDRESS)
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title="Tools",
+            title=_("Tools"),
             is_button_text_centered=False,
             button_data=button_data
         )
@@ -67,13 +82,41 @@ class ToolsMenuView(View):
     Image entropy Views
 ****************************************************************************"""
 class ToolsImageEntropyLivePreviewView(View):
+    """
+    A fixed number of live preview frames are collected into a frame pool to provide an
+    additional source of entropy. These frames provide VOLUME for the final seed but are
+    not themselves individually assessed for entropy QUALITY. The quality heuristics are
+    only applied to the final image capture.
+
+    The preview pool enforces two rules:
+    1.) A frame that is a single flat color is rejected (e.g. completely black, completely
+    white, all just one shade of green).
+
+    2.) A frame identical to any previously admitted frame is rejected (de-duplicated via
+    sha256).
+
+    The final image cannot be taken until the full pool has arrived.
+
+    This mirrors the role that NIST SP 800-90B (sec. 4.2) assigns to continuous health
+    tests: detect gross noise-source failure -- a sensor stuck on one value, a stalled
+    or repeating camera -- without attempting to measure entropy.
+    """
+
     def run(self):
+        from seedsigner.gui.screens.tools_screens import ToolsImageEntropyLivePreviewScreen
         self.controller.image_entropy_preview_frames = None
-        ret = ToolsImageEntropyLivePreviewScreen().display()
+        ret = self.run_screen(ToolsImageEntropyLivePreviewScreen)
 
         if ret == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
-        
+
+        # The live preview screen must return the required number of preview pool frames.
+        # Do not proceed if there is any mismatch.
+        if ret is None or len(ret) != ToolsImageEntropyLivePreviewScreen.PREVIEW_POOL_SIZE:
+            num_frames = 0 if ret is None else len(ret)
+            # TRANSLATOR_NOTE: Shown when the camera fails to collect enough frames for a new seed. "expected" and "actual" are the number of frames.
+            raise Exception(_("Entropy collection failed. Expected {expected} preview frames, got {actual}").format(expected=ToolsImageEntropyLivePreviewScreen.PREVIEW_POOL_SIZE, actual=num_frames))
+
         self.controller.image_entropy_preview_frames = ret
         return Destination(ToolsImageEntropyFinalImageView)
 
@@ -81,30 +124,38 @@ class ToolsImageEntropyLivePreviewView(View):
 
 class ToolsImageEntropyFinalImageView(View):
     def run(self):
+        from PIL import Image
+        from PIL.ImageOps import autocontrast
+        from seedsigner.gui.screens.tools_screens import ToolsImageEntropyFinalImageScreen
         if not self.controller.image_entropy_final_image:
             from seedsigner.hardware.camera import Camera
             # Take the final full-res image
             camera = Camera.get_instance()
-            camera.start_single_frame_mode(resolution=(720, 480))
+            max_dim = max(self.canvas_width, self.canvas_height)
+
+            # Final image will be at least 4x the number of pixels the screen can
+            # actually display.
+            camera.start_single_frame_mode(resolution=(2*max_dim, 2*max_dim))
+
             time.sleep(0.25)
             self.controller.image_entropy_final_image = camera.capture_frame()
             camera.stop_single_frame_mode()
 
-        # Prep a copy of the image for display. The actual image data is 720x480
-        # Present just a center crop and resize it to fit the screen and to keep some of
-        #   the data hidden.
-        display_version = autocontrast(
-            self.controller.image_entropy_final_image,
-            cutoff=2
-        ).crop(
-            (120, 0, 600, 480)
-        ).resize(
-            (self.canvas_width, self.canvas_height), Image.BICUBIC
+        # Prep a copy of the image for display:
+        #   * Boost the contrast for better presentation (but preserve the original pixels)
+        #   * Resize it to fit the screen
+        boosted_version = autocontrast(self.controller.image_entropy_final_image, cutoff=2)
+        display_version = resize_image_to_fill(
+            boosted_version,
+            target_size_x=self.canvas_width,
+            target_size_y=self.canvas_height,
+            sampling_method=Image.Resampling.BICUBIC,
         )
         
-        ret = ToolsImageEntropyFinalImageScreen(
+        ret = self.run_screen(
+            ToolsImageEntropyFinalImageScreen,
             final_image=display_version
-        ).display()
+        )
 
         if ret == RET_CODE__BACK_BUTTON:
             # Go back to live preview and reshoot
@@ -116,71 +167,84 @@ class ToolsImageEntropyFinalImageView(View):
 
 
 class ToolsImageEntropyMnemonicLengthView(View):
-    def run(self):
-        TWELVE_WORDS = "12 words"
-        TWENTYFOUR_WORDS = "24 words"
-        button_data = [TWELVE_WORDS, TWENTYFOUR_WORDS]
+    TWELVE_WORDS = ButtonOption("12 words", return_data=12)
+    TWENTYFOUR_WORDS = ButtonOption("24 words", return_data=24)
 
-        selected_menu_num = ButtonListScreen(
-            title="Mnemonic Length?",
+    def run(self):
+        button_data = [self.TWELVE_WORDS, self.TWENTYFOUR_WORDS]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Mnemonic Length"),
             button_data=button_data,
-        ).display()
+        )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
-        
-        if button_data[selected_menu_num] == TWELVE_WORDS:
-            mnemonic_length = 12
-        else:
-            mnemonic_length = 24
 
-        preview_images = self.controller.image_entropy_preview_frames
-        seed_entropy_image = self.controller.image_entropy_final_image
+        mnemonic_length = button_data[selected_menu_num].return_data
 
-        # Build in some hardware-level uniqueness via CPU unique Serial num
+        # The entropy calculation can take time, especially with a full image buffer. 
+        # Show a loading spinner to provide feedback during this delay.
+        from seedsigner.gui.screens.screen import LoadingScreenThread
+        self.loading_screen = LoadingScreenThread(text=_("Calculating..."))
+        self.loading_screen.start()
+
         try:
-            stream = os.popen("cat /proc/cpuinfo | grep Serial")
-            output = stream.read()
-            serial_num = output.split(":")[-1].strip().encode('utf-8')
-            serial_hash = hashlib.sha256(serial_num)
-            hash_bytes = serial_hash.digest()
-        except Exception as e:
-            logger.info(repr(e), exc_info=True)
-            hash_bytes = b'0'
+            preview_images = self.controller.image_entropy_preview_frames
+            seed_entropy_image = self.controller.image_entropy_final_image
 
-        # Build in modest entropy via millis since power on
-        millis_hash = hashlib.sha256(hash_bytes + str(time.time()).encode('utf-8'))
-        hash_bytes = millis_hash.digest()
+            # Build in some hardware-level uniqueness via CPU unique Serial num
+            try:
+                serial_num = b''
+                with open("/proc/cpuinfo", "r") as f:
+                    for line in f:
+                        if "Serial" in line:
+                            serial_num = line.split(":")[-1].strip().encode('utf-8')
+                            break
+                serial_hash = hashlib.sha256(serial_num)
+                hash_bytes = serial_hash.digest()
+            except Exception as e:
+                logger.info(repr(e), exc_info=True)
+                hash_bytes = b'0'
 
-        # Build in better entropy by chaining the preview frames
-        for frame in preview_images:
-            img_hash = hashlib.sha256(hash_bytes + frame.tobytes())
-            hash_bytes = img_hash.digest()
+            # Build in modest entropy via millis since power on
+            millis_hash = hashlib.sha256(hash_bytes + str(time.time()).encode('utf-8'))
+            hash_bytes = millis_hash.digest()
 
-        # Finally build in our headline entropy via the new full-res image
-        final_hash = hashlib.sha256(hash_bytes + seed_entropy_image.tobytes()).digest()
+            # Build in better entropy by chaining the preview frames
+            for frame in preview_images:
+                img_hash = hashlib.sha256(hash_bytes + frame.tobytes())
+                hash_bytes = img_hash.digest()
 
-        if mnemonic_length == 12:
-            # 12-word mnemonic only uses the first 128 bits / 16 bytes of entropy
-            final_hash = final_hash[:16]
+            # Finally build in our headline entropy via the new full-res image
+            final_hash = hashlib.sha256(hash_bytes + seed_entropy_image.tobytes()).digest()
 
-        # Generate the mnemonic
-        mnemonic = mnemonic_generation.generate_mnemonic_from_bytes(final_hash)
+            if mnemonic_length == 12:
+                # 12-word mnemonic only uses the first 128 bits / 16 bytes of entropy
+                final_hash = final_hash[:16]
 
-        # Image should never get saved nor stick around in memory
-        seed_entropy_image = None
-        preview_images = None
-        final_hash = None
-        hash_bytes = None
-        self.controller.image_entropy_preview_frames = None
-        self.controller.image_entropy_final_image = None
+            # Generate the mnemonic
+            mnemonic = mnemonic_generation.generate_mnemonic_from_bytes(final_hash)
 
-        # Add the mnemonic as an in-memory Seed
-        seed = Seed(mnemonic, wordlist_language_code=self.settings.get_value(SettingsConstants.SETTING__WORDLIST_LANGUAGE))
-        self.controller.storage.set_pending_seed(seed)
-        
+            # Image should never get saved nor stick around in memory
+            seed_entropy_image = None
+            preview_images = None
+            final_hash = None
+            hash_bytes = None
+            self.controller.image_entropy_preview_frames = None
+            self.controller.image_entropy_final_image = None
+
+            # Add the mnemonic as an in-memory Seed
+            seed = Seed(mnemonic, wordlist_language_code=self.settings.get_value(SettingsConstants.SETTING__WORDLIST_LANGUAGE))
+            self.controller.storage.set_pending_seed(seed)
+
+        finally:
+            # Stop spinner even if an error occurs
+            self.loading_screen.stop()
+
         # Cannot return BACK to this View
-        return Destination(SeedWordsWarningView, view_args={"seed_num": None}, clear_history=True)
+        return Destination(SeedWordsWarningView, view_args={"seed": None}, clear_history=True)
 
 
 
@@ -189,16 +253,31 @@ class ToolsImageEntropyMnemonicLengthView(View):
 ****************************************************************************"""
 class ToolsDiceEntropyMnemonicLengthView(View):
     def run(self):
-        TWELVE = f"12 words ({mnemonic_generation.DICE__NUM_ROLLS__12WORD} rolls)"
-        TWENTY_FOUR = f"24 words ({mnemonic_generation.DICE__NUM_ROLLS__24WORD} rolls)"
-        
-        button_data = [TWELVE, TWENTY_FOUR]
-        selected_menu_num = ButtonListScreen(
-            title="Mnemonic Length",
+        # Since we're dynamically building the ButtonOption button_labels here, it's too
+        # awkward to use the usual class-level attr approach.
+
+        # TRANSLATOR_NOTE: Inserts the number of dice rolls needed for a 12-word mnemonic
+        twelve = _("12 words ({} rolls)").format(mnemonic_generation.DICE__NUM_ROLLS__12WORD)
+        TWELVE = ButtonOption(twelve, return_data=mnemonic_generation.DICE__NUM_ROLLS__12WORD)
+
+        # TRANSLATOR_NOTE: Inserts the number of dice rolls needed for a 24-word mnemonic
+        twenty_four = _("24 words ({} rolls)").format(mnemonic_generation.DICE__NUM_ROLLS__24WORD)
+        TWENTY_FOUR = ButtonOption(twenty_four, return_data=mnemonic_generation.DICE__NUM_ROLLS__24WORD)
+
+        # 7F ceremony seeds are always 24-word BIP-39 (Patrick's requirements doc,
+        # decision D1) -- same rationale as LoadSeedView's TYPE_12WORD gating
+        # (seed_views.py), found live 2026-09-27 (7F hardware walkthrough).
+        if self.controller.active_chain_id == "sevenf":
+            button_data = [TWENTY_FOUR]
+        else:
+            button_data = [TWELVE, TWENTY_FOUR]
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Mnemonic Length"),
             is_bottom_list=True,
             is_button_text_centered=True,
             button_data=button_data,
-        ).display()
+        )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
@@ -218,9 +297,11 @@ class ToolsDiceEntropyEntryView(View):
     
 
     def run(self):
-        ret = ToolsDiceEntropyEntryScreen(
+        from seedsigner.gui.screens.tools_screens import ToolsDiceEntropyEntryScreen
+        ret = self.run_screen(
+            ToolsDiceEntropyEntryScreen,
             return_after_n_chars=self.total_rolls,
-        ).display()
+        )
 
         if ret == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
@@ -232,7 +313,7 @@ class ToolsDiceEntropyEntryView(View):
         self.controller.storage.set_pending_seed(seed)
 
         # Cannot return BACK to this View
-        return Destination(SeedWordsWarningView, view_args={"seed_num": None}, clear_history=True)
+        return Destination(SeedWordsWarningView, view_args={"seed": None}, clear_history=True)
 
 
 
@@ -240,15 +321,15 @@ class ToolsDiceEntropyEntryView(View):
     Calc final word Views
 ****************************************************************************"""
 class ToolsCalcFinalWordNumWordsView(View):
-    TWELVE = "12 words"
-    TWENTY_FOUR = "24 words"
+    TWELVE = ButtonOption("12 words", return_data=12)
+    TWENTY_FOUR = ButtonOption("24 words", return_data=24)
 
     def run(self):
         button_data = [self.TWELVE, self.TWENTY_FOUR]
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title="Mnemonic Length",
+            title=_("Mnemonic Length"),
             is_bottom_list=True,
             is_button_text_centered=True,
             button_data=button_data,
@@ -257,22 +338,24 @@ class ToolsCalcFinalWordNumWordsView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        elif button_data[selected_menu_num] == self.TWELVE:
-            self.controller.storage.init_pending_mnemonic(12)
+        self.controller.storage.init_pending_mnemonic(button_data[selected_menu_num].return_data)
 
-            # return Destination(SeedMnemonicEntryView, view_args=dict(is_calc_final_word=True))
-            return Destination(SeedMnemonicEntryView, view_args=dict(is_calc_final_word=True))
-
-        elif button_data[selected_menu_num] == self.TWENTY_FOUR:
-            self.controller.storage.init_pending_mnemonic(24)
-
-            # return Destination(SeedMnemonicEntryView, view_args=dict(is_calc_final_word=True))
-            return Destination(SeedMnemonicEntryView, view_args=dict(is_calc_final_word=True))
+        return Destination(SeedMnemonicEntryView, view_args=dict(is_calc_final_word=True))
 
 
 
 class ToolsCalcFinalWordFinalizePromptView(View):
+    # TRANSLATOR_NOTE: Label to gather entropy through coin tosses
+    COIN_FLIPS = ButtonOption("Coin flip entropy")
+
+    # TRANSLATOR_NOTE: Label to gather entropy through user specified BIP-39 word
+    SELECT_WORD = ButtonOption("Word selection entropy")
+
+    # TRANSLATOR_NOTE: Label to allow user to default entropy as all-zeros
+    ZEROS = ButtonOption("Finalize with zeros")
+
     def run(self):
+        from seedsigner.gui.screens.tools_screens import ToolsCalcFinalWordFinalizePromptScreen
         mnemonic = self.controller.storage.pending_mnemonic
         mnemonic_length = len(mnemonic)
         if mnemonic_length == 12:
@@ -280,29 +363,26 @@ class ToolsCalcFinalWordFinalizePromptView(View):
         else:
             num_entropy_bits = 3
 
-        COIN_FLIPS = "Coin flip entropy"
-        SELECT_WORD = f"Word selection entropy"
-        ZEROS = "Finalize with zeros"
-
-        button_data = [COIN_FLIPS, SELECT_WORD, ZEROS]
-        selected_menu_num = ToolsCalcFinalWordFinalizePromptScreen(
+        button_data = [self.COIN_FLIPS, self.SELECT_WORD, self.ZEROS]
+        selected_menu_num = self.run_screen(
+            ToolsCalcFinalWordFinalizePromptScreen,
             mnemonic_length=mnemonic_length,
             num_entropy_bits=num_entropy_bits,
             button_data=button_data,
-        ).display()
+        )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        elif button_data[selected_menu_num] == COIN_FLIPS:
+        elif button_data[selected_menu_num] == self.COIN_FLIPS:
             return Destination(ToolsCalcFinalWordCoinFlipsView)
 
-        elif button_data[selected_menu_num] == SELECT_WORD:
+        elif button_data[selected_menu_num] == self.SELECT_WORD:
             # Clear the final word slot, just in case we're returning via BACK button
             self.controller.storage.update_pending_mnemonic(None, mnemonic_length - 1)
             return Destination(SeedMnemonicEntryView, view_args=dict(is_calc_final_word=True, cur_word_index=mnemonic_length - 1))
 
-        elif button_data[selected_menu_num] == ZEROS:
+        elif button_data[selected_menu_num] == self.ZEROS:
             # User skipped the option to select a final word to provide last bits of
             # entropy. We'll insert all zeros and piggy-back on the coin flip attr
             wordlist_language_code = self.settings.get_value(SettingsConstants.SETTING__WORDLIST_LANGUAGE)
@@ -313,6 +393,7 @@ class ToolsCalcFinalWordFinalizePromptView(View):
 
 class ToolsCalcFinalWordCoinFlipsView(View):
     def run(self):
+        from seedsigner.gui.screens.tools_screens import ToolsCoinFlipEntryScreen
         mnemonic_length = len(self.controller.storage.pending_mnemonic)
 
         if mnemonic_length == 12:
@@ -320,9 +401,10 @@ class ToolsCalcFinalWordCoinFlipsView(View):
         else:
             total_flips = 3
         
-        ret_val = ToolsCoinFlipEntryScreen(
+        ret_val = self.run_screen(
+            ToolsCoinFlipEntryScreen,
             return_after_n_chars=total_flips,
-        ).display()
+        )
 
         if ret_val == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
@@ -333,6 +415,8 @@ class ToolsCalcFinalWordCoinFlipsView(View):
 
 
 class ToolsCalcFinalWordShowFinalWordView(View):
+    NEXT = ButtonOption("Next")
+
     def __init__(self, coin_flips: str = None):
         super().__init__()
         # Construct the actual final word. The user's selected_final_word
@@ -385,11 +469,15 @@ class ToolsCalcFinalWordShowFinalWordView(View):
 
 
     def run(self):
-        NEXT = "Next"
-        button_data = [NEXT]
+        from seedsigner.gui.screens.tools_screens import ToolsCalcFinalWordScreen
+        button_data = [self.NEXT]
+
+        # TRANSLATOR_NOTE: label to calculate the last word of a BIP-39 mnemonic seed phrase
+        title = _("Final Word Calc")
+
         selected_menu_num = self.run_screen(
             ToolsCalcFinalWordScreen,
-            title="Final Word Calc",
+            title=title,
             button_data=button_data,
             selected_final_word=self.selected_final_word,
             selected_final_bits=self.selected_final_bits,
@@ -400,64 +488,77 @@ class ToolsCalcFinalWordShowFinalWordView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        elif button_data[selected_menu_num] == NEXT:
+        elif button_data[selected_menu_num] == self.NEXT:
             return Destination(ToolsCalcFinalWordDoneView)
 
 
 
 class ToolsCalcFinalWordDoneView(View):
+    LOAD = ButtonOption("Load seed")
+    DISCARD = ButtonOption("Discard", button_label_color="red")
+
     def run(self):
+        from seedsigner.gui.screens.tools_screens import ToolsCalcFinalWordDoneScreen
         mnemonic = self.controller.storage.pending_mnemonic
         mnemonic_word_length = len(mnemonic)
         final_word = mnemonic[-1]
 
-        LOAD = "Load seed"
-        DISCARD = ("Discard", None, None, "red")
-        button_data = [LOAD, DISCARD]
+        button_data = [self.LOAD, self.DISCARD]
 
-        selected_menu_num = ToolsCalcFinalWordDoneScreen(
+        selected_menu_num = self.run_screen(
+            ToolsCalcFinalWordDoneScreen,
             final_word=final_word,
             mnemonic_word_length=mnemonic_word_length,
             fingerprint=self.controller.storage.get_pending_mnemonic_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK)),
             button_data=button_data,
-        ).display()
+        )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
         
         self.controller.storage.convert_pending_mnemonic_to_pending_seed()
 
-        if button_data[selected_menu_num] == LOAD:
+        if button_data[selected_menu_num] == self.LOAD:
             return Destination(SeedFinalizeView)
         
-        elif button_data[selected_menu_num] == DISCARD:
+        elif button_data[selected_menu_num] == self.DISCARD:
             return Destination(SeedDiscardView)
+
 
 
 """****************************************************************************
     Address Explorer Views
 ****************************************************************************"""
 class ToolsAddressExplorerSelectSourceView(View):
-    SCAN_SEED = ("Scan a seed", SeedSignerIconConstants.QRCODE)
-    SCAN_DESCRIPTOR = ("Scan wallet descriptor", SeedSignerIconConstants.QRCODE)
-    TYPE_12WORD = ("Enter 12-word seed", FontAwesomeIconConstants.KEYBOARD)
-    TYPE_24WORD = ("Enter 24-word seed", FontAwesomeIconConstants.KEYBOARD)
-    TYPE_ELECTRUM = ("Enter Electrum seed", FontAwesomeIconConstants.KEYBOARD)
-
+    SCAN_SEED = ButtonOption("Scan a seed", SeedSignerIconConstants.QRCODE)
+    SCAN_DESCRIPTOR = ButtonOption("Scan wallet descriptor", SeedSignerIconConstants.QRCODE)
+    TYPE_12WORD = ButtonOption("Enter 12-word seed", FontAwesomeIconConstants.KEYBOARD, return_data=12)
+    TYPE_24WORD = ButtonOption("Enter 24-word seed", FontAwesomeIconConstants.KEYBOARD, return_data=24)
+    TYPE_ELECTRUM = ButtonOption("Enter Electrum seed", FontAwesomeIconConstants.KEYBOARD)
 
     def run(self):
+        from seedsigner.controller import Controller
+
         seeds = self.controller.storage.seeds
         button_data = []
         for seed in seeds:
             button_str = seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
-            button_data.append((button_str, SeedSignerIconConstants.FINGERPRINT))
+            button_data.append(ButtonOption(button_str, SeedSignerIconConstants.FINGERPRINT))
         button_data = button_data + [self.SCAN_SEED, self.SCAN_DESCRIPTOR, self.TYPE_12WORD, self.TYPE_24WORD]
-        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED:
+        # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
+        # (not replaced by) active_chain_id (see seed_views.py's SeedSelectSeedView/
+        # LoadSeedView for the same pattern). Updated 2026-09-27: this view is no
+        # longer reachable at all in EVM mode -- ToolsMenuView (tools-gating, done)
+        # hides the button that routes here -- so this inner gate is now redundant
+        # defense-in-depth rather than a live gap, kept for the same
+        # not-just-relied-on-from-the-caller reason the rest of this cluster uses it.
+        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \
+                and self.controller.active_chain_id == "bitcoin":
             button_data.append(self.TYPE_ELECTRUM)
-        
+
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title="Address Explorer",
+            title=_("Address Explorer"),
             button_data=button_data,
             is_button_text_centered=False,
             is_bottom_list=True,
@@ -468,15 +569,35 @@ class ToolsAddressExplorerSelectSourceView(View):
 
         # Most of the options require us to go through a side flow(s) before we can
         # continue to the address explorer. Set the Controller-level flow so that it
-        # knows to re-route us once the side flow is complete.        
-        self.controller.resume_main_flow = Controller.FLOW__ADDRESS_EXPLORER
+        # knows to re-route us once the side flow is complete -- a different resume
+        # constant per chain mode, each handled at its own call site (Bitcoin:
+        # SeedExportXpubScriptTypeView and friends, unchanged; EVM: the new branch in
+        # SeedOptionsView.run(), see docs/multi-chain/tools-evm-address-explorer-and-verify-address-plan.md).
+        self.controller.resume_main_flow = Controller.FLOW__ADDRESS_EXPLORER if self.controller.active_chain_id == "bitcoin" else Controller.FLOW__EVM_ADDRESS_EXPLORER
 
         if len(seeds) > 0 and selected_menu_num < len(seeds):
-            # User selected one of the n seeds
+            selected_seed = seeds[selected_menu_num]
+            if self.controller.active_chain_id == "evm":
+                # Unlike the Bitcoin path below, EvmNetworkView and the rest of the
+                # EVM address-display chain never read resume_main_flow -- it exists
+                # purely for the acquire-a-new-seed round-trip (the SeedOptionsView
+                # branch above), not as a downstream behavior signal. Clear it here so
+                # a later, unrelated visit to SeedOptionsView (e.g. Seeds > this same
+                # seed > Options) doesn't get hijacked by that branch.
+                self.controller.resume_main_flow = None
+                from seedsigner.views.evm_views import EvmNetworkView
+                return Destination(EvmNetworkView, view_args=dict(seed=selected_seed))
+
+            # Bitcoin: deliberately do NOT clear resume_main_flow here, unlike the EVM
+            # branch above -- SeedExportXpubScriptTypeView and several views further
+            # down this same chain (seed_views.py) read
+            # resume_main_flow == FLOW__ADDRESS_EXPLORER to know they're in the
+            # address-explorer flow rather than a plain "Export xpub" request, even
+            # on this already-loaded-seed path that skips the round-trip itself.
             return Destination(
                 SeedExportXpubScriptTypeView,
                 view_args=dict(
-                    seed_num=selected_menu_num,
+                    seed=selected_seed,
                     sig_type=SettingsConstants.SINGLE_SIG,
                 )
             )
@@ -491,10 +612,7 @@ class ToolsAddressExplorerSelectSourceView(View):
 
         elif button_data[selected_menu_num] in [self.TYPE_12WORD, self.TYPE_24WORD]:
             from seedsigner.views.seed_views import SeedMnemonicEntryView
-            if button_data[selected_menu_num] == self.TYPE_12WORD:
-                self.controller.storage.init_pending_mnemonic(num_words=12)
-            else:
-                self.controller.storage.init_pending_mnemonic(num_words=24)
+            self.controller.storage.init_pending_mnemonic(num_words=button_data[selected_menu_num].return_data)
             return Destination(SeedMnemonicEntryView)
 
         elif button_data[selected_menu_num] == self.TYPE_ELECTRUM:
@@ -504,36 +622,37 @@ class ToolsAddressExplorerSelectSourceView(View):
 
 
 class ToolsAddressExplorerAddressTypeView(View):
-    RECEIVE = "Receive Addresses"
-    CHANGE = "Change Addresses"
+    # TRANSLATOR_NOTE: label for addresses where others send us incoming payments
+    RECEIVE = ButtonOption("Receive addresses")
+
+    # TRANSLATOR_NOTE: label for addresses that collect the change from our own outgoing payments
+    CHANGE = ButtonOption("Change addresses")
 
 
-    def __init__(self, seed_num: int = None, script_type: str = None, custom_derivation: str = None):
+    def __init__(self, seed: Seed = None, script_type: str = None, custom_derivation: str = None):
         """
-            If the explorer source is a seed, `seed_num` and `script_type` must be
+            If the explorer source is a seed, `seed` and `script_type` must be
             specified. `custom_derivation` can be specified as needed.
 
-            If the source is a multisig or single sig wallet descriptor, `seed_num`,
+            If the source is a multisig or single sig wallet descriptor, `seed`,
             `script_type`, and `custom_derivation` should be `None`.
         """
         super().__init__()
-        self.seed_num = seed_num
+        self.seed = seed
         self.script_type = script_type
         self.custom_derivation = custom_derivation
     
-        network = self.settings.get_value(SettingsConstants.SETTING__NETWORK)
+        self.network = self.settings.get_value(SettingsConstants.SETTING__NETWORK)
 
         # Store everything in the Controller's `address_explorer_data` so we don't have
         # to keep passing vals around from View to View and recalculating.
         data = dict(
-            seed_num=seed_num,
-            network=self.settings.get_value(SettingsConstants.SETTING__NETWORK),
-            embit_network=SettingsConstants.map_network_to_embit(network),
+            seed=self.seed,
+            network=self.network,
+            embit_network=SettingsConstants.map_network_to_embit(self.network),
             script_type=script_type,
         )
-        if self.seed_num is not None:
-            self.seed = self.controller.storage.seeds[seed_num]
-            data["seed_num"] = self.seed
+        if self.seed is not None:
             seed_derivation_override = self.seed.derivation_override(sig_type=SettingsConstants.SINGLE_SIG)
 
             if self.script_type == SettingsConstants.CUSTOM_DERIVATION:
@@ -541,14 +660,15 @@ class ToolsAddressExplorerAddressTypeView(View):
             elif seed_derivation_override:
                 derivation_path = seed_derivation_override
             else:
+                from seedsigner.helpers import embit_utils
                 derivation_path = embit_utils.get_standard_derivation_path(
-                    network=self.settings.get_value(SettingsConstants.SETTING__NETWORK),
+                    network=self.network,
                     wallet_type=SettingsConstants.SINGLE_SIG,
                     script_type=self.script_type,
                 )
 
             data["derivation_path"] = derivation_path
-            data["xpub"] = self.seed.get_xpub(derivation_path, network=network)
+            data["xpub"] = self.seed.get_xpub(derivation_path, network=self.network)
         
         else:
             data["wallet_descriptor"] = self.controller.multisig_wallet_descriptor
@@ -557,11 +677,17 @@ class ToolsAddressExplorerAddressTypeView(View):
 
 
     def run(self):
+        from seedsigner.gui.screens.tools_screens import ToolsAddressExplorerAddressTypeScreen
         data = self.controller.address_explorer_data
 
         wallet_descriptor_display_name = None
         if "wallet_descriptor" in data:
-            wallet_descriptor_display_name = data["wallet_descriptor"].brief_policy.replace(" (sorted)", "")
+            from seedsigner.helpers.embit_utils import get_multisig_policy
+            threshold, n = get_multisig_policy(data["wallet_descriptor"])
+            # TRANSLATOR_NOTE: Multisig policy. For a "2 / 3 multisig" policy, "threshold" = 2; "n" = 3
+            wallet_descriptor_display_name = _("{threshold} / {n} multisig").format(
+                threshold=threshold, n=n
+            )
 
         script_type = data["script_type"] if "script_type" in data else None
 
@@ -570,7 +696,7 @@ class ToolsAddressExplorerAddressTypeView(View):
         selected_menu_num = self.run_screen(
             ToolsAddressExplorerAddressTypeScreen,
             button_data=button_data,
-            fingerprint=self.seed.get_fingerprint() if self.seed_num is not None else None,
+            fingerprint=None if self.seed is None else self.seed.get_fingerprint(self.network),
             wallet_descriptor_display_name=wallet_descriptor_display_name,
             script_type=script_type,
             custom_derivation_path=self.custom_derivation,
@@ -602,6 +728,7 @@ class ToolsAddressExplorerAddressListView(View):
 
 
     def run(self):
+        from seedsigner.gui.screens.tools_screens import ToolsAddressExplorerAddressListScreen
         self.loading_screen = None
 
         addresses = []
@@ -620,7 +747,9 @@ class ToolsAddressExplorerAddressListView(View):
         else:
             try:
                 from seedsigner.gui.screens.screen import LoadingScreenThread
-                self.loading_screen = LoadingScreenThread(text="Calculating addrs...")
+                from seedsigner.helpers import embit_utils
+                # TRANSLATOR_NOTE: a status message that our payment addresses are being calculated
+                self.loading_screen = LoadingScreenThread(text=_("Calculating addrs..."))
                 self.loading_screen.start()
 
                 if addr_storage_key not in data:
@@ -636,9 +765,10 @@ class ToolsAddressExplorerAddressListView(View):
                             data[addr_storage_key].append(address)
                     else:
                         # TODO: Custom derivation path
-                        raise Exception("Custom Derivation address explorer not yet implemented")
-                
+                        raise Exception(_("Custom Derivation address explorer not yet implemented"))
+
                 elif "wallet_descriptor" in data:
+                    from embit.descriptor import Descriptor
                     descriptor: Descriptor = data["wallet_descriptor"]
                     if descriptor.is_basic_multisig:
                         for i in range(self.start_index, self.start_index + addrs_per_screen):
@@ -647,34 +777,16 @@ class ToolsAddressExplorerAddressListView(View):
                             data[addr_storage_key].append(address)
 
                     else:
-                        raise Exception("Single sig descriptors not yet supported")
+                        raise Exception(_("Single sig descriptors not yet supported"))
             finally:
                 # Everything is set. Stop the loading screen
                 self.loading_screen.stop()
 
-        for i, address in enumerate(addresses):
-            cur_index = i + self.start_index
-
-            # Adjust the trailing addr display length based on available room
-            # (the index number will push it out on each order of magnitude)
-            if cur_index < 10:
-                end_digits = -6
-            elif cur_index < 100:
-                end_digits = -5
-            else:
-                end_digits = -4
-            button_data.append(f"{cur_index}:{address[:8]}...{address[end_digits:]}")
-
-        button_data.append(("Next {}".format(addrs_per_screen), None, None, None, SeedSignerIconConstants.CHEVRON_RIGHT))
-
         selected_menu_num = self.run_screen(
-            ButtonListScreen,
-            title="{} Addrs".format("Receive" if not self.is_change else "Change"),
-            button_data=button_data,
-            button_font_name=GUIConstants.FIXED_WIDTH_EMPHASIS_FONT_NAME,
-            button_font_size=GUIConstants.BUTTON_FONT_SIZE + 4,
-            is_button_text_centered=False,
-            is_bottom_list=True,
+            ToolsAddressExplorerAddressListScreen,
+            title=_("Receive Addrs") if not self.is_change else _("Change Addrs"),
+            start_index=self.start_index,
+            addresses=addresses,
             selected_button=self.selected_button_index,
             scroll_y_initial_offset=self.initial_scroll,
         )
@@ -695,6 +807,7 @@ class ToolsAddressExplorerAddressListView(View):
 
 
 class ToolsAddressExplorerAddressView(View):
+    # TODO: pull address str from controller.address_explorer_data and pass addr_storage_key and addr_index instead
     def __init__(self, index: int, address: str, is_change: bool, start_index: int, parent_initial_scroll: int = 0):
         super().__init__()
         self.index = index
@@ -706,6 +819,8 @@ class ToolsAddressExplorerAddressView(View):
     
     def run(self):
         from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import GenericStaticQrEncoder
+
         qr_encoder = GenericStaticQrEncoder(data=self.address)
         self.run_screen(
             QRDisplayScreen,

@@ -2,10 +2,12 @@ name: CI
 
 on:
   push:
-    branches:
-      - dev
-      - main
   pull_request:
+
+# Explicitly restrict the auto-provisioned GITHUB_TOKEN to the least privilege required
+# for this workflow.
+permissions:
+  contents: read
 
 concurrency:
   # Concurrency group that uses the workflow name and PR number if available
@@ -16,9 +18,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
+env:
+  # Used by the `Version` class so it can identify the current fork
+  PR_AUTHOR: ${{ github.event.pull_request.user.login || github.actor }}
+
+  # Used by `Version`. We want the PR author's latest commit hash if this is a PR
+  # but the default SHA env var reflects a new commit into the target repo.
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       matrix:
         # 3.10: currently used by Seedsigner
@@ -26,41 +37,76 @@ jobs:
         python-version: ["3.10", "3.12"]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          # Needs to also pull the seedsigner-translations repo
+          submodules: recursive
+          # Also needed for the gitleaks step below: actions/checkout@v4
+          # shallow-clones (depth 1) by default, which would leave gitleaks
+          # only able to scan the tip commit, not full history.
+          fetch-depth: 0
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            tests/requirements.txt
       - name: Install dependencies
         run: |
-          sudo apt-get install libzbar0
+          sudo apt-get install libzbar0 qrencode
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r tests/requirements.txt
-          pip install .
+          # requirements-l10n.txt is hash-locked (SeedSigner OS installs it
+          # during image builds). It needs its own pip invocation: one hashed
+          # requirement makes pip demand hashes for everything else in the
+          # same invocation, which the unhashed files above and `-e .` below
+          # can't satisfy.
+          pip install -r l10n/requirements-l10n.txt
+          pip install -e .
+      - name: Compile translations
+        run: python setup.py compile_catalog
       - name: Test with pytest
         run: |
-          mkdir artifacts
+          mkdir -p artifacts
           python -m pytest \
             --color=yes \
             --cov=seedsigner \
-            --cov-append \
             --cov-branch \
-            --cov-report term \
-            --cov-report html \
-            --cov-report html:./artifacts/cov_html \
-            --cov-report xml \
             --durations 5 \
             -vv
       - name: Generate screenshots
         run: |
-          python -m pytest tests/screenshot_generator/generator.py
+          python -m pytest tests/screenshot_generator/generator.py \
+            --color=yes \
+            --cov=seedsigner \
+            --cov-append \
+            --cov-branch \
+            --cov-report html:./artifacts/cov_html \
+            -vv
           cp -r ./seedsigner-screenshots ./artifacts/
+      - name: Coverage report
+        run: coverage report
+      - name: Install gitleaks (pinned binary, checksum-verified)
+        # Runs once, not once per matrix leg -- a secret-scan result doesn't
+        # depend on the Python version under test. Not the official
+        # gitleaks-action: that requires a paid GITLEAKS_LICENSE secret for
+        # org-owned repos (this one is), confirmed via its own README.
+        if: matrix.python-version == '3.12'
+        run: |
+          curl -sL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
+          echo "6298c9235dfc9278c14b28afd9b7fa4e6f4a289cb1974bd27949fc1e9122bdee  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+      - name: Scan for committed secrets (gitleaks)
+        if: matrix.python-version == '3.12'
+        run: ./gitleaks detect --source . --config .gitleaks.toml --redact -v
       - name: Archive CI Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: ci-artifacts
+          name: ci-artifacts-${{ matrix.python-version }}
           path: artifacts/**
           retention-days: 10
         # Upload also when tests fail. The workflow result (red/green) will
-        # be not effected by this.
+        # not be affected by this.
         if: always()

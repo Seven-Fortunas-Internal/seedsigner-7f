@@ -2,7 +2,7 @@
 from base import FlowTest, FlowStep
 
 from seedsigner.controller import Controller
-from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON
+from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON, ButtonOption
 from seedsigner.models.seed import Seed
 from seedsigner.models.settings_definition import SettingsConstants, SettingsDefinition
 from seedsigner.views.view import ErrorView, MainMenuView
@@ -25,7 +25,7 @@ class TestToolsFlows(FlowTest):
             FlowStep(MainMenuView, button_data_selection=MainMenuView.TOOLS),
             FlowStep(tools_views.ToolsMenuView, button_data_selection=tools_views.ToolsMenuView.ADDRESS_EXPLORER),
             FlowStep(tools_views.ToolsAddressExplorerSelectSourceView, screen_return_value=0),  # ret 1st onboard seed
-            FlowStep(seed_views.SeedExportXpubScriptTypeView, button_data_selection=SettingsDefinition.get_settings_entry(SettingsConstants.SETTING__SCRIPT_TYPES).get_selection_option_display_name_by_value(SettingsConstants.NATIVE_SEGWIT)),
+            FlowStep(seed_views.SeedExportXpubScriptTypeView, button_data_selection=ButtonOption(SettingsDefinition.get_settings_entry(SettingsConstants.SETTING__SCRIPT_TYPES).get_selection_option_display_name_by_value(SettingsConstants.NATIVE_SEGWIT), return_data=SettingsConstants.NATIVE_SEGWIT)),
             FlowStep(tools_views.ToolsAddressExplorerAddressTypeView, button_data_selection=tools_views.ToolsAddressExplorerAddressTypeView.RECEIVE),
             FlowStep(tools_views.ToolsAddressExplorerAddressListView, screen_return_value=10),  # ret NEXT page of addrs
             FlowStep(tools_views.ToolsAddressExplorerAddressListView, screen_return_value=4),  # ret a specific addr from the list
@@ -62,7 +62,7 @@ class TestToolsFlows(FlowTest):
         # Finalize the new seed w/passphrase
         self.run_sequence(
             sequence=[
-                FlowStep(seed_views.SeedFinalizeView, button_data_selection=SettingsConstants.LABEL__BIP39_PASSPHRASE),
+                FlowStep(seed_views.SeedFinalizeView, button_data_selection=seed_views.SeedFinalizeView.PASSPHRASE),
                 FlowStep(seed_views.SeedAddPassphraseView, screen_return_value=dict(passphrase="mypassphrase")),
                 FlowStep(seed_views.SeedReviewPassphraseView, button_data_selection=seed_views.SeedReviewPassphraseView.DONE),
                 FlowStep(seed_views.SeedOptionsView, is_redirect=True),
@@ -177,7 +177,7 @@ class TestToolsFlows(FlowTest):
 
         # Scenario 4: No seed onboard, one script type enabled, started from Tools, BACK
         # can only go to MainMenu because of mid-flow seed load.
-        controller.discard_seed(0)
+        controller.discard_seed(seed)
         self.run_sequence([
             FlowStep(MainMenuView, button_data_selection=MainMenuView.TOOLS),
             FlowStep(tools_views.ToolsMenuView, button_data_selection=tools_views.ToolsMenuView.ADDRESS_EXPLORER),
@@ -242,6 +242,153 @@ class TestToolsFlows(FlowTest):
             FlowStep(scan_views.ScanWalletDescriptorView, before_run=load_descriptor_into_decoder),  # simulate read descriptor QR
             FlowStep(seed_views.MultisigWalletDescriptorView, screen_return_value=0),
             FlowStep(seed_views.SeedAddressVerificationView),
-            FlowStep(seed_views.AddressVerificationSuccessView),
+            FlowStep(seed_views.SeedAddressVerificationSuccessView),
         ])
 
+
+    def test__verify_address__singlesig__flow(self):
+        """
+            Address Explorer should be able to scan a singlesig address and
+            verify it against a loaded key.
+        """
+        controller = Controller.get_instance()
+        controller.storage.set_pending_seed(Seed(mnemonic=["abandon "* 11 + "about"]))
+        controller.storage.finalize_pending_seed()        
+        settings = controller.settings
+        settings.set_value(SettingsConstants.SETTING__NETWORK, SettingsConstants.REGTEST)
+
+        addrs = [
+            # Native segwit regtest receive addr @ index 6
+            "bcrt1q4e9q5taxnsvc6m0uxv6h75mkzvnkxeqk6l90u2",
+
+            # Taproot regtest change addr @ index 48
+            "bcrt1pj5v8ean2hc5lh2djsgfx4j9uc0n67942ngv6q9r49qv88ex5mrwsn3u4f7",
+        ]
+
+        for test_addr in addrs:
+            def load_address_into_decoder(view: scan_views.ScanView):
+                # Native segwit regtest receive addr @ index 6
+                view.decoder.add_data(test_addr)
+
+            self.run_sequence([
+                FlowStep(MainMenuView, button_data_selection=MainMenuView.TOOLS),
+                FlowStep(tools_views.ToolsMenuView, button_data_selection=tools_views.ToolsMenuView.VERIFY_ADDRESS),
+                FlowStep(scan_views.ScanAddressView, before_run=load_address_into_decoder),  # simulate read address QR
+                FlowStep(seed_views.AddressVerificationStartView, is_redirect=True),
+                FlowStep(seed_views.SeedSelectSeedView, screen_return_value=0),
+                FlowStep(seed_views.SeedAddressVerificationView),
+                FlowStep(seed_views.SeedAddressVerificationSuccessView),
+            ])
+
+
+    def test__address_explorer__not_offered_in_sevenf_mode(self):
+        """ Regression test for a real bug found live during the 7F hardware
+            walkthrough: this button used to be unconditional, but
+            ToolsAddressExplorerSelectSourceView's own internal branching is a
+            binary bitcoin/evm check with no case for "sevenf" -- an operator
+            reaching it in 7F mode would have fallen through to the *bitcoin*
+            xpub export path. Confirms the button itself is no longer offered
+            in sevenf mode at all, matching VERIFY_ADDRESS's existing
+            bitcoin-only pattern. """
+        import pytest
+
+        self.controller.active_chain_id = "sevenf"
+        view = tools_views.ToolsMenuView()
+        captured = {}
+
+        def fake_run_screen(screen_cls, button_data=None, **kwargs):
+            captured["button_data"] = button_data
+            return RET_CODE__BACK_BUTTON
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+
+        assert tools_views.ToolsMenuView.ADDRESS_EXPLORER not in captured["button_data"]
+        assert tools_views.ToolsMenuView.VERIFY_ADDRESS not in captured["button_data"]
+
+
+    def test__dice_entropy_mnemonic_length__hides_12_word_option_in_sevenf_mode(self):
+        """ Same rationale and regression as LoadSeedView's own 12-word
+            gating (test_flows_seed.py): 7F ceremony seeds are always
+            24-word BIP-39 (Patrick's requirements doc, decision D1). """
+        import pytest
+
+        for active_chain_id, expect_12word in [("bitcoin", True), ("evm", True), ("sevenf", False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = tools_views.ToolsDiceEntropyMnemonicLengthView()
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+
+            labels = [b.button_label for b in captured["button_data"]]
+            is_present = any("12 words" in label for label in labels)
+            assert is_present == expect_12word, f"active_chain_id={active_chain_id!r}: expected 12-word present={expect_12word}, got {is_present}"
+            assert any("24 words" in label for label in labels)
+
+
+class TestToolsImageEntropyFlows(FlowTest):
+
+    def test__image_entropy__incorrect_preview_frame_count_aborts(self):
+        """
+        If the live preview screen returns anything other than the required number of
+        entropy frames, the View must raise rather than continue on to seed creation.
+        """
+        from unittest.mock import Mock
+        from seedsigner.views.view import UnhandledExceptionView
+        from seedsigner.gui.screens.tools_screens import ToolsImageEntropyLivePreviewScreen
+
+        # Empty list (no frames)
+        self.run_sequence([
+            FlowStep(tools_views.ToolsImageEntropyLivePreviewView, screen_return_value=[]),
+            FlowStep(UnhandledExceptionView),
+        ])
+
+        # Too few
+        self.run_sequence([
+            FlowStep(tools_views.ToolsImageEntropyLivePreviewView, screen_return_value=[Mock()] * 10),
+            FlowStep(UnhandledExceptionView),
+        ])
+
+        # Too many
+        self.run_sequence([
+            FlowStep(tools_views.ToolsImageEntropyLivePreviewView, screen_return_value=[Mock()] * (ToolsImageEntropyLivePreviewScreen.PREVIEW_POOL_SIZE + 5)),
+            FlowStep(UnhandledExceptionView),
+        ])
+
+        # Degenerate None
+        self.run_sequence([
+            FlowStep(tools_views.ToolsImageEntropyLivePreviewView, screen_return_value=None),
+            FlowStep(UnhandledExceptionView),
+        ])
+
+
+
+    def test__image_entropy__screen_exception_does_not_advance(self):
+        """
+        There is no explicit handling for the live preview screen raising, but the flow
+        must never continue on to seed creation when it does.
+        """
+        from seedsigner.views.view import UnhandledExceptionView
+
+        self.run_sequence([
+            FlowStep(tools_views.ToolsImageEntropyLivePreviewView, screen_return_value=Exception("Test exception")),
+            FlowStep(UnhandledExceptionView),
+        ])
+
+
+    def test__image_entropy__full_preview_frames_advances(self):
+        """ A full set of preview frames advances to the final image capture. """
+        from unittest.mock import Mock
+        from seedsigner.gui.screens.tools_screens import ToolsImageEntropyLivePreviewScreen
+
+        self.run_sequence([
+            FlowStep(tools_views.ToolsImageEntropyLivePreviewView, screen_return_value=[Mock()] * ToolsImageEntropyLivePreviewScreen.PREVIEW_POOL_SIZE),
+            FlowStep(tools_views.ToolsImageEntropyFinalImageView),
+        ])

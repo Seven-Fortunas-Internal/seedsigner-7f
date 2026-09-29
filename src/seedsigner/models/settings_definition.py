@@ -1,5 +1,12 @@
+import os
+import pathlib
 from dataclasses import dataclass
 from typing import Any, List
+
+from seedsigner.helpers.l10n import mark_for_translation as _mft
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 
@@ -10,55 +17,213 @@ class SettingsConstants:
     OPTION__PROMPT = "P"
     OPTION__REQUIRED = "R"
     OPTIONS__ENABLED_DISABLED = [
-        (OPTION__ENABLED, "Enabled"),
-        (OPTION__DISABLED, "Disabled"),
+        (OPTION__ENABLED, _mft("Enabled")),
+        (OPTION__DISABLED, _mft("Disabled")),
     ]
     OPTIONS__ONLY_DISABLED = [
-        (OPTION__DISABLED, "Disabled"),
+        (OPTION__DISABLED, _mft("Disabled")),
     ]
     OPTIONS__PROMPT_REQUIRED_DISABLED = [
-        (OPTION__PROMPT, "Prompt"),
-        (OPTION__REQUIRED, "Required"),
-        (OPTION__DISABLED, "Disabled"),
+        (OPTION__PROMPT, _mft("Prompt")),
+        (OPTION__REQUIRED, _mft("Required")),
+        (OPTION__DISABLED, _mft("Disabled")),
     ]
     OPTIONS__ENABLED_DISABLED_REQUIRED = OPTIONS__ENABLED_DISABLED +[
-        (OPTION__REQUIRED, "Required"),
+        (OPTION__REQUIRED, _mft("Required")),
     ]
     OPTIONS__ENABLED_DISABLED_PROMPT = OPTIONS__ENABLED_DISABLED + [
-        (OPTION__PROMPT, "Prompt"),
+        (OPTION__PROMPT, _mft("Prompt")),
     ]
     ALL_OPTIONS = OPTIONS__ENABLED_DISABLED_PROMPT + [
-        (OPTION__REQUIRED, "Required"),
+        (OPTION__REQUIRED, _mft("Required")),
     ]
 
     # User-facing selection options
-    COORDINATOR__BLUE_WALLET = "bw"
-    COORDINATOR__NUNCHUK = "nun"
-    COORDINATOR__SPARROW = "spa"
-    COORDINATOR__SPECTER_DESKTOP = "spd"
-    COORDINATOR__KEEPER = "kpr"
-    ALL_COORDINATORS = [
-        (COORDINATOR__BLUE_WALLET, "BlueWallet"),
-        (COORDINATOR__NUNCHUK, "Nunchuk"),
-        (COORDINATOR__SPARROW, "Sparrow"),
-        (COORDINATOR__SPECTER_DESKTOP, "Specter Desktop"),
-        (COORDINATOR__KEEPER, "Keeper"),
+    XPUB_QR_FORMAT__UR_CRYPTO_ACCOUNT = "urca"
+    XPUB_QR_FORMAT__STATIC = "sta"
+    XPUB_QR_FORMAT__SPECTER_LEGACY = "spl"
+    ALL_XPUB_QR_FORMATS = [
+        # TRANSLATOR_NOTE: QR code format option; "default" = this is the format most wallets use
+        (XPUB_QR_FORMAT__UR_CRYPTO_ACCOUNT, _mft("Animated (default)")),
+
+        # TRANSLATOR_NOTE: QR code format option (static = single frame, not animated)
+        (XPUB_QR_FORMAT__STATIC, _mft("Static")),
+
+        # TRANSLATOR_NOTE: QR code format option: old format that Specter Desktop used to use
+        (XPUB_QR_FORMAT__SPECTER_LEGACY, _mft("Specter legacy")),
     ]
 
-    LANGUAGE__ENGLISH = "en"
-    ALL_LANGUAGES = [
-        (LANGUAGE__ENGLISH, "English"),
-    ]
+    # Over-specifying current and possible future locales to reduce/eliminate main repo
+    # changes when adding/testing new languages.
+    LOCALE__ARABIC = "ar"
+    LOCALE__BENGALI = "bn"
+    LOCALE__BULGARIAN = "bg"
+    LOCALE__CATALAN = "ca"
+    LOCALE__CHINESE_SIMPLIFIED = "zh_Hans_CN"
+    LOCALE__CHINESE_TRADITIONAL = "zh_Hant_TW"
+    LOCALE__CROATIAN = "hr"
+    LOCALE__CZECH = "cs"
+    LOCALE__DANISH = "da"
+    LOCALE__DUTCH = "nl"
+    LOCALE__EGYPTIAN = "ar_EG"
+    LOCALE__ENGLISH = "en"
+    LOCALE__ESTONIAN = "et"
+    LOCALE__FINNISH = "fi"
+    LOCALE__FRENCH = "fr"
+    LOCALE__GAELIC = "gd"
+    LOCALE__GERMAN = "de"
+    LOCALE__GREEK = "el"
+    LOCALE__GUJARATI = "gu"
+    LOCALE__HAUSA = "ha"
+    LOCALE__HEBREW = "he"
+    LOCALE__HINDI = "hi"
+    LOCALE__HUNGARIAN = "hu"
+    LOCALE__INDONESIAN = "id"
+    LOCALE__ITALIAN = "it"
+    LOCALE__JAPANESE = "ja"
+    LOCALE__JAVANESE = "jv"
+    LOCALE__KOREAN = "ko"
+    LOCALE__LAO = "lo"
+    LOCALE__LATVIAN = "lv"
+    LOCALE__LITHUANIAN = "lt"
+    LOCALE__MALAY = "ms"
+    LOCALE__MALTESE = "mt"
+    LOCALE__MARATHI = "mr"
+    LOCALE__NORWEGIAN = "no"
+    LOCALE__PERSIAN = "fa"
+    LOCALE__POLISH = "pl"
+    LOCALE__PORTUGUESE_BR = "pt_BR"
+    LOCALE__PORTUGUESE_PT = "pt_PT"
+    LOCALE__PUNJABI = "pa"
+    LOCALE__ROMANIAN = "ro"
+    LOCALE__RUSSIAN = "ru"
+    LOCALE__SLOVAK = "sk"
+    LOCALE__SLOVENIAN = "sl"
+    LOCALE__SPANISH = "es"
+    LOCALE__SWEDISH = "sv"
+    LOCALE__TAGALOG = "tl"
+    LOCALE__TAMIL = "ta"
+    LOCALE__TELUGU = "te"
+    LOCALE__THAI = "th"
+    LOCALE__TURKISH = "tr"
+    LOCALE__UKRANIAN = "uk"
+    LOCALE__URDU = "ur"
+    LOCALE__VIETNAMESE = "vi"
+
+    # Do not wrap for translation. Present each language in its native form (i.e. either
+    # using its native chars or how they write it in Latin chars; e.g. Spanish is listed
+    # and sorted as "Español").
+    # Sort fully-vetted languages first, then beta languages, then the "placeholders /
+    # coming soon" languages.
+    # Sort by native form when written in Latin chars, otherwise sort by English name.
+    # Include English name in parens for languages that don't use Latin chars.
+    # Include region/country in parens for specific dialects (e.g. "Português (Brasil)").
+    # Note that dicts preserve insertion order as of Python 3.7.
+    ALL_LOCALES = {
+        # --------- Fully supported languages -------------------------------------------
+        LOCALE__CATALAN: "Català",
+        LOCALE__GERMAN: "Deutsch",
+        LOCALE__ENGLISH: "English",
+        LOCALE__SPANISH: "Español",
+        LOCALE__FRENCH: "Français",
+        LOCALE__ITALIAN: "Italiano",
+        LOCALE__DUTCH: "Nederlands",
+
+        # --------- Beta languages ------------------------------------------------------
+        LOCALE__CZECH: "(beta) Čeština",
+        LOCALE__CHINESE_SIMPLIFIED: "(beta) 简体中文 (Chinese Simplified)",
+        LOCALE__HINDI: "(beta) हिन्दी (Hindi)",
+        LOCALE__INDONESIAN: "(beta) Indonesia (Indonesian)",
+        LOCALE__JAPANESE: "(beta) 日本語 (Japanese)",
+        LOCALE__KOREAN: "(beta) 한국어 (Korean)",
+        LOCALE__PERSIAN: "(beta) فارسی (Persian)",
+        LOCALE__POLISH: "(beta) Polski",
+        LOCALE__PORTUGUESE_BR: "(beta) Português (Brasil)",
+        LOCALE__THAI: "(beta) ไทย (Thai)",
+        LOCALE__VIETNAMESE: "(beta) Tiếng Việt (Vietnamese)",
+
+        # --------- In Progress Languages -----------------------------------------------
+        LOCALE__GREEK: "(incomplete) Ελληνικά (Greek)",  # OpenSans includes Greek chars
+        LOCALE__NORWEGIAN: "(incomplete) Norsk (Norwegian)",
+        LOCALE__RUSSIAN: "(incomplete) русский (Russian)",  # OpenSans includes cyrillic chars
+        LOCALE__TURKISH: "(incomplete) Türkçe (Turkish)",
+
+        # --------- Placeholders / Coming soon ------------------------------------------
+        # Commented out options require explicit additional font support.
+        # -------------------------------------------------------------------------------
+        LOCALE__ARABIC: "العربية (Arabic)",
+        # LOCALE__BENGALI: "বাংলা (Bengali)",
+        LOCALE__BULGARIAN: "български (Bulgarian)",  # OpenSans includes cyrillic chars
+        # LOCALE__CHINESE_TRADITIONAL: "繁體中文 (Chinese Traditional)",
+        LOCALE__DANISH: "Dansk",
+        LOCALE__ESTONIAN: "Eesti",
+        # LOCALE__EGYPTIAN: "مصرى (Egyptian)",
+        LOCALE__GAELIC: "Gaeilge",
+        # LOCALE__GUJARATI: "ગુજરાતી (Gujarati)",
+        LOCALE__HAUSA: "Hausa",
+        # LOCALE__HEBREW: "עברית (Hebrew)",
+        LOCALE__CROATIAN: "Hrvatski",
+        LOCALE__JAVANESE: "Jawa (Javanese)",
+        # LOCALE__LAO: "ລາວ (Lao)",
+        LOCALE__LATVIAN: "Latviešu",
+        LOCALE__LITHUANIAN: "Lietuvių",
+        LOCALE__HUNGARIAN: "Magyar",
+        LOCALE__MALAY: "Melayu",
+        LOCALE__MALTESE: "Malti",
+        # LOCALE__MARATHI: "मराठी (Marathi)",
+        LOCALE__PORTUGUESE_PT: "Português (Portugal)",
+        # LOCALE__PUNJABI: "ਪੰਜਾਬੀ (Punjabi)",
+        LOCALE__ROMANIAN: "Română",
+        LOCALE__SLOVAK: "Slovenčina",
+        LOCALE__SLOVENIAN: "Slovenščina",
+        LOCALE__FINNISH: "Suomi",
+        LOCALE__SWEDISH: "Svenska",
+        LOCALE__TAGALOG: "Tagalog",
+        # LOCALE__TAMIL: "தமிழ் (Tamil)",
+        # LOCALE__TELUGU: "తెలుగు (Telugu)",
+        LOCALE__UKRANIAN: "українська (Ukranian)",   # OpenSans includes cyrillic chars
+        # LOCALE__URDU: "اردو (Urdu)",
+    }
+
+
+    @classmethod
+    def get_detected_languages(cls) -> list[tuple[str, str]]:
+        """
+        Return a list of tuples of language codes and their native names.
+
+        Scans the filesystem to autodiscover which language codes are onboard.
+        """
+        # Back out from the models/ dir to reach the seedsigner root
+        models_dir = pathlib.Path(__file__).parent.resolve()
+        seedsigner_root = models_dir.parent.resolve()
+
+        # Pre-load English since there's no "en" entry in the translations folder; also
+        # it should always appear first in the list anyway.
+        detected_languages = [(cls.LOCALE__ENGLISH, cls.ALL_LOCALES[cls.LOCALE__ENGLISH])]
+
+        locales_present = set()
+        for root, dirs, files in os.walk(os.path.join(seedsigner_root, "resources", "seedsigner-translations", "l10n")):
+            for file in [f for f in files if f.endswith(".mo")]:
+                # `root` will be [...]seedsigner/resources/seedsigner-translations/l10n/pt_BR/LC_MESSAGES
+                # Isolate the language code from the path
+                locales_present.add(root.rsplit(os.sep, 2)[-2])
+
+        for locale in cls.ALL_LOCALES.keys():
+            if locale in locales_present:
+                detected_languages.append((locale, cls.ALL_LOCALES[locale]))
+
+        return detected_languages
+
 
     BTC_DENOMINATION__BTC = "btc"
     BTC_DENOMINATION__SATS = "sats"
     BTC_DENOMINATION__THRESHOLD = "thr"
     BTC_DENOMINATION__BTCSATSHYBRID = "hyb"
     ALL_BTC_DENOMINATIONS = [
-        (BTC_DENOMINATION__BTC, "BTC"),
-        (BTC_DENOMINATION__SATS, "sats"),
-        (BTC_DENOMINATION__THRESHOLD, "Threshold at 0.01"),
-        (BTC_DENOMINATION__BTCSATSHYBRID, "BTC | sats hybrid"),
+        (BTC_DENOMINATION__BTC, _mft("BTC")),
+        (BTC_DENOMINATION__SATS, _mft("sats")),
+        (BTC_DENOMINATION__THRESHOLD, _mft("Threshold at 0.01")),
+        (BTC_DENOMINATION__BTCSATSHYBRID, _mft("BTC | sats hybrid")),
     ]
 
     CAMERA_ROTATION__0 = 0
@@ -66,20 +231,26 @@ class SettingsConstants:
     CAMERA_ROTATION__180 = 180
     CAMERA_ROTATION__270 = 270
     ALL_CAMERA_ROTATIONS = [
-        (CAMERA_ROTATION__0, "0°"),
-        (CAMERA_ROTATION__90, "90°"),
-        (CAMERA_ROTATION__180, "180°"),
-        (CAMERA_ROTATION__270, "270°"),
+        (CAMERA_ROTATION__0, _mft("0°")),
+        (CAMERA_ROTATION__90, _mft("90°")),
+        (CAMERA_ROTATION__180, _mft("180°")),
+        (CAMERA_ROTATION__270, _mft("270°")),
     ]
 
     # QR code constants
     DENSITY__LOW = "L"
     DENSITY__MEDIUM = "M"
     DENSITY__HIGH = "H"
+    # TRANSLATOR_NOTE: QR code density option: Low, Medium, High
+    density_low = _mft("Low")
+    # TRANSLATOR_NOTE: QR code density option: Low, Medium, High
+    density_medium = _mft("Medium")
+    # TRANSLATOR_NOTE: QR code density option: Low, Medium, High
+    density_high = _mft("High")
     ALL_DENSITIES = [
-        (DENSITY__LOW, "Low"),
-        (DENSITY__MEDIUM, "Medium"),
-        (DENSITY__HIGH, "High"),
+        (DENSITY__LOW, density_low),
+        (DENSITY__MEDIUM, density_medium),
+        (DENSITY__HIGH, density_high),
     ]
 
     # Seed-related constants
@@ -87,13 +258,14 @@ class SettingsConstants:
     TESTNET = "T"
     REGTEST = "R"
     ALL_NETWORKS = [
-        (MAINNET, "Mainnet"),
-        (TESTNET, "Testnet"),
-        (REGTEST, "Regtest")
+        (MAINNET, _mft("Mainnet")),
+        (TESTNET, _mft("Testnet")),
+        (REGTEST, _mft("Regtest"))
     ]
 
     @classmethod
     def map_network_to_embit(cls, network) -> str:
+        # Note these are `embit` constants; do not wrap for translation
         if network == SettingsConstants.MAINNET:
             return "main"
         elif network == SettingsConstants.TESTNET:
@@ -101,14 +273,14 @@ class SettingsConstants:
         if network == SettingsConstants.REGTEST:
             return "regtest"
     
-    PERSISTENT_SETTINGS__SD_INSERTED__HELP_TEXT = "Store Settings on SD card"
-    PERSISTENT_SETTINGS__SD_REMOVED__HELP_TEXT = "Insert SD card to enable"
+    PERSISTENT_SETTINGS__SD_INSERTED__HELP_TEXT = _mft("Store Settings on SD card")
+    PERSISTENT_SETTINGS__SD_REMOVED__HELP_TEXT = _mft("Insert SD card to enable")
 
     SINGLE_SIG = "ss"
     MULTISIG = "ms"
     ALL_SIG_TYPES = [
-        (SINGLE_SIG, "Single Sig"),
-        (MULTISIG, "Multisig"),
+        (SINGLE_SIG, _mft("Single Sig")),
+        (MULTISIG, _mft("Multisig")),
     ]
 
     LEGACY_P2PKH = "leg"
@@ -117,11 +289,22 @@ class SettingsConstants:
     TAPROOT = "tr"
     CUSTOM_DERIVATION = "cus"
     ALL_SCRIPT_TYPES = [
-        (NATIVE_SEGWIT, "Native Segwit"),
-        (NESTED_SEGWIT, "Nested Segwit"),
-        (LEGACY_P2PKH, "Legacy"),
-        (TAPROOT, "Taproot"),
-        (CUSTOM_DERIVATION, "Custom Derivation"),
+        (NATIVE_SEGWIT, _mft("Native Segwit")),
+        (NESTED_SEGWIT, _mft("Nested Segwit")),
+        (LEGACY_P2PKH, _mft("Legacy")),
+        (TAPROOT, _mft("Taproot")),
+        (CUSTOM_DERIVATION, _mft("Custom Derivation")),
+    ]
+
+    MICROSD_TOAST_TIMER_DISABLED = "D"
+    MICROSD_TOAST_TIMER_FIVE_SECONDS = "E"
+    MICROSD_TOAST_TIMER_FOREVER = "inf"
+    ALL_MICROSD_TOAST_TIMERS = [
+        (MICROSD_TOAST_TIMER_DISABLED, _mft("Disabled")),
+        # TRANSLATOR_NOTE: MicroSD notification duration setting - Display notification for 5 seconds
+        (MICROSD_TOAST_TIMER_FIVE_SECONDS, _mft("5 seconds")),
+        # TRANSLATOR_NOTE: MicroSD notification duration setting - Display notification until the SD card is removed
+        (MICROSD_TOAST_TIMER_FOREVER, _mft("Until SD removed"))
     ]
 
     WORDLIST_LANGUAGE__ENGLISH = "en"
@@ -143,17 +326,19 @@ class SettingsConstants:
         # (WORDLIST_LANGUAGE__PORTUGUESE, "Português"),
     ]
 
-    
     # Individual SettingsEntry attr_names
-    SETTING__LANGUAGE = "language"
+    # Note: attr_names are internal constants; do not wrap for translation
+    SETTING__LOCALE = "locale"
     SETTING__WORDLIST_LANGUAGE = "wordlist_language"
     SETTING__PERSISTENT_SETTINGS = "persistent_settings"
-    SETTING__COORDINATORS = "coordinators"
+    SETTING__XPUB_QR_FORMAT = "xpub_qr"
     SETTING__BTC_DENOMINATION = "denomination"
+
+    SETTING__DISPLAY_CONFIGURATION = "display_config"
+    SETTING__DISPLAY_COLOR_INVERTED = "color_inverted"
 
     SETTING__NETWORK = "network"
     SETTING__QR_DENSITY = "qr_density"
-    SETTING__XPUB_EXPORT = "xpub_export"
     SETTING__SIG_TYPES = "sig_types"
     SETTING__SCRIPT_TYPES = "script_types"
     SETTING__XPUB_DETAILS = "xpub_details"
@@ -167,8 +352,23 @@ class SettingsConstants:
     SETTING__DIRE_WARNINGS = "dire_warnings"
     SETTING__QR_BRIGHTNESS_TIPS = "qr_brightness_tips"
     SETTING__PARTNER_LOGOS = "partner_logos"
+    SETTING__MICROSD_TOAST_TIMER = "microsd_toast_timer"
 
     SETTING__DEBUG = "debug"
+
+
+    # Hardware config settings
+    DISPLAY_CONFIGURATION__ST7789__240x240 = "st7789_240x240"  # default; original Waveshare 1.3" display hat
+    DISPLAY_CONFIGURATION__ST7789__320x240 = "st7789_320x240"    # natively portrait dimensions; we apply a 90° rotation
+    DISPLAY_CONFIGURATION__ILI9341__320x240 = "ili9341_320x240"  # natively portrait dimensions; we apply a 90° rotation
+    DISPLAY_CONFIGURATION__ILI9486__480x320 = "ili9486_480x320"  # natively portrait dimensions; we apply a 90° rotation
+    ALL_DISPLAY_CONFIGURATIONS = [
+        (DISPLAY_CONFIGURATION__ST7789__240x240, "st7789 240x240"),
+        (DISPLAY_CONFIGURATION__ST7789__320x240, "st7789 320x240"),
+        (DISPLAY_CONFIGURATION__ILI9341__320x240, "ili9341 320x240 (beta)"),
+        # (DISPLAY_CONFIGURATION__ILI9486__320x480, "ili9486 480x320"),  # TODO: Enable when ili9486 driver performance is improved
+    ]
+
 
     # Hidden settings
     SETTING__QR_BRIGHTNESS = "qr_background_color"
@@ -183,6 +383,7 @@ class SettingsConstants:
 
     VISIBILITY__GENERAL = "general"
     VISIBILITY__ADVANCED = "advanced"
+    VISIBILITY__HARDWARE = "hardware"
     VISIBILITY__DEVELOPER = "developer"
     VISIBILITY__HIDDEN = "hidden"   # For data-only (e.g. custom_derivation), not configurable by the user
 
@@ -207,8 +408,10 @@ class SettingsConstants:
     ELECTRUM_PBKDF2_ROUNDS=2048
 
     # Label strings
-    LABEL__BIP39_PASSPHRASE = "BIP-39 Passphrase"
-    LABEL__CUSTOM_EXTENSION = "Custom Extension"   # Terminology used by Electrum seeds
+    LABEL__BIP39_PASSPHRASE = _mft("BIP-39 Passphrase")
+    # TRANSLATOR_NOTE: Terminology used by Electrum seeds; equivalent to BIP-39 passphrase
+    custom_extension = _mft("Custom Extension")
+    LABEL__CUSTOM_EXTENSION = custom_extension
 
 
 
@@ -236,6 +439,16 @@ class SettingsEntry:
     selection_options: list[tuple[str | int], str] = None
     default_value: Any = None
 
+    # None = always visible regardless of Controller.active_chain_id; "bitcoin"/"evm" =
+    # only shown while that chain mode is active (see
+    # docs/multi-chain/boot-chain-selection-plan.md). Filtered centrally in
+    # SettingsMenuView.run() (settings_views.py), the one real call site of
+    # get_settings_entries() -- not per-entry. UI-VISIBILITY-ONLY, not an enforcement
+    # boundary: SettingsIngestSettingsQRView (settings_views.py) writes directly to
+    # Settings via a scanned QR with zero chain-scope check, same pre-existing gap as
+    # SETTING__MULTICHAIN_ENABLED had, not something this field closes.
+    chain_scope: str = None
+
     def __post_init__(self):
         if self.type == SettingsConstants.TYPE__ENABLED_DISABLED:
             self.selection_options = SettingsConstants.OPTIONS__ENABLED_DISABLED
@@ -251,6 +464,9 @@ class SettingsEntry:
             self.default_value = [v[0] for v in self.default_value]
         elif type(self.default_value) == tuple:
             self.default_value = self.default_value[0]
+
+        if not self.abbreviated_name:
+            self.abbreviated_name = self.attr_name
 
 
     @property
@@ -279,7 +495,7 @@ class SettingsEntry:
                 option_value = option
                 display_name = option
             if option_value == value:
-                return display_name
+                return _mft(display_name)
 
 
     def get_selection_option_value_by_display_name(self, display_name: str):
@@ -345,21 +561,19 @@ class SettingsDefinition:
     settings_entries: List[SettingsEntry] = [
         # General options
 
-        # TODO: Full babel multilanguage support! Until then, type == HIDDEN
         SettingsEntry(category=SettingsConstants.CATEGORY__SYSTEM,
-                      attr_name=SettingsConstants.SETTING__LANGUAGE,
+                      attr_name=SettingsConstants.SETTING__LOCALE,
                       abbreviated_name="lang",
-                      display_name="Language",
+                      display_name=_mft("Language"),
                       type=SettingsConstants.TYPE__SELECT_1,
-                      visibility=SettingsConstants.VISIBILITY__HIDDEN,
-                      selection_options=SettingsConstants.ALL_LANGUAGES,
-                      default_value=SettingsConstants.LANGUAGE__ENGLISH),
+                      selection_options=SettingsConstants.get_detected_languages(),
+                      default_value=SettingsConstants.LOCALE__ENGLISH),
 
-        # TODO: Support other bip-39 wordlist languages! Until then, type == HIDDEN
+        # TODO: Support other BIP-39 wordlist languages! Until then, type == HIDDEN
         SettingsEntry(category=SettingsConstants.CATEGORY__SYSTEM,
                       attr_name=SettingsConstants.SETTING__WORDLIST_LANGUAGE,
                       abbreviated_name="wordlist_lang",
-                      display_name="Mnemonic language",
+                      display_name=_mft("Mnemonic language"),
                       type=SettingsConstants.TYPE__SELECT_1,
                       visibility=SettingsConstants.VISIBILITY__HIDDEN,
                       selection_options=SettingsConstants.ALL_WORDLIST_LANGUAGES,
@@ -368,82 +582,85 @@ class SettingsDefinition:
         SettingsEntry(category=SettingsConstants.CATEGORY__SYSTEM,
                       attr_name=SettingsConstants.SETTING__PERSISTENT_SETTINGS,
                       abbreviated_name="persistent",
-                      display_name="Persistent settings",
+                      display_name=_mft("Persistent settings"),
                       help_text=SettingsConstants.PERSISTENT_SETTINGS__SD_INSERTED__HELP_TEXT,
                       default_value=SettingsConstants.OPTION__DISABLED),
-
-        SettingsEntry(category=SettingsConstants.CATEGORY__WALLET,
-                      attr_name=SettingsConstants.SETTING__COORDINATORS,
-                      abbreviated_name="coords",
-                      display_name="Coordinator software",
-                      type=SettingsConstants.TYPE__MULTISELECT,
-                      selection_options=SettingsConstants.ALL_COORDINATORS,
-                      default_value=[
-                          SettingsConstants.COORDINATOR__BLUE_WALLET,
-                          SettingsConstants.COORDINATOR__NUNCHUK,
-                          SettingsConstants.COORDINATOR__SPARROW,
-                          SettingsConstants.COORDINATOR__SPECTER_DESKTOP,
-                      ]),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__SYSTEM,
                       attr_name=SettingsConstants.SETTING__BTC_DENOMINATION,
                       abbreviated_name="denom",
-                      display_name="Denomination display",
+                      display_name=_mft("Denomination display"),
                       type=SettingsConstants.TYPE__SELECT_1,
                       selection_options=SettingsConstants.ALL_BTC_DENOMINATIONS,
-                      default_value=SettingsConstants.BTC_DENOMINATION__THRESHOLD),
-     
+                      default_value=SettingsConstants.BTC_DENOMINATION__THRESHOLD,
+                      chain_scope="bitcoin"),
+
 
         # Advanced options
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__NETWORK,
-                      display_name="Bitcoin network",
+                      display_name=_mft("Bitcoin network"),
                       type=SettingsConstants.TYPE__SELECT_1,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_NETWORKS,
-                      default_value=SettingsConstants.MAINNET),
+                      default_value=SettingsConstants.MAINNET,
+                      # Also read by views classified chain-agnostic elsewhere in this
+                      # cluster (SeedsMenuView, SeedFinalizeView, SeedDiscardView, all
+                      # via Seed.get_fingerprint()) -- hiding it here doesn't break
+                      # those, it just becomes non-adjustable while in EVM mode
+                      # (falls back to its last persisted value).
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__QR_DENSITY,
-                      display_name="QR code density",
+                      display_name=_mft("QR code density"),
                       type=SettingsConstants.TYPE__SELECT_1,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_DENSITIES,
                       default_value=SettingsConstants.DENSITY__MEDIUM),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
-                      attr_name=SettingsConstants.SETTING__XPUB_EXPORT,
-                      display_name="Xpub export",
-                      visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__ENABLED),
-
-        SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__SIG_TYPES,
                       abbreviated_name="sigs",
-                      display_name="Sig types",
+                      display_name=_mft("Sig types"),
                       type=SettingsConstants.TYPE__MULTISELECT,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_SIG_TYPES,
-                      default_value=SettingsConstants.ALL_SIG_TYPES),
+                      default_value=SettingsConstants.ALL_SIG_TYPES,
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__SCRIPT_TYPES,
                       abbreviated_name="scripts",
-                      display_name="Script types",
+                      display_name=_mft("Script types"),
                       type=SettingsConstants.TYPE__MULTISELECT,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_SCRIPT_TYPES,
-                      default_value=[SettingsConstants.NATIVE_SEGWIT, SettingsConstants.NESTED_SEGWIT, SettingsConstants.TAPROOT]),
+                      default_value=[SettingsConstants.NATIVE_SEGWIT, SettingsConstants.NESTED_SEGWIT, SettingsConstants.TAPROOT],
+                      chain_scope="bitcoin"),
+
+        SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
+                      attr_name=SettingsConstants.SETTING__XPUB_QR_FORMAT,
+                      display_name=_mft("Xpub QR format"),
+                      visibility=SettingsConstants.VISIBILITY__ADVANCED,
+                      type=SettingsConstants.TYPE__MULTISELECT,
+                      selection_options=SettingsConstants.ALL_XPUB_QR_FORMATS,
+                      default_value=[
+                            SettingsConstants.XPUB_QR_FORMAT__UR_CRYPTO_ACCOUNT,
+                            SettingsConstants.XPUB_QR_FORMAT__STATIC,
+                      ],
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__XPUB_DETAILS,
-                      display_name="Show xpub details",
+                      display_name=_mft("Show xpub details"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__ENABLED),
+                      default_value=SettingsConstants.OPTION__ENABLED,
+                      chain_scope="bitcoin"),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__PASSPHRASE,
-                      display_name="BIP-39 passphrase",
+                      display_name=_mft("BIP-39 passphrase"),
                       type=SettingsConstants.TYPE__SELECT_1,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.OPTIONS__ENABLED_DISABLED_REQUIRED,
@@ -452,7 +669,7 @@ class SettingsDefinition:
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__CAMERA_ROTATION,
                       abbreviated_name="camera",
-                      display_name="Camera rotation",
+                      display_name=_mft("Camera rotation"),
                       type=SettingsConstants.TYPE__SELECT_1,
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       selection_options=SettingsConstants.ALL_CAMERA_ROTATIONS,
@@ -460,57 +677,93 @@ class SettingsDefinition:
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__COMPACT_SEEDQR,
-                      display_name="CompactSeedQR",
+                      display_name=_mft("Compact SeedQR"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__ENABLED),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__BIP85_CHILD_SEEDS,
                       abbreviated_name="bip85",
-                      display_name="BIP-85 child seeds",
+                      display_name=_mft("BIP-85 child seeds"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__DISABLED),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__ELECTRUM_SEEDS,
                       abbreviated_name="electrum",
-                      display_name="Electrum seeds",
-                      help_text="Native Segwit only",
+                      display_name=_mft("Electrum seeds"),
+                      help_text=_mft("Native Segwit only"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__DISABLED),
+                      default_value=SettingsConstants.OPTION__DISABLED,
+                      chain_scope="bitcoin"),
+        
+        SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
+                      attr_name=SettingsConstants.SETTING__MICROSD_TOAST_TIMER,
+                      display_name=_mft("MicroSD notification duration"),
+                      type=SettingsConstants.TYPE__SELECT_1,
+                      visibility=SettingsConstants.VISIBILITY__ADVANCED,
+                      selection_options=SettingsConstants.ALL_MICROSD_TOAST_TIMERS,
+                      default_value=SettingsConstants.MICROSD_TOAST_TIMER_FIVE_SECONDS),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__MESSAGE_SIGNING,
-                      display_name="Message signing",
+                      display_name=_mft("Message signing"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
-                      default_value=SettingsConstants.OPTION__DISABLED),
+                      default_value=SettingsConstants.OPTION__DISABLED,
+                      chain_scope="bitcoin"),
+
+        # Multi-chain (EVM today; Tron/7Fchain planned) is no longer a Settings toggle --
+        # retired in favor of Controller.active_chain_id, set once per power-on session
+        # by ChainChooserView (see docs/multi-chain/boot-chain-selection-plan.md).
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__PRIVACY_WARNINGS,
                       abbreviated_name="priv_warn",
-                      display_name="Show privacy warnings",
+                      display_name=_mft("Show privacy warnings"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__ENABLED),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__DIRE_WARNINGS,
                       abbreviated_name="dire_warn",
-                      display_name="Show dire warnings",
+                      display_name=_mft("Show dire warnings"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__ENABLED),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__QR_BRIGHTNESS_TIPS,
-                      display_name="Show QR brightness tips",
+                      display_name=_mft("Show QR brightness tips"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__ENABLED),
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__PARTNER_LOGOS,
                       abbreviated_name="partners",
-                      display_name="Show partner logos",
+                      display_name=_mft("Show partner logos"),
                       visibility=SettingsConstants.VISIBILITY__ADVANCED,
                       default_value=SettingsConstants.OPTION__ENABLED),
+
+
+        # Hardware config
+        SettingsEntry(category=SettingsConstants.CATEGORY__SYSTEM,
+                      attr_name=SettingsConstants.SETTING__DISPLAY_CONFIGURATION,
+                      abbreviated_name="disp_conf",
+                      # TRANSLATOR_NOTE: Hardware settings option to specify the screen driver (e.g. st7789 vs ili9341)
+                      display_name=_mft("Display type"),
+                      type=SettingsConstants.TYPE__SELECT_1,
+                      visibility=SettingsConstants.VISIBILITY__HARDWARE,
+                      selection_options=SettingsConstants.ALL_DISPLAY_CONFIGURATIONS,
+                      default_value=SettingsConstants.DISPLAY_CONFIGURATION__ST7789__240x240),
+
+        SettingsEntry(category=SettingsConstants.CATEGORY__SYSTEM,
+                      attr_name=SettingsConstants.SETTING__DISPLAY_COLOR_INVERTED,
+                      abbreviated_name="rgb_inv",
+                      # TRANSLATOR_NOTE: Hardware settings option to invert how the screen driver displays colors.
+                      display_name=_mft("Invert colors"),
+                      type=SettingsConstants.TYPE__ENABLED_DISABLED,
+                      visibility=SettingsConstants.VISIBILITY__HARDWARE,
+                      default_value=SettingsConstants.OPTION__DISABLED),
+
 
         # Developer options
         # TODO: No real Developer options needed yet. Disable for now.
@@ -524,7 +777,7 @@ class SettingsDefinition:
         SettingsEntry(category=SettingsConstants.CATEGORY__SYSTEM,
                       attr_name=SettingsConstants.SETTING__QR_BRIGHTNESS,
                       abbreviated_name="qr_brightness",
-                      display_name="QR background color",
+                      display_name=_mft("QR background color"),
                       type=SettingsConstants.TYPE__FREE_ENTRY,
                       visibility=SettingsConstants.VISIBILITY__HIDDEN,
                       default_value=62),
@@ -555,15 +808,25 @@ class SettingsDefinition:
 
 
     @classmethod
-    def get_defaults(cls) -> dict:
+    def get_defaults(cls, use_abbreviated_name: bool = False, skip_hidden: bool = False) -> dict:
+        """
+        * use_abbreviated_name: Only used by the test suite.
+        * skip_hidden: Only used by the test suite.
+        """
         as_dict = {}
         for entry in SettingsDefinition.settings_entries:
+            if skip_hidden and entry.visibility == SettingsConstants.VISIBILITY__HIDDEN:
+                continue
+            if not use_abbreviated_name:
+                attr_name = entry.attr_name
+            else:
+                attr_name = entry.abbreviated_name
             if type(entry.default_value) == list:
                 # Must copy the default_value list, otherwise we'll inadvertently change
                 # defaults when updating these attrs
-                as_dict[entry.attr_name] = list(entry.default_value)
+                as_dict[attr_name] = list(entry.default_value)
             else:
-                as_dict[entry.attr_name] = entry.default_value
+                as_dict[attr_name] = entry.default_value
         return as_dict
 
 
@@ -576,19 +839,3 @@ class SettingsDefinition:
             output["settings_entries"].append(settings_entry.to_dict())
         
         return output
-
-
-
-if __name__ == "__main__":
-    import json
-    import os
-
-    hostname = os.uname()[1]
-  
-    if hostname == "seedsigner-os":
-        output_file = "/mnt/microsd/settings_definition.json"
-    else:
-        output_file = "settings_definition.json"
-    
-    with open(output_file, 'w') as json_file:
-        json.dump(SettingsDefinition.to_dict(), json_file, indent=4)

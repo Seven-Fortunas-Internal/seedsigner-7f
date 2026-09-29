@@ -1,15 +1,19 @@
+import datetime
 import time
 
 from dataclasses import dataclass
+from gettext import gettext as _
 from PIL.ImageOps import autocontrast
 from typing import List
-from seedsigner.gui.components import Button, CheckboxButton, CheckedSelectionButton, FontAwesomeIconConstants, Fonts, GUIConstants, Icon, IconButton, IconTextLine, TextArea
-from seedsigner.gui.screens.scan_screens import ScanScreen
 
-from seedsigner.gui.screens.screen import BaseScreen, BaseTopNavScreen, ButtonListScreen
+from seedsigner.helpers.l10n import mark_for_translation as _mft
+from seedsigner.gui.components import Button, CheckboxButton, CheckedSelectionButton, FontAwesomeIconConstants, Fonts, GUIConstants, Icon, IconButton, IconTextLine, SeedSignerIconConstants, TextArea
+from seedsigner.gui.screens.scan_screens import ScanScreen
+from seedsigner.gui.screens.screen import BaseScreen, BaseTopNavScreen, ButtonListScreen, ButtonOption
 from seedsigner.hardware.buttons import HardwareButtonsConstants
 from seedsigner.hardware.camera import Camera
 from seedsigner.models.settings import SettingsConstants
+
 
 
 @dataclass
@@ -18,12 +22,10 @@ class SettingsEntryUpdateSelectionScreen(ButtonListScreen):
     help_text: str = None
     checked_buttons: List[int] = None
     settings_entry_type: str = SettingsConstants.TYPE__ENABLED_DISABLED
-    selected_button: int = 0
 
     def __post_init__(self):
-        self.title = "Settings"
+        self.title = _("Settings")
         self.is_bottom_list = True
-        self.use_checked_selection_buttons = True
         if self.settings_entry_type == SettingsConstants.TYPE__MULTISELECT:
             self.Button_cls = CheckboxButton
         else:
@@ -31,20 +33,21 @@ class SettingsEntryUpdateSelectionScreen(ButtonListScreen):
         super().__post_init__()
 
         self.components.append(TextArea(
-            text=self.display_name,
+            text=_(self.display_name),
             font_size=GUIConstants.BODY_FONT_MAX_SIZE,
             is_text_centered=True,
-            auto_line_break=False,
+            auto_line_break=True,
             screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING
         ))
 
         if self.help_text:
             prev_component_bottom = self.components[-1].screen_y + self.components[-1].height
             self.components.append(TextArea(
-                text=self.help_text,
+                text=_(self.help_text),
                 font_color=GUIConstants.LABEL_FONT_COLOR,
                 is_text_centered=True,
                 screen_y=prev_component_bottom + GUIConstants.COMPONENT_PADDING,
+                auto_line_break=True,
             ))
 
 
@@ -52,7 +55,8 @@ class SettingsEntryUpdateSelectionScreen(ButtonListScreen):
 @dataclass
 class IOTestScreen(BaseTopNavScreen):
     def __post_init__(self):
-        self.title = "I/O Test"
+        # TRANSLATOR_NOTE: Short for "Input/Output"; screen to make sure the buttons and camera are working properly
+        self.title = _("I/O Test")
         self.show_back_button = False
         self.resolution = (96, 96)
         self.framerate = 10
@@ -77,7 +81,7 @@ class IOTestScreen(BaseTopNavScreen):
         self.components.append(self.joystick_click_button)
 
         self.joystick_up_button = IconButton(
-            icon_name=FontAwesomeIconConstants.ANGLE_UP,
+            icon_name=SeedSignerIconConstants.CHEVRON_UP,
             icon_size=GUIConstants.ICON_INLINE_FONT_SIZE,
             width=input_button_width,
             height=input_button_height,
@@ -88,7 +92,7 @@ class IOTestScreen(BaseTopNavScreen):
         self.components.append(self.joystick_up_button)
 
         self.joystick_down_button = IconButton(
-            icon_name=FontAwesomeIconConstants.ANGLE_DOWN,
+            icon_name=SeedSignerIconConstants.CHEVRON_DOWN,
             icon_size=GUIConstants.ICON_INLINE_FONT_SIZE,
             width=input_button_width,
             height=input_button_height,
@@ -99,9 +103,8 @@ class IOTestScreen(BaseTopNavScreen):
         self.components.append(self.joystick_down_button)
 
         self.joystick_left_button = IconButton(
-            text=FontAwesomeIconConstants.ANGLE_LEFT,
-            font_name=GUIConstants.ICON_FONT_NAME__FONT_AWESOME,
-            font_size=GUIConstants.ICON_INLINE_FONT_SIZE,
+            icon_name=SeedSignerIconConstants.CHEVRON_LEFT,
+            icon_size=GUIConstants.ICON_INLINE_FONT_SIZE,
             width=input_button_width,
             height=input_button_height,
             screen_x=dpad_center_x - input_button_width - GUIConstants.COMPONENT_PADDING,
@@ -111,7 +114,7 @@ class IOTestScreen(BaseTopNavScreen):
         self.components.append(self.joystick_left_button)
 
         self.joystick_right_button = IconButton(
-            icon_name=FontAwesomeIconConstants.ANGLE_RIGHT,
+            icon_name=SeedSignerIconConstants.CHEVRON_RIGHT,
             icon_size=GUIConstants.ICON_INLINE_FONT_SIZE,
             width=input_button_width,
             height=input_button_height,
@@ -122,8 +125,8 @@ class IOTestScreen(BaseTopNavScreen):
         self.components.append(self.joystick_right_button)
 
         # Hardware keys UI
-        font = Fonts.get_font(GUIConstants.BUTTON_FONT_NAME, GUIConstants.BUTTON_FONT_SIZE)
-        (left, top, text_width, bottom) = font.getbbox(text="Clear", anchor="ls")
+        font = Fonts.get_font(GUIConstants.get_button_font_name(), GUIConstants.get_button_font_size())
+        (left, top, text_width, bottom) = font.getbbox(text=_("Clear"), anchor="ls")
         icon = Icon(
             icon_name=FontAwesomeIconConstants.CAMERA, 
             icon_size=GUIConstants.ICON_INLINE_FONT_SIZE,
@@ -133,14 +136,20 @@ class IOTestScreen(BaseTopNavScreen):
         key2_y = int(self.canvas_height/2) - int(key_button_height/2)
 
         self.key2_button = Button(
-            text="Clear",   # Initialize with text to set vertical centering
+            # TRANSLATOR_NOTE: Blank the screen
+            text=_("Clear"),   # Initialize with text to set vertical centering
             width=key_button_width,
             height=key_button_height,
             screen_x=self.canvas_width - key_button_width + GUIConstants.EDGE_PADDING,
             screen_y=key2_y,
             outline_color=GUIConstants.ACCENT_COLOR,
+            is_scrollable_text=False,  # Text has to dynamically update, can't use scrollable Button
         )
-        self.key2_button.text = " "  # but default state is empty
+        if not self.renderer.is_screenshot_generator:
+            # The button text should be empty for its initial state ("Clear" doesn't make
+            # any sense until a test image is captured). But the screenshot generator
+            # should show the text so its translation can be reviewed.
+            self.key2_button.text = " "
         self.components.append(self.key2_button)
 
         self.key1_button = IconButton(
@@ -154,12 +163,13 @@ class IOTestScreen(BaseTopNavScreen):
         self.components.append(self.key1_button)
 
         self.key3_button = Button(
-            text="Exit",
+            text=_("Exit"),
             width=key_button_width,
             height=key_button_height,
             screen_x=self.canvas_width - key_button_width + GUIConstants.EDGE_PADDING,
             screen_y=key2_y + 3*GUIConstants.COMPONENT_PADDING + key_button_height,
             outline_color=GUIConstants.ACCENT_COLOR,
+            is_scrollable_text=False,  # No help for l10n, but currently ScrollableTextLine interferes with the small button's left edge. (TODO:)
         )
         self.components.append(self.key3_button)
 
@@ -168,31 +178,35 @@ class IOTestScreen(BaseTopNavScreen):
         cur_selected_button = self.key1_button
         msg_height = GUIConstants.ICON_LARGE_BUTTON_SIZE + 2*GUIConstants.COMPONENT_PADDING
         camera_message = TextArea(
-            text="Capturing image...",
-            font_size=GUIConstants.TOP_NAV_TITLE_FONT_SIZE,
+            text=_("Capturing image..."),
+            font_size=GUIConstants.get_top_nav_title_font_size(),
             is_text_centered=True,
             height=msg_height,
             screen_y=int((self.canvas_height - msg_height)/ 2),
         )
         while True:
-            input = self.hw_inputs.wait_for(keys=HardwareButtonsConstants.ALL_KEYS, check_release=False)
+            input = self.hw_inputs.wait_for(keys=HardwareButtonsConstants.ALL_KEYS)
 
             if input == HardwareButtonsConstants.KEY1:
+                # Note that there are three distinct screen updates that happen at
+                # different times, therefore we claim the `Renderer.lock` three separate
+                # times.
                 cur_selected_button = self.key1_button
 
                 with self.renderer.lock:
-                    cur_selected_button.is_selected = True
-                    cur_selected_button.render()
-                    camera_message.render()
                     # Render edges around message box
                     self.image_draw.rectangle(
                         (
                             -1, int((self.canvas_height - msg_height)/ 2) - 1,
                             self.canvas_width + 1, int((self.canvas_height + msg_height)/ 2) + 1
                         ),
+                        fill="black",
                         outline=GUIConstants.ACCENT_COLOR,
                         width=1,
                     )
+                    cur_selected_button.is_selected = True
+                    cur_selected_button.render()
+                    camera_message.render()
                     self.renderer.show_image()
 
                 # Snap a pic, render it as the background, re-render all onscreen elements
@@ -214,7 +228,7 @@ class IOTestScreen(BaseTopNavScreen):
                     )
                     with self.renderer.lock:
                         self.canvas.paste(display_version, (0, self.top_nav.height))
-                        self.key2_button.text = "Clear"
+                        self.key2_button.text = _("Clear")
                         for component in self.components:
                             component.render()
                         self.renderer.show_image()
@@ -281,17 +295,19 @@ class IOTestScreen(BaseTopNavScreen):
 @dataclass
 class DonateScreen(BaseTopNavScreen):
     def __post_init__(self):
-        self.title = "Donate"
+        self.title = _("Donate")
         super().__post_init__()
 
         self.components.append(TextArea(
-            text="SeedSigner is 100% free & open source, funded solely by the Bitcoin community.\n\nDonate onchain or LN at:",
+            # TRANSLATOR_NOTE: If your language uses the percent sign ("%"), your translation must also use two percent signs ("%%") due to python formatting oddities. "100%%" will be rendered as "100%".
+            text=_("SeedSigner is 100%% free & open source, funded solely by the Bitcoin community.\n\nDonate onchain or LN at:").replace("%%", "%"),
             screen_y=self.top_nav.height + 3*GUIConstants.COMPONENT_PADDING,
         ))
 
         self.components.append(TextArea(
             text="seedsigner.com",
-            font_size=GUIConstants.TOP_NAV_TITLE_FONT_SIZE + 8,
+            font_name=GUIConstants.get_body_font_name(),
+            font_size=28,
             font_color=GUIConstants.ACCENT_COLOR,
             supersampling_factor=1,
             screen_y=self.components[-1].screen_y + self.components[-1].height + GUIConstants.COMPONENT_PADDING
@@ -300,22 +316,126 @@ class DonateScreen(BaseTopNavScreen):
 
 
 @dataclass
+class VersionScreen(BaseTopNavScreen):
+    version_name: str = None
+    version_fork: str = None
+    version_timestamp: datetime = None
+    short_commit_hash: str = None
+
+    def __post_init__(self):
+        self.title = _("Version")
+        super().__post_init__()
+
+        version_name_font_name = GUIConstants.FIXED_WIDTH_FONT_NAME
+        version_name_font_size = GUIConstants.get_top_nav_title_font_size() + 6
+        version_name_font = Fonts.get_font(version_name_font_name, version_name_font_size)
+        (left, version_name_char_height, version_name_char_width, bottom) = version_name_font.getbbox("X", anchor="ls")
+
+        if len(self.version_name) * version_name_char_width > self.canvas_width - 2*GUIConstants.EDGE_PADDING:
+            max_chars_width = int((self.canvas_width - 2*GUIConstants.EDGE_PADDING) / version_name_char_width)
+            # Add as many line breaks as needed for the version string to fit
+            wrapped_version = []
+            for i in range(0, len(self.version_name), max_chars_width):
+                if i + max_chars_width < len(self.version_name):
+                    wrapped_version.append(self.version_name[i:i+max_chars_width])
+                else:
+                    wrapped_version.append(self.version_name[i:])
+            self.version_name = "\n".join(wrapped_version)
+
+        timestamp_font_name = GUIConstants.get_body_font_name()
+        timestamp_font_size = GUIConstants.get_body_font_size()
+        timestamp_font = Fonts.get_font(timestamp_font_name, timestamp_font_size)
+        (left, timestamp_char_height, timestamp_char_width, bottom) = timestamp_font.getbbox("UTC", anchor="ls")
+
+        screen_y = self.top_nav.height + GUIConstants.COMPONENT_PADDING * 2
+        if not self.version_fork and not self.short_commit_hash:
+            # Center the version name if there's no fork/commit info
+            screen_y = int(self.canvas_height / 2) - (-1 * version_name_char_height)  # char_height is negative
+
+        self.components.append(TextArea(
+            text=self.version_name,
+            font_name=version_name_font_name,
+            font_size=version_name_font_size,
+            font_color=GUIConstants.ACCENT_COLOR,
+            screen_y=screen_y,
+        ))
+
+        screen_y = self.components[-1].screen_y + self.components[-1].height + 3*GUIConstants.COMPONENT_PADDING
+
+        label_font_name = GUIConstants.get_body_font_name()
+        label_font_size = GUIConstants.get_body_font_size()
+        label_font = Fonts.get_font(label_font_name, label_font_size)
+        (left, label_height, fork_label_width, bottom) = label_font.getbbox("fork: ", anchor="ls")
+        (left, label_height, commit_label_width, bottom) = label_font.getbbox("commit: ", anchor="ls")
+
+        if self.version_fork:
+            screen_x = 0
+            if self.short_commit_hash:
+                # right-align the labels
+                screen_x = commit_label_width - fork_label_width
+            self.components.append(TextArea(
+                text=f"fork: ",
+                is_text_centered=False,
+                font_color=GUIConstants.LABEL_FONT_COLOR,
+                screen_x=screen_x,
+                screen_y=screen_y,
+            ))
+            self.components.append(TextArea(
+                text=self.version_fork,
+                is_text_centered=False,
+                font_name=GUIConstants.FIXED_WIDTH_EMPHASIS_FONT_NAME,
+                font_size=GUIConstants.get_top_nav_title_font_size(),
+                edge_padding=0,
+                screen_x=screen_x + fork_label_width + GUIConstants.COMPONENT_PADDING,
+                screen_y=screen_y,
+            ))
+            screen_y = self.components[-1].screen_y + self.components[-1].height + GUIConstants.COMPONENT_PADDING
+
+        if self.short_commit_hash:
+            self.components.append(TextArea(
+                text=f"commit: ",
+                is_text_centered=False,
+                font_color=GUIConstants.LABEL_FONT_COLOR,
+                screen_y=screen_y,
+            ))
+            self.components.append(TextArea(
+                text=self.short_commit_hash,
+                is_text_centered=False,
+                font_name=GUIConstants.FIXED_WIDTH_EMPHASIS_FONT_NAME,
+                font_size=GUIConstants.get_top_nav_title_font_size(),
+                edge_padding=0,
+                screen_x=commit_label_width + GUIConstants.COMPONENT_PADDING,
+                screen_y=screen_y,
+            ))
+
+        # Pin the timestamp centered to the bottom of the screen
+        last_edit_str = self.version_timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+        self.components.append(TextArea(
+            text=last_edit_str,
+            font_name=timestamp_font_name,
+            font_size=timestamp_font_size,
+            screen_y=self.canvas_height - (-1 * timestamp_char_height) - GUIConstants.EDGE_PADDING,
+        ))
+
+
+
+@dataclass
 class SettingsQRConfirmationScreen(ButtonListScreen):
     config_name: str = None
-    title: str = "Settings QR"
-    status_message: str = "Settings updated..."
+    title: str = _mft("Settings QR")
+    status_message: str = _mft("Settings updated...")
     is_bottom_list: bool = True
 
     def __post_init__(self):
         # Customize defaults
-        self.button_data = ["Home"]
+        self.button_data = [ButtonOption("Home")]
         self.show_back_button = False
         super().__post_init__()
 
         start_y = self.top_nav.height + 20
         if self.config_name:
             self.config_name_textarea = TextArea(
-                text=f'"{self.config_name}"',
+                text=f'"{self.config_name}"',  # User-supplied string (from SettingsQR); don't wrap to translate
                 is_text_centered=True,
                 auto_line_break=True,
                 screen_y=start_y
@@ -324,7 +444,7 @@ class SettingsQRConfirmationScreen(ButtonListScreen):
             start_y = self.config_name_textarea.screen_y + 50
         
         self.components.append(TextArea(
-            text=self.status_message,
+            text=_(self.status_message),
             is_text_centered=True,
             auto_line_break=True,
             screen_y=start_y

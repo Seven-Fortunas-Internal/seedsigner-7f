@@ -1,14 +1,15 @@
 from typing import Callable
+from unittest.mock import patch
 import pytest
 
 # Must import test base before the Controller
 from base import BaseTest, FlowTest, FlowStep
 from base import FlowTestInvalidButtonDataSelectionException
 
-from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON
+from seedsigner.gui.screens.screen import RET_CODE__BACK_BUTTON, ButtonOption
 from seedsigner.models.settings import Settings, SettingsConstants
 from seedsigner.models.seed import ElectrumSeed, Seed
-from seedsigner.views.view import ErrorView, MainMenuView, OptionDisabledView, View, NetworkMismatchErrorView
+from seedsigner.views.view import MainMenuView, OptionDisabledView, View, NetworkMismatchErrorView
 from seedsigner.views import seed_views, scan_views, settings_views
 
 
@@ -34,16 +35,16 @@ class TestSeedFlows(FlowTest):
 
     def test_passphrase_entry_flow(self):
         """
-        Opting to add a bip39 passphrase on the Finalize Seed screen should enter the
+        Opting to add a BIP-39 passphrase on the Finalize Seed screen should enter the
         passphrase entry / review flow and end at the SeedOptionsView. 
         """
         self.run_sequence([
             FlowStep(MainMenuView, button_data_selection=MainMenuView.SCAN),
             FlowStep(scan_views.ScanView, before_run=load_seed_into_decoder),  # simulate read SeedQR; ret val is ignored
-            FlowStep(seed_views.SeedFinalizeView, button_data_selection=SettingsConstants.LABEL__BIP39_PASSPHRASE),
+            FlowStep(seed_views.SeedFinalizeView, button_data_selection=seed_views.SeedFinalizeView.PASSPHRASE),
             FlowStep(seed_views.SeedAddPassphraseView, screen_return_value=dict(passphrase="muhpassphrase", is_back_button=True)),
             FlowStep(seed_views.SeedAddPassphraseExitDialogView, button_data_selection=seed_views.SeedAddPassphraseExitDialogView.DISCARD),
-            FlowStep(seed_views.SeedFinalizeView, button_data_selection=SettingsConstants.LABEL__BIP39_PASSPHRASE),
+            FlowStep(seed_views.SeedFinalizeView, button_data_selection=seed_views.SeedFinalizeView.PASSPHRASE),
             FlowStep(seed_views.SeedAddPassphraseView, screen_return_value=dict(passphrase="muhpassphrase", is_back_button=True)),
             FlowStep(seed_views.SeedAddPassphraseExitDialogView, button_data_selection=seed_views.SeedAddPassphraseExitDialogView.EDIT),
             FlowStep(seed_views.SeedAddPassphraseView, screen_return_value=dict(passphrase="muhpassphrase")),
@@ -60,7 +61,6 @@ class TestSeedFlows(FlowTest):
             the SeedOptionsView.
         """
         def test_with_mnemonic(mnemonic):
-            Settings.HOSTNAME = "not seedsigner-os"
             sequence = [
                 FlowStep(MainMenuView, button_data_selection=MainMenuView.SEEDS),
                 FlowStep(seed_views.SeedsMenuView, is_redirect=True),  # When no seeds are loaded it auto-redirects to LoadSeedView
@@ -127,7 +127,6 @@ class TestSeedFlows(FlowTest):
             Most BIP-39 mnemonics should generate an error if entered as Electrum seeds.
         """
         def test_with_mnemonic(mnemonic: list[str], custom_extension: str = None, expects_electrum_seed_is_valid: bool = True):
-            Settings.HOSTNAME = "not seedsigner-os"
             settings = Settings.get_instance()
             settings.set_value(SettingsConstants.SETTING__ELECTRUM_SEEDS, SettingsConstants.OPTION__ENABLED)
 
@@ -183,15 +182,18 @@ class TestSeedFlows(FlowTest):
         """
             Selecting "Export XPUB" from the SeedOptionsView should enter the Export XPUB flow and end at the MainMenuView
         """
-
-        def flowtest_standard_xpub(sig_tuple, script_tuple, coord_tuple):
+        def flowtest_standard_xpub(sig_tuple, script_tuple, xpub_qr_tuple):
+            if sig_tuple[0] == SettingsConstants.SINGLE_SIG:
+                sig_selection = seed_views.SeedExportXpubSigTypeView.SINGLE_SIG
+            else:
+                sig_selection = seed_views.SeedExportXpubSigTypeView.MULTISIG
             self.run_sequence(
-                initial_destination_view_args=dict(seed_num=0),
+                initial_destination_view_args=dict(seed=seed),
                 sequence=[
                     FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EXPORT_XPUB),
-                    FlowStep(seed_views.SeedExportXpubSigTypeView, button_data_selection=sig_tuple[1]),
-                    FlowStep(seed_views.SeedExportXpubScriptTypeView, button_data_selection=script_tuple[1]),
-                    FlowStep(seed_views.SeedExportXpubCoordinatorView, button_data_selection=coord_tuple[1]),
+                    FlowStep(seed_views.SeedExportXpubSigTypeView, button_data_selection=sig_selection),
+                    FlowStep(seed_views.SeedExportXpubScriptTypeView, button_data_selection=ButtonOption(script_tuple[1], return_data=script_tuple[0])),
+                    FlowStep(seed_views.SeedExportXpubQRFormatView, button_data_selection=ButtonOption(xpub_qr_tuple[1], return_data=xpub_qr_tuple[0])),
                     FlowStep(seed_views.SeedExportXpubWarningView, screen_return_value=0),
                     FlowStep(seed_views.SeedExportXpubDetailsView, screen_return_value=0),
                     FlowStep(seed_views.SeedExportXpubQRDisplayView, screen_return_value=0),
@@ -200,24 +202,24 @@ class TestSeedFlows(FlowTest):
         )
             
         # Load a finalized Seed into the Controller
-        mnemonic = "blush twice taste dawn feed second opinion lazy thumb play neglect impact".split()
-        self.controller.storage.set_pending_seed(Seed(mnemonic=mnemonic))
+        seed = Seed(mnemonic="blush twice taste dawn feed second opinion lazy thumb play neglect impact".split())
+        self.controller.storage.set_pending_seed(seed)
         self.controller.storage.finalize_pending_seed()
 
         # these are lists of (constant_value, display_name) tuples
         sig_types: list[tuple[str, str]] = SettingsConstants.ALL_SIG_TYPES
         script_types: list[tuple[str, str]] = SettingsConstants.ALL_SCRIPT_TYPES
-        coordinators: list[tuple[str, str]] = SettingsConstants.ALL_COORDINATORS
+        xpub_qr_formats: list[tuple[str, str]] = SettingsConstants.ALL_XPUB_QR_FORMATS
 
         # enable non-defaults so they're available in views
         self.settings.set_value(SettingsConstants.SETTING__SIG_TYPES, [x for x,y in sig_types])
         self.settings.set_value(SettingsConstants.SETTING__SCRIPT_TYPES, [x for x,y in script_types])
-        self.settings.set_value(SettingsConstants.SETTING__COORDINATORS, [x for x,y in coordinators])
+        self.settings.set_value(SettingsConstants.SETTING__XPUB_QR_FORMAT, [x for x,y in xpub_qr_formats])
 
-        # exhaustively test flows thru standard sig_types, script_types, and coordinators
+        # exhaustively test flows thru standard sig_types, script_types, and xpub_qr_formats
         for sig_tuple in sig_types:
             for script_tuple in script_types:
-                for coord_tuple in coordinators:
+                for xpub_qr_tuple in xpub_qr_formats:
                     # skip custom derivation
                     if script_tuple[0] == SettingsConstants.CUSTOM_DERIVATION:
                         continue 
@@ -225,37 +227,37 @@ class TestSeedFlows(FlowTest):
                     elif sig_tuple[0] == SettingsConstants.MULTISIG and script_tuple[0] == SettingsConstants.TAPROOT:
                         continue
                     else:
-                        print('\n\ntest_standard_xpubs(%s, %s, %s)' % (sig_tuple, script_tuple, coord_tuple))
-                        flowtest_standard_xpub(sig_tuple, script_tuple, coord_tuple)
+                        print('\n\ntest_standard_xpubs(%s, %s, %s)' % (sig_tuple, script_tuple, xpub_qr_tuple))
+                        flowtest_standard_xpub(sig_tuple, script_tuple, xpub_qr_tuple)
 
 
     def test_export_xpub_disabled_not_available_flow(self):
         """
-            If sig_type/script_type/coordinator disabled, then these options are not available
+            If sig_type/script_type/xpub_qr_format disabled, then these options are not available
         """
         # Load a finalized Seed into the Controller
-        mnemonic = "blush twice taste dawn feed second opinion lazy thumb play neglect impact".split()
-        self.controller.storage.set_pending_seed(Seed(mnemonic=mnemonic))
+        seed = Seed(mnemonic="blush twice taste dawn feed second opinion lazy thumb play neglect impact".split())
+        self.controller.storage.set_pending_seed(seed)
         self.controller.storage.finalize_pending_seed()
 
         # these are lists of (constant_value, display_name) tuples
         sig_types: list[tuple[str, str]] = SettingsConstants.ALL_SIG_TYPES
         script_types: list[tuple[str, str]] = SettingsConstants.ALL_SCRIPT_TYPES
-        coordinators: list[tuple[str, str]] = SettingsConstants.ALL_COORDINATORS
+        xpub_qr_formats: list[tuple[str, str]] = SettingsConstants.ALL_XPUB_QR_FORMATS
 
         # these are the disabled types that we will be testing
         disabled_sig = SettingsConstants.MULTISIG
         disabled_script = SettingsConstants.TAPROOT
-        disabled_coord = SettingsConstants.COORDINATOR__NUNCHUK
+        disabled_xpub_qr_format = SettingsConstants.XPUB_QR_FORMAT__SPECTER_LEGACY
 
         # enable all but our target disabled type
         self.settings.set_value(SettingsConstants.SETTING__SIG_TYPES, [x for x,y in sig_types if x!=disabled_sig])
         self.settings.set_value(SettingsConstants.SETTING__SCRIPT_TYPES, [x for x,y in script_types if x!=disabled_script])
-        self.settings.set_value(SettingsConstants.SETTING__COORDINATORS, [x for x,y in coordinators if x!=disabled_coord])
+        self.settings.set_value(SettingsConstants.SETTING__XPUB_QR_FORMAT, [x for x,y in xpub_qr_formats if x!=disabled_xpub_qr_format])
 
         # If multisig isn't an option, then the sig type selection is skipped altogether
         self.run_sequence(
-            initial_destination_view_args=dict(seed_num=0),
+            initial_destination_view_args=dict(seed=seed),
             sequence=[
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EXPORT_XPUB),
                 FlowStep(seed_views.SeedExportXpubSigTypeView, is_redirect=True),
@@ -266,7 +268,7 @@ class TestSeedFlows(FlowTest):
         # test that taproot is not an option via exception raised when choice is taproot
         with pytest.raises(FlowTestInvalidButtonDataSelectionException) as e:
             self.run_sequence(
-                initial_destination_view_args=dict(seed_num=0),
+                initial_destination_view_args=dict(seed=seed),
                 sequence=[
                     FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EXPORT_XPUB),
                     FlowStep(seed_views.SeedExportXpubSigTypeView, is_redirect=True),
@@ -277,12 +279,12 @@ class TestSeedFlows(FlowTest):
         # test that nunchuk is not an option via exception raised when choice is nunchuk
         with pytest.raises(FlowTestInvalidButtonDataSelectionException) as e:
             self.run_sequence(
-                initial_destination_view_args=dict(seed_num=0),
+                initial_destination_view_args=dict(seed=seed),
                 sequence=[
                     FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EXPORT_XPUB),
                     FlowStep(seed_views.SeedExportXpubSigTypeView, is_redirect=True),
                     FlowStep(seed_views.SeedExportXpubScriptTypeView, screen_return_value=0),
-                    FlowStep(seed_views.SeedExportXpubCoordinatorView, button_data_selection=disabled_coord),
+                    FlowStep(seed_views.SeedExportXpubQRFormatView, button_data_selection=disabled_xpub_qr_format),
                 ]
             )
 
@@ -292,8 +294,8 @@ class TestSeedFlows(FlowTest):
             Export XPUB flow for custom derivation finishes at MainMenuView
         """
         # Load a finalized Seed into the Controller
-        mnemonic = "blush twice taste dawn feed second opinion lazy thumb play neglect impact".split()
-        self.controller.storage.set_pending_seed(Seed(mnemonic=mnemonic))
+        seed = Seed(mnemonic="blush twice taste dawn feed second opinion lazy thumb play neglect impact".split())
+        self.controller.storage.set_pending_seed(seed)
         self.controller.storage.finalize_pending_seed()
 
         # enable custom derivation script_type setting (plus at least one more for a choice)
@@ -303,19 +305,27 @@ class TestSeedFlows(FlowTest):
             SettingsConstants.CUSTOM_DERIVATION
         ])
 
-        # get display names to access button choices in the views (ugh: hardcoding, is there a better way?)
-        sig_type = self.settings.get_multiselect_value_display_names(SettingsConstants.SETTING__SIG_TYPES)[0] # single sig
-        script_type = self.settings.get_multiselect_value_display_names(SettingsConstants.SETTING__SCRIPT_TYPES)[2] # custom derivation
-        coordinator = self.settings.get_multiselect_value_display_names(SettingsConstants.SETTING__COORDINATORS)[3] # specter
+        # Ensure that all xpub_qr_formats are enabled
+        self.settings.set_value(SettingsConstants.SETTING__XPUB_QR_FORMAT, [x for x, y in SettingsConstants.ALL_XPUB_QR_FORMATS])
+
+        # Set up button_data selections
+        sig_type = seed_views.SeedExportXpubSigTypeView.SINGLE_SIG
+
+        custom_derivation = SettingsConstants.CUSTOM_DERIVATION
+        script_type = ButtonOption(self.settings.get_multiselect_value_display_names(SettingsConstants.SETTING__SCRIPT_TYPES)[2], return_data=custom_derivation)
+
+        specter_legacy = SettingsConstants.XPUB_QR_FORMAT__SPECTER_LEGACY
+        assert SettingsConstants.ALL_XPUB_QR_FORMATS[2][0] == specter_legacy
+        xpub_qr_format = ButtonOption(self.settings.get_multiselect_value_display_names(SettingsConstants.SETTING__XPUB_QR_FORMAT)[2], return_data=specter_legacy)
 
         self.run_sequence(
-            initial_destination_view_args=dict(seed_num=0),
+            initial_destination_view_args=dict(seed=seed),
             sequence=[
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EXPORT_XPUB),
                 FlowStep(seed_views.SeedExportXpubSigTypeView, button_data_selection=sig_type),
                 FlowStep(seed_views.SeedExportXpubScriptTypeView, button_data_selection=script_type),
                 FlowStep(seed_views.SeedExportXpubCustomDerivationView, screen_return_value="m/0'/0'"),
-                FlowStep(seed_views.SeedExportXpubCoordinatorView, button_data_selection=coordinator),
+                FlowStep(seed_views.SeedExportXpubQRFormatView, button_data_selection=xpub_qr_format),
                 FlowStep(seed_views.SeedExportXpubWarningView, screen_return_value=0),
                 FlowStep(seed_views.SeedExportXpubDetailsView, screen_return_value=0),
                 FlowStep(seed_views.SeedExportXpubQRDisplayView, screen_return_value=0),
@@ -326,27 +336,27 @@ class TestSeedFlows(FlowTest):
 
     def test_export_xpub_skip_non_option_flow(self):
         """
-            Export XPUB flows w/o user choices when no other options for sig_types, script_types, and/or coordinators
+            Export XPUB flows w/o user choices when no other options for sig_types, script_types, and/or xpub_qr_formats
         """
         # Load a finalized Seed into the Controller
-        mnemonic = "blush twice taste dawn feed second opinion lazy thumb play neglect impact".split()
-        self.controller.storage.set_pending_seed(Seed(mnemonic=mnemonic))
+        seed = Seed(mnemonic="blush twice taste dawn feed second opinion lazy thumb play neglect impact".split())
+        self.controller.storage.set_pending_seed(seed)
         self.controller.storage.finalize_pending_seed()
 
-        # exclusively set only one choice for each of sig_types, script_types and coordinators
+        # exclusively set only one choice for each of sig_types, script_types and xpub_qr_formats
         self.settings.update({
             SettingsConstants.SETTING__SIG_TYPES: SettingsConstants.MULTISIG,
             SettingsConstants.SETTING__SCRIPT_TYPES: SettingsConstants.NESTED_SEGWIT,
-            SettingsConstants.SETTING__COORDINATORS: SettingsConstants.COORDINATOR__SPECTER_DESKTOP,
+            SettingsConstants.SETTING__XPUB_QR_FORMAT: SettingsConstants.XPUB_QR_FORMAT__UR_CRYPTO_ACCOUNT,
         })
 
         self.run_sequence(
-            initial_destination_view_args=dict(seed_num=0),
+            initial_destination_view_args=dict(seed=seed),
             sequence=[
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EXPORT_XPUB),
                 FlowStep(seed_views.SeedExportXpubSigTypeView, is_redirect=True),
                 FlowStep(seed_views.SeedExportXpubScriptTypeView, is_redirect=True),
-                FlowStep(seed_views.SeedExportXpubCoordinatorView, is_redirect=True),
+                FlowStep(seed_views.SeedExportXpubQRFormatView, is_redirect=True),
                 FlowStep(seed_views.SeedExportXpubWarningView, screen_return_value=0),
                 FlowStep(seed_views.SeedExportXpubDetailsView, screen_return_value=0),
                 FlowStep(seed_views.SeedExportXpubQRDisplayView, screen_return_value=0),
@@ -361,23 +371,24 @@ class TestSeedFlows(FlowTest):
         """            
         # Load a finalized Seed into the Controller
         self.controller.storage.init_pending_mnemonic(num_words=12, is_electrum=True)
-        self.controller.storage.set_pending_seed(ElectrumSeed("regular reject rare profit once math fringe chase until ketchup century escape".split()))
+        seed = ElectrumSeed(mnemonic="regular reject rare profit once math fringe chase until ketchup century escape".split())
+        self.controller.storage.set_pending_seed(seed)
         self.controller.storage.finalize_pending_seed()
 
         # Make sure all options are enabled
         self.settings.set_value(SettingsConstants.SETTING__SIG_TYPES, [x for x,y in SettingsConstants.ALL_SIG_TYPES])
         self.settings.set_value(SettingsConstants.SETTING__SCRIPT_TYPES, [x for x,y in SettingsConstants.ALL_SCRIPT_TYPES])
-        self.settings.set_value(SettingsConstants.SETTING__COORDINATORS, [x for x,y in SettingsConstants.ALL_COORDINATORS])
+        self.settings.set_value(SettingsConstants.SETTING__XPUB_QR_FORMAT, [x for x,y in SettingsConstants.ALL_XPUB_QR_FORMATS])
 
         self.run_sequence(
-            initial_destination_view_args=dict(seed_num=0),
+            initial_destination_view_args=dict(seed=seed),
             sequence=[
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EXPORT_XPUB),
                 FlowStep(seed_views.SeedExportXpubSigTypeView, button_data_selection=seed_views.SeedExportXpubSigTypeView.SINGLE_SIG),
 
                 # Skips past the script type options via redirect
                 FlowStep(seed_views.SeedExportXpubScriptTypeView, is_redirect=True),
-                FlowStep(seed_views.SeedExportXpubCoordinatorView, button_data_selection=self.settings.get_multiselect_value_display_names(SettingsConstants.SETTING__COORDINATORS)[0]),
+                FlowStep(seed_views.SeedExportXpubQRFormatView, button_data_selection=ButtonOption(self.settings.get_multiselect_value_display_names(SettingsConstants.SETTING__XPUB_QR_FORMAT)[0], return_data=SettingsConstants.ALL_XPUB_QR_FORMATS[0][0])),
                 FlowStep(seed_views.SeedExportXpubWarningView, screen_return_value=0),
                 FlowStep(seed_views.SeedExportXpubDetailsView, screen_return_value=0),
                 FlowStep(seed_views.SeedExportXpubQRDisplayView, screen_return_value=0),
@@ -392,12 +403,12 @@ class TestSeedFlows(FlowTest):
             remove the in-memory seed from the Controller.
         """
         # Load a finalized Seed into the Controller
-        mnemonic = "blush twice taste dawn feed second opinion lazy thumb play neglect impact".split()
-        self.controller.storage.set_pending_seed(Seed(mnemonic=mnemonic))
+        seed = Seed(mnemonic="blush twice taste dawn feed second opinion lazy thumb play neglect impact".split())
+        self.controller.storage.set_pending_seed(seed)
         self.controller.storage.finalize_pending_seed()
 
         self.run_sequence(
-            initial_destination_view_args=dict(seed_num=0),
+            initial_destination_view_args=dict(seed=seed),
             sequence=[
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.DISCARD),
                 FlowStep(seed_views.SeedDiscardView, button_data_selection=seed_views.SeedDiscardView.DISCARD),
@@ -406,6 +417,183 @@ class TestSeedFlows(FlowTest):
                 FlowStep(seed_views.LoadSeedView),
             ]
         )
+
+
+    def test_load_seed_view_hides_12_word_option_in_sevenf_mode(self):
+        """ Regression test for real feedback from the 7F hardware
+            walkthrough: 7F ceremony seeds are always 24-word BIP-39
+            (Patrick's requirements doc, decision D1) -- offering a 12-word
+            entry option here invites using the wrong entropy strength for a
+            federation root-key ceremony. Every other chain mode must keep
+            both lengths, matching stock SeedSigner's existing behavior. """
+        for active_chain_id, expect_12word in [("bitcoin", True), ("evm", True), ("sevenf", False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.LoadSeedView()
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+
+            is_present = seed_views.LoadSeedView.TYPE_12WORD in captured["button_data"]
+            assert is_present == expect_12word, f"active_chain_id={active_chain_id!r}: expected 12-word present={expect_12word}, got {is_present}"
+            # 24-word and the ability to create a seed must always remain available.
+            assert seed_views.LoadSeedView.TYPE_24WORD in captured["button_data"]
+            assert seed_views.LoadSeedView.CREATE in captured["button_data"]
+
+
+    @patch("seedsigner.gui.screens.seed_screens.SeedTranscribeSeedQRZoomedInScreen", autospec=True)
+    def test_transcribe_seedqr_and_verify(self, mock_zoomed_in_screen: Callable):
+        """
+        """
+        # Load a finalized Seed into the Controller
+        mnemonic = ["abandon"] * 11 + ["about"]
+        self.controller.storage.set_pending_seed(Seed(mnemonic=mnemonic))
+        self.controller.storage.finalize_pending_seed()
+
+        def load_wrong_seed_into_decoder(view: View):
+            view.decoder.add_data("0138" * 24)
+
+        def load_completely_wrong_qr_type_into_decoder(view: View):
+            view.decoder.add_data("I like cheese")
+
+        def load_recognized_qr_type_isnot_seed_into_decoder(view: View):
+            view.decoder.add_data("UR:CRYPTO-PSBT/HKADHEJOJKIDJYZMADAEGMAOAEAEAEADHHGLEYKGBDSBKEMTSARLVYSGIABEDELFSKWLLUDKLYESJOFDLPJPFXSOHHWZTYWEAEAEAEAEAEZCZMZMZMADBKBZJEDEHEAEAEAECMAEBBVEPFDWDMBBGSPFZTKIMYCLKPSOBDDTRDWTWPYKGAQDKNAEAEGWADAAECLTTKAXWSWTUTSNLAAEAEAEPKCTBSHGISSSRETIVEWSGYNEPTHTESNSWMLBTARYEMHTBTBTLNWSBKJLMKYNFGHLAXJYBBTTIDHKDICHAMLEHHDSRKATGDLYSBIYHNHDNEWPJKZSZMDKVETYNSGOCXKNDNBEOLFSRSNSGHAEAELAADAEAELAAEAEAELAAEADADCTKSBZJEDEHEAEAEAECMAEBBVEPFDWDMBBGSPFZTKIMYCLKPSOBDDTRDWTWPYKGAADAXAAADAEAEAECPAMAODSFTLDTYFRECSKVWYLKNBANNKKZCRTHYJTPSHLHNHKNBPDCLCFDMSOLPDKFXLFQZCSOLFSRSNSGHAEAELAADAEAELAAEAEAELAAEAEAEAEAEAEAEAEAECPAOAODSFTLDTYFRECSKVWYLKNBANNKKZCRTHYJTPSHLHNHKNBPDCLCFDMSOLPDKFXLFQZCSOLFSRSNSGHAEAELAADAEAELAAEAEAELAAEAEAEAEAEAEAEAEAELGMKFZCW")        
+
+        def load_right_seed_into_decoder(view: View):
+            view.decoder.add_data("0000" * 11 + "0003")
+
+        self.run_sequence([
+            FlowStep(MainMenuView, button_data_selection=MainMenuView.SEEDS),
+            FlowStep(seed_views.SeedsMenuView, screen_return_value=0),
+            FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.BACKUP),
+            FlowStep(seed_views.SeedBackupView, button_data_selection=seed_views.SeedBackupView.EXPORT_SEEDQR),
+            FlowStep(seed_views.SeedTranscribeSeedQRFormatView, button_data_selection=seed_views.SeedTranscribeSeedQRFormatView.STANDARD_12),
+            FlowStep(seed_views.SeedTranscribeSeedQRWarningView),
+            FlowStep(seed_views.SeedTranscribeSeedQRWholeQRView),
+            FlowStep(seed_views.SeedTranscribeSeedQRZoomedInView),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmQRPromptView, button_data_selection=seed_views.SeedTranscribeSeedQRConfirmQRPromptView.SCAN),
+
+            # Intentionally "scan" the wrong SeedQR
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmScanView, before_run=load_wrong_seed_into_decoder),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmWrongSeedView),
+            FlowStep(seed_views.SeedTranscribeSeedQRZoomedInView),
+
+            # Intentionally scan QR data that makes no sense for this flow
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmQRPromptView, button_data_selection=seed_views.SeedTranscribeSeedQRConfirmQRPromptView.SCAN),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmScanView, before_run=load_completely_wrong_qr_type_into_decoder),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmInvalidQRView),
+            FlowStep(seed_views.SeedTranscribeSeedQRZoomedInView),
+
+            # Intentionally scan QR data that makes no sense for this flow because is another QR recognized but is not a SeedQR (e.g., bitcoin address, psbt)
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmQRPromptView, button_data_selection=seed_views.SeedTranscribeSeedQRConfirmQRPromptView.SCAN),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmScanView, before_run=load_recognized_qr_type_isnot_seed_into_decoder),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmInvalidQRView),
+            FlowStep(seed_views.SeedTranscribeSeedQRZoomedInView),
+            
+            # Now scan the correct SeedQR
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmQRPromptView, button_data_selection=seed_views.SeedTranscribeSeedQRConfirmQRPromptView.SCAN),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmScanView, before_run=load_right_seed_into_decoder),
+            FlowStep(seed_views.SeedTranscribeSeedQRConfirmSuccessView),
+            FlowStep(seed_views.SeedOptionsView),
+        ])
+
+    def test_transcribe_seedqr_screensaver_startable_status(self):
+        """
+            The controller should return False for screensaver startable status when SeedTranscribeSeedQRZoomedInView
+            is active.
+        """
+        # Load a finalized Seed into the Controller
+        mnemonic = ["abandon"] * 11 + ["about"]
+        seed = Seed(mnemonic=mnemonic)
+        self.controller.storage.set_pending_seed(seed)
+        self.controller.storage.finalize_pending_seed()
+
+        self.run_sequence(
+            initial_destination_view_args={'num_modules': 21, 'seed': seed, 'seedqr_format': 'seed__seedqr'},
+            sequence=[
+                FlowStep(seed_views.SeedTranscribeSeedQRWholeQRView),
+                FlowStep(seed_views.SeedTranscribeSeedQRZoomedInView, is_redirect=True),  # Live interactive screens are a bit weird; not sure why `is_redirect` is necessary here
+        ])
+
+        assert self.controller.is_screensaver_start_allowed == False
+
+
+
+class TestSeedEntryBackFlows(FlowTest):
+    """
+    Tests for every BACK exit scenario from SeedMnemonicEntryView and related views.
+    
+    A naive BackStackView swap can leave resume_main_flow dangling, causing
+    auto-redirects on stale flow state. These tests verify that BACK navigation
+    returns to the correct parent view AND that no flow state leaks.
+    """
+
+    def test_back_from_seed_entry_first_word(self):
+        """
+        Pressing BACK on the first word of mnemonic entry should return to
+        the View that initiated the mnemonic entry process.
+        """
+        for seed_type in [seed_views.LoadSeedView.TYPE_12WORD, seed_views.LoadSeedView.TYPE_24WORD]:
+            self.run_sequence([
+                FlowStep(MainMenuView, button_data_selection=MainMenuView.SEEDS),
+                FlowStep(seed_views.SeedsMenuView, is_redirect=True),  # No seeds loaded; auto-redirects to LoadSeedView
+                FlowStep(seed_views.LoadSeedView, button_data_selection=seed_type),
+                FlowStep(seed_views.SeedMnemonicEntryView, screen_return_value=RET_CODE__BACK_BUTTON),
+                FlowStep(seed_views.LoadSeedView),  # Should land here, NOT MainMenuView
+            ])
+            BaseTest.reset_controller()
+
+
+    def test_back_from_seed_entry_mid_word(self):
+        """
+        Pressing BACK from a middle word (eg. word #2) should return to the
+        previous SeedMnemonicEntryView (eg. word #1) via the back stack.
+        """
+        self.run_sequence([
+            FlowStep(MainMenuView, button_data_selection=MainMenuView.SEEDS),
+            FlowStep(seed_views.SeedsMenuView, is_redirect=True),
+            FlowStep(seed_views.LoadSeedView, button_data_selection=seed_views.LoadSeedView.TYPE_12WORD),
+            FlowStep(seed_views.SeedMnemonicEntryView, screen_return_value="abandon"),  # word #1
+            FlowStep(seed_views.SeedMnemonicEntryView, screen_return_value=RET_CODE__BACK_BUTTON),  # BACK from word #2
+            FlowStep(seed_views.SeedMnemonicEntryView),  # Returns to word #1
+        ])
+
+        # Verify we're back on word #1: word at index 0 should still be set
+        # from the previous entry, while word at index 1 should be unset.
+        assert self.controller.storage.get_pending_mnemonic_word(0) == "abandon"
+        assert self.controller.storage.get_pending_mnemonic_word(1) is None
+
+
+    def test_back_from_seed_entry_via_seed_select(self):
+        """
+        Backing out of mnemonic entry during an active flow must preserve
+        `resume_main_flow` so the user remains within that flow.
+        """
+        from seedsigner.controller import Controller
+        from seedsigner.models.settings import SettingsConstants
+
+        self.settings.set_value(SettingsConstants.SETTING__MESSAGE_SIGNING, SettingsConstants.OPTION__ENABLED)
+
+        def load_signmessage_into_decoder(view):
+            view.decoder.add_data("signmessage m/84h/0h/0h/0/0 ascii:test message")
+
+        self.run_sequence([
+            FlowStep(MainMenuView, button_data_selection=MainMenuView.SCAN),
+            FlowStep(scan_views.ScanView, before_run=load_signmessage_into_decoder),
+            FlowStep(seed_views.SeedSignMessageStartView, is_redirect=True),
+            FlowStep(seed_views.SeedSelectSeedView, button_data_selection=seed_views.SeedSelectSeedView.TYPE_12WORD),
+            FlowStep(seed_views.SeedMnemonicEntryView, screen_return_value=RET_CODE__BACK_BUTTON),  # BACK on first word
+            FlowStep(seed_views.SeedSelectSeedView),  # Should return here, in the sign message flow
+        ])
+
+        # Verify resume_main_flow is still set — user is still in the sign message flow
+        assert self.controller.resume_main_flow == Controller.FLOW__SIGN_MESSAGE
+
 
 
 
@@ -459,7 +647,6 @@ class TestMessageSigningFlows(FlowTest):
             text=self.controller.sign_message_data["message"],
             width=240 - 2*GUIConstants.EDGE_PADDING,
             height=240 - GUIConstants.TOP_NAV_HEIGHT - 3*GUIConstants.EDGE_PADDING - GUIConstants.BUTTON_HEIGHT,
-            allow_text_overflow=True,
         )
         self.controller.sign_message_data["paged_message"] = paged
 
@@ -488,7 +675,7 @@ class TestMessageSigningFlows(FlowTest):
         ])
 
         # Scenario 2: Scan the seed first, then select Sign Message
-        self.controller.discard_seed(0)
+        self.controller.discard_seed(self.controller.storage.seeds[0])
         self.run_sequence([
             FlowStep(MainMenuView, button_data_selection=MainMenuView.SCAN),
             FlowStep(scan_views.ScanView, before_run=self.load_seed_into_decoder),  # simulate read SeedQR; ret val is ignored
@@ -536,7 +723,7 @@ class TestMessageSigningFlows(FlowTest):
         ])
 
         # Scenario 4: Load a long message without whitespace
-        self.controller.discard_seed(0)
+        self.controller.discard_seed(self.controller.storage.seeds[0])
         self.run_sequence([
             FlowStep(MainMenuView, button_data_selection=MainMenuView.SCAN),
             FlowStep(scan_views.ScanView, before_run=self.load_seed_into_decoder),  # simulate read SeedQR; ret val is ignored
@@ -635,7 +822,7 @@ class TestMessageSigningFlows(FlowTest):
             FlowStep(seed_views.SeedFinalizeView, button_data_selection=seed_views.SeedFinalizeView.FINALIZE),
             FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SIGN_MESSAGE),
             FlowStep(scan_views.ScanView, before_run=load_invalid_signmessage_qr),  # simulate read message QR; ret val is ignored
-            FlowStep(ErrorView),
+            FlowStep(scan_views.ScanInvalidQRTypeView),
             FlowStep(MainMenuView),
         ])
 
@@ -663,4 +850,5 @@ class TestMessageSigningFlows(FlowTest):
 
         self.settings.set_value(SettingsConstants.SETTING__NETWORK, SettingsConstants.MAINNET)
         expect_unsupported_derivation(self.load_custom_derivation_into_decoder)
+
 

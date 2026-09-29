@@ -1,35 +1,32 @@
-from embit.psbt import PSBT
-from embit import script
-from embit.networks import NETWORKS
-from seedsigner.controller import Controller
+from gettext import gettext as _
 
-from seedsigner.gui.components import FontAwesomeIconConstants, SeedSignerIconConstants
-from seedsigner.models.encode_qr import UrPsbtQrEncoder
 from seedsigner.models.psbt_parser import PSBTParser
 from seedsigner.models.settings import SettingsConstants
-from seedsigner.gui.screens.psbt_screens import PSBTOpReturnScreen, PSBTOverviewScreen, PSBTMathScreen, PSBTAddressDetailsScreen, PSBTChangeDetailsScreen, PSBTFinalizeScreen
-from seedsigner.gui.screens.screen import (RET_CODE__BACK_BUTTON, ButtonListScreen, WarningScreen, DireWarningScreen, QRDisplayScreen)
+from seedsigner.gui.components import FontAwesomeIconConstants, SeedSignerIconConstants
+from seedsigner.gui.screens.screen import (RET_CODE__BACK_BUTTON, ButtonListScreen, ButtonOption, WarningScreen, DireWarningScreen, QRDisplayScreen)
 from seedsigner.views.view import BackStackView, MainMenuView, NotYetImplementedView, View, Destination
 
 
 
 class PSBTSelectSeedView(View):
-    SCAN_SEED = ("Scan a seed", SeedSignerIconConstants.QRCODE)
-    TYPE_12WORD = ("Enter 12-word seed", FontAwesomeIconConstants.KEYBOARD)
-    TYPE_24WORD = ("Enter 24-word seed", FontAwesomeIconConstants.KEYBOARD)
-    TYPE_ELECTRUM = ("Enter Electrum seed", FontAwesomeIconConstants.KEYBOARD)
+    SCAN_SEED = ButtonOption("Scan a seed", SeedSignerIconConstants.QRCODE)
+    TYPE_12WORD = ButtonOption("Enter 12-word seed", FontAwesomeIconConstants.KEYBOARD)
+    TYPE_24WORD = ButtonOption("Enter 24-word seed", FontAwesomeIconConstants.KEYBOARD)
+    TYPE_ELECTRUM = ButtonOption("Enter Electrum seed", FontAwesomeIconConstants.KEYBOARD)
 
 
     def run(self):
+        from seedsigner.controller import Controller
+
         # Note: we can't just autoroute to the PSBT Overview because we might have a
         # multisig where we want to sign with more than one key on this device.
         if not self.controller.psbt:
             # Shouldn't be able to get here
-            raise Exception("No PSBT currently loaded")
+            raise Exception("No transaction currently loaded")
 
         if self.controller.psbt_seed:
              if PSBTParser.has_matching_input_fingerprint(psbt=self.controller.psbt, seed=self.controller.psbt_seed, network=self.settings.get_value(SettingsConstants.SETTING__NETWORK)):
-                 # skip the seed prompt if a seed was previous selected and has matching input fingerprint
+                 # skip the seed prompt if a seed was previously selected and has matching input fingerprint
                  return Destination(PSBTOverviewView)
 
         seeds = self.controller.storage.seeds
@@ -38,19 +35,27 @@ class PSBTSelectSeedView(View):
             button_str = seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
             if not PSBTParser.has_matching_input_fingerprint(psbt=self.controller.psbt, seed=seed, network=self.settings.get_value(SettingsConstants.SETTING__NETWORK)):
                 # Doesn't look like this seed can sign the current PSBT
-                button_str += " (?)"
+                # TRANSLATOR_NOTE: Inserts fingerprint w/"?" to indicate that this seed can't sign the current PSBT
+                button_str = _("{} (?)").format(button_str)
 
-            button_data.append((button_str, SeedSignerIconConstants.FINGERPRINT))
+            button_data.append(ButtonOption(button_str, SeedSignerIconConstants.FINGERPRINT))
 
         button_data.append(self.SCAN_SEED)
         button_data.append(self.TYPE_12WORD)
         button_data.append(self.TYPE_24WORD)
-        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED:
+        # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
+        # (not replaced by) active_chain_id (see seed_views.py's SeedSelectSeedView/
+        # LoadSeedView for the same pattern, and
+        # docs/multi-chain/boot-chain-selection-plan.md for why this view is reachable
+        # in EVM mode today despite being PSBT/Bitcoin-specific itself: ScanView's
+        # dispatcher isn't yet chain-gated).
+        if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \
+                and self.controller.active_chain_id == "bitcoin":
             button_data.append(self.TYPE_ELECTRUM)
 
         selected_menu_num = self.run_screen(
             ButtonListScreen,
-            title="Select Signer",
+            title=_("Select Signer"),
             is_button_text_centered=False,
             button_data=button_data
         )
@@ -60,7 +65,7 @@ class PSBTSelectSeedView(View):
 
         if len(seeds) > 0 and selected_menu_num < len(seeds):
             # User selected one of the n seeds
-            self.controller.psbt_seed = self.controller.get_seed(selected_menu_num)
+            self.controller.psbt_seed = seeds[selected_menu_num]
             return Destination(PSBTOverviewView)
         
         # The remaining flows are a sub-flow; resume PSBT flow once the seed is loaded.
@@ -94,7 +99,7 @@ class PSBTOverviewView(View):
             # The PSBTParser takes a while to read the PSBT. Run the loading screen while
             # we wait.
             from seedsigner.gui.screens.screen import LoadingScreenThread
-            self.loading_screen = LoadingScreenThread(text="Parsing PSBT...")
+            self.loading_screen = LoadingScreenThread(text=_("Parsing PSBT..."))
             self.loading_screen.start()
                 
             try:
@@ -109,6 +114,7 @@ class PSBTOverviewView(View):
 
 
     def run(self):
+        from seedsigner.gui.screens.psbt_screens import PSBTOverviewScreen
         psbt_parser = self.controller.psbt_parser
 
         change_data = psbt_parser.change_data
@@ -117,16 +123,15 @@ class PSBTOverviewView(View):
                 {
                     'address': 'bc1q............', 
                     'amount': 397621401, 
-                    'fingerprint': ['22bde1a9', '73c5da0a'], 
-                    'derivation_path': ['m/48h/1h/0h/2h/1/0', 'm/48h/1h/0h/2h/1/0']
+                    'claimed_fingerprints': ['22bde1a9', '73c5da0a'],
+                    'claimed_derivation_paths': ['m/48h/1h/0h/2h/1/0', 'm/48h/1h/0h/2h/1/0']
                 }, {},
             ]
         """
         num_change_outputs = 0
         num_self_transfer_outputs = 0
         for change_output in change_data:
-            # print(f"""{change_output["derivation_path"][0]}""")
-            if change_output["derivation_path"][0].split("/")[-2] == "1":
+            if change_output["claimed_derivation_paths"][0].split("/")[-2] == "1":
                 num_change_outputs += 1
             else:
                 num_self_transfer_outputs += 1
@@ -167,11 +172,12 @@ class PSBTOverviewView(View):
 
 class PSBTUnsupportedScriptTypeWarningView(View):
     def run(self):
-        selected_menu_num = WarningScreen(
-            status_headline="Unsupported Script Type!",
-            text="PSBT has unsupported input script type, please verify your change addresses.",
-            button_data=["Continue"],
-        ).display()
+        selected_menu_num = self.run_screen(
+            WarningScreen,
+            status_headline=_("Unsupported Script Type!"),
+            text=_("Transaction has unsupported input script type, please verify your change addresses."),
+            button_data=[ButtonOption("Continue")],
+        )
         
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
@@ -187,11 +193,13 @@ class PSBTUnsupportedScriptTypeWarningView(View):
 
 class PSBTNoChangeWarningView(View):
     def run(self):
-        selected_menu_num = WarningScreen(
-            status_headline="Full Spend!",
-            text="This PSBT spends its entire input value. No change is coming back to your wallet.",
-            button_data=["Continue"],
-        ).display()
+        selected_menu_num = self.run_screen(
+            WarningScreen,
+            # TRANSLATOR_NOTE: User will receive no change back; the inputs to this transaction are fully spent
+            status_headline=_("Full Spend!"),
+            text=_("This transaction spends its entire input value. No change is coming back to your wallet."),
+            button_data=[ButtonOption("Continue")],
+        )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
@@ -214,6 +222,7 @@ class PSBTMathView(View):
         + change value
     """
     def run(self):
+        from seedsigner.gui.screens.psbt_screens import PSBTMathScreen
         psbt_parser: PSBTParser = self.controller.psbt_parser
         if not psbt_parser:
             # Should not be able to get here
@@ -250,20 +259,24 @@ class PSBTAddressDetailsView(View):
 
 
     def run(self):
+        from seedsigner.gui.screens.psbt_screens import PSBTAddressDetailsScreen
         psbt_parser: PSBTParser = self.controller.psbt_parser
 
         if not psbt_parser:
             # Should not be able to get here
             raise Exception("Routing error")
 
-        title = "Will Send"
+        # TRANSLATOR_NOTE: Future-tense used to indicate that this transaction will send this amount, as opposed to "Send" on its own which could be misread as an instant command (e.g. "Send Now").
+        title = _("Will Send")
         if psbt_parser.num_destinations > 1:
             title += f" (#{self.address_num + 1})"
 
+        button_data = []
         if self.address_num < psbt_parser.num_destinations - 1:
-            button_data = ["Next Recipient"]
+            button_data.append(ButtonOption("Next recipient"))
         else:
-            button_data = ["Next"]
+            # TRANSLATOR_NOTE: Short for "Next step"
+            button_data.append(ButtonOption("Next"))
 
         selected_menu_num = self.run_screen(
             PSBTAddressDetailsScreen,
@@ -294,10 +307,9 @@ class PSBTAddressDetailsView(View):
 
 
 class PSBTChangeDetailsView(View):
-    NEXT = "Next"
-    SKIP_VERIFICATION = "Skip Verification"
-    VERIFY_MULTISIG = "Verify Multisig Change"
-
+    NEXT = ButtonOption("Next")
+    SKIP_VERIFICATION = ButtonOption("Skip verification")
+    VERIFY_MULTISIG = ButtonOption("Verify multisig change")
 
     def __init__(self, change_address_num):
         super().__init__()
@@ -305,6 +317,7 @@ class PSBTChangeDetailsView(View):
 
 
     def run(self):
+        from seedsigner.gui.screens.psbt_screens import PSBTChangeDetailsScreen
         psbt_parser: PSBTParser = self.controller.psbt_parser
 
         if not psbt_parser:
@@ -318,8 +331,8 @@ class PSBTChangeDetailsView(View):
             {
                 'address': 'bc1q............', 
                 'amount': 397621401, 
-                'fingerprint': ['22bde1a9', '73c5da0a'], 
-                'derivation_path': ['m/48h/1h/0h/2h/1/0', 'm/48h/1h/0h/2h/1/0']
+                'claimed_fingerprints': ['22bde1a9', '73c5da0a'],
+                'claimed_derivation_paths': ['m/48h/1h/0h/2h/1/0', 'm/48h/1h/0h/2h/1/0']
             }
         """
 
@@ -327,23 +340,23 @@ class PSBTChangeDetailsView(View):
         # and derivation path.
         seed_fingerprint = self.controller.psbt_seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
 
-        if seed_fingerprint not in change_data.get("fingerprint"):
+        if seed_fingerprint not in change_data.get("claimed_fingerprints"):
             # TODO: Something is wrong with this psbt(?). Reroute to warning?
             return Destination(NotYetImplementedView)
 
-        i = change_data.get("fingerprint").index(seed_fingerprint)
-        derivation_path = change_data.get("derivation_path")[i]
+        i = change_data.get("claimed_fingerprints").index(seed_fingerprint)
+        claimed_derivation_path = change_data.get("claimed_derivation_paths")[i]
 
         # 'm/84h/1h/0h/1/0' would be a change addr while 'm/84h/1h/0h/0/0' is a self-receive
-        is_change_derivation_path = int(derivation_path.split("/")[-2]) == 1
-        derivation_path_addr_index = int(derivation_path.split("/")[-1])
+        is_change_derivation_path = int(claimed_derivation_path.split("/")[-2]) == 1
+        derivation_path_addr_index = int(claimed_derivation_path.split("/")[-1])
 
         if is_change_derivation_path:
-            title = "Your Change"
-            self.VERIFY_MULTISIG = "Verify Multisig Change"
+            # TRANSLATOR_NOTE: The amount you're receiving back from the transaction
+            title = _("Your Change")
         else:
-            title = "Self-Transfer"
-            self.VERIFY_MULTISIG = "Verify Multisig Addr"
+            title = _("Self-Transfer")
+            self.VERIFY_MULTISIG.button_label = _("Verify multisig addr")
         # if psbt_parser.num_change_outputs > 1:
         #     title += f" (#{self.change_address_num + 1})"
 
@@ -361,10 +374,13 @@ class PSBTChangeDetailsView(View):
         else:
             # Single sig
             try:
+                from embit import script
+                from embit.networks import NETWORKS
+
                 if is_change_derivation_path:
-                    loading_screen_text = "Verifying Change..."
+                    loading_screen_text = _("Verifying Change...")
                 else:
-                    loading_screen_text = "Verifying Self-Transfer..."
+                    loading_screen_text = _("Verifying Self-Transfer...")
                 from seedsigner.gui.screens.screen import LoadingScreenThread
                 loading_screen = LoadingScreenThread(text=loading_screen_text)
                 loading_screen.start()
@@ -374,8 +390,8 @@ class PSBTChangeDetailsView(View):
                 script_type = pubkey.script_type()
                 
                 # extract derivation path to get wallet and change derivation
-                change_path = '/'.join(derivation_path.split("/")[-2:])
-                wallet_path = '/'.join(derivation_path.split("/")[:-2])
+                change_path = '/'.join(claimed_derivation_path.split("/")[-2:])
+                wallet_path = '/'.join(claimed_derivation_path.split("/")[:-2])
                 
                 xpub = self.controller.psbt_seed.get_xpub(
                     wallet_path=wallet_path,
@@ -415,7 +431,7 @@ class PSBTChangeDetailsView(View):
             amount=change_data.get("amount"),
             is_multisig=psbt_parser.is_multisig,
             fingerprint=seed_fingerprint,
-            derivation_path=derivation_path,
+            derivation_path=claimed_derivation_path,
             is_change_derivation_path=is_change_derivation_path,
             derivation_path_addr_index=derivation_path_addr_index,
             is_change_addr_verified=is_change_addr_verified,
@@ -436,6 +452,7 @@ class PSBTChangeDetailsView(View):
                 return Destination(PSBTFinalizeView)
             
         elif button_data[selected_menu_num] == self.VERIFY_MULTISIG:
+            from seedsigner.controller import Controller
             from seedsigner.views.seed_views import LoadMultisigWalletDescriptorView
             self.controller.resume_main_flow = Controller.FLOW__PSBT
             return Destination(LoadMultisigWalletDescriptorView)
@@ -451,19 +468,20 @@ class PSBTAddressVerificationFailedView(View):
 
     def run(self):
         if self.is_multisig:
-            title = "Caution"
-            text = f"""PSBT's {"change" if self.is_change else "self-transfer"} address could not be verified with your multisig wallet descriptor."""
+            # TRANSLATOR_NOTE: Variable is either "change" or "self-transfer".
+            text = _("Transaction's {} address could not be verified from wallet descriptor.").format(_("change") if self.is_change else _("self-transfer"))
         else:
-            title = "Suspicious PSBT"
-            text = f"""PSBT's {"change" if self.is_change else "self-transfer"} address could not be generated from your seed."""
+            # TRANSLATOR_NOTE: Variable is either "change" or "self-transfer".
+            text = _("Transaction's {} address could not be generated from your seed.").format(_("change") if self.is_change else _("self-transfer"))
         
-        DireWarningScreen(
-            title=title,
-            status_headline="Address Verification Failed",
+        self.run_screen(
+            DireWarningScreen,
+            title=_("Suspicious Transaction"),
+            status_headline=_("Address Verification Failed"),
             text=text,
-            button_data=["Discard PSBT"],
+            button_data=[ButtonOption("Discard transaction")],
             show_back_button=False,
-        ).display()
+        )
 
         # We're done with this PSBT. Route back to MainMenuView which always
         #   clears all ephemeral data (except in-memory seeds).
@@ -476,14 +494,15 @@ class PSBTOpReturnView(View):
         Shows the OP_RETURN data
     """
     def run(self):
+        from seedsigner.gui.screens.psbt_screens import PSBTOpReturnScreen
         psbt_parser: PSBTParser = self.controller.psbt_parser
 
         if not psbt_parser:
             # Should not be able to get here
             raise Exception("Routing error")
 
-        title = "OP_RETURN"
-        button_data = ["Next"]
+        title = _("OP_RETURN")
+        button_data = [ButtonOption("Next")]
 
         selected_menu_num = self.run_screen(
             PSBTOpReturnScreen,
@@ -502,10 +521,13 @@ class PSBTOpReturnView(View):
 class PSBTFinalizeView(View):
     """
     """
-    APPROVE_PSBT = "Approve PSBT"
+    APPROVE_PSBT = ButtonOption("Approve transaction")
 
     
     def run(self):
+        from embit.psbt import PSBT
+        from seedsigner.gui.screens.psbt_screens import PSBTFinalizeScreen
+
         psbt_parser: PSBTParser = self.controller.psbt_parser
         psbt: PSBT = self.controller.psbt
 
@@ -541,6 +563,8 @@ class PSBTFinalizeView(View):
 
 class PSBTSignedQRDisplayView(View):
     def run(self):
+        from seedsigner.models.encode_qr import UrPsbtQrEncoder
+
         qr_encoder = UrPsbtQrEncoder(
             psbt=self.controller.psbt,
             qr_density=self.settings.get_value(SettingsConstants.SETTING__QR_DENSITY),
@@ -554,7 +578,7 @@ class PSBTSignedQRDisplayView(View):
 
 
 class PSBTSigningErrorView(View):
-    SELECT_DIFF_SEED = "Select Diff Seed"
+    SELECT_DIFF_SEED = ButtonOption("Select different seed")
     
     def run(self):
         psbt_parser: PSBTParser = self.controller.psbt_parser
@@ -565,10 +589,10 @@ class PSBTSigningErrorView(View):
         # Just a WarningScreen here; only use DireWarningScreen for true security risks.
         selected_menu_num = self.run_screen(
             WarningScreen,
-            title="PSBT Error",
+            title=_("Transaction Error"),
             status_icon_name=SeedSignerIconConstants.WARNING,
-            status_headline="Signing Failed",
-            text="Signing with this seed did not add a valid signature.",
+            status_headline=_("Signing Failed"),
+            text=_("Signing with this seed did not add a valid signature."),
             button_data=[self.SELECT_DIFF_SEED]
         )
 
