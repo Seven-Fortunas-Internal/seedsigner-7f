@@ -1,0 +1,176 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>7F BBQr Scanner</title>
+<style>
+  body { margin: 0; background: #111; color: #eee; font-family: -apple-system, system-ui, sans-serif;
+         padding: env(safe-area-inset-top,0) 12px env(safe-area-inset-bottom,0); }
+  h1 { font-size: 1.1rem; margin: 12px 0 4px; }
+  #status { color: #9ad; margin-bottom: 8px; }
+  #status.ok { color: #6f6; }
+  #status.error { color: #f66; }
+  #video-wrap { position: relative; width: 100%; max-width: 480px; margin: 0 auto; }
+  video, canvas { width: 100%; border-radius: 8px; display: block; }
+  canvas#overlay { position: absolute; top: 0; left: 0; pointer-events: none; }
+  #progress { font-size: 1.4rem; margin: 12px 0 6px; text-align: center; }
+  #missing { color: #999; font-size: 0.85rem; text-align: center; margin-bottom: 8px; }
+  #grid { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin-bottom: 10px; }
+  #grid .cell { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center;
+                justify-content: center; font-size: 0.7rem; font-family: ui-monospace, monospace;
+                background: #333; color: #777; transition: background 0.15s, color 0.15s; }
+  #grid .cell.got { background: #2a5; color: #fff; }
+  #grid .cell.just-got { background: #6f6; color: #113; }
+  #result { background: #1a1a1a; border-radius: 8px; padding: 10px; white-space: pre-wrap;
+            word-break: break-all; font-family: ui-monospace, monospace; font-size: 0.8rem;
+            max-height: 40vh; overflow-y: auto; }
+  button { background: #2a5; color: #fff; border: none; border-radius: 6px; padding: 10px 16px;
+           font-size: 1rem; margin: 8px 4px 8px 0; }
+  button.secondary { background: #444; }
+  .error { color: #f66; }
+  .ok { color: #6f6; }
+</style>
+</head>
+<body>
+<h1>7F BBQr Scanner</h1>
+<div id="status">Requesting camera...</div>
+<div id="video-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+</div>
+<canvas id="capture" style="display:none"></canvas>
+<div id="progress"></div>
+<div id="grid"></div>
+<div id="missing"></div>
+<div>
+  <button id="reset">Reset</button>
+</div>
+<div id="result"></div>
+
+<script src="jsQR.min.js"></script>
+<script src="pako.min.js"></script>
+<script src="bbqr-decode.js"></script>
+<script>
+const session = new BBQrDecode.BBQrSession();
+const statusEl = document.getElementById("status");
+const progressEl = document.getElementById("progress");
+const gridEl = document.getElementById("grid");
+const missingEl = document.getElementById("missing");
+const resultEl = document.getElementById("result");
+const video = document.getElementById("video");
+const overlay = document.getElementById("overlay");
+const capture = document.getElementById("capture");
+
+function renderProgress(justGotIndex) {
+  if (session.total === null) {
+    progressEl.textContent = "";
+    gridEl.innerHTML = "";
+    missingEl.textContent = "";
+    return;
+  }
+  progressEl.textContent = `${session.segments.size} / ${session.total} parts`;
+
+  gridEl.innerHTML = "";
+  for (let i = 0; i < session.total; i++) {
+    const cell = document.createElement("div");
+    const got = session.segments.has(i);
+    cell.className = "cell" + (got ? " got" : "") + (i === justGotIndex ? " just-got" : "");
+    cell.textContent = i + 1;
+    gridEl.appendChild(cell);
+  }
+
+  const missing = session.missingIndices();
+  missingEl.textContent = missing.length && missing.length <= 20
+    ? `missing: ${missing.map(i => i + 1).join(", ")}`
+    : "";
+}
+
+function bytesToHex(bytes) {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// textContent + a class, never innerHTML: encoding/fileType (single chars)
+// and error messages can include content read directly off a scanned QR
+// (untrusted input by design for this tool), so there is no reason to give
+// any of it a path into the DOM as markup, however narrow that path is
+// today (see common/security.md's "never inject unsanitized HTML").
+function setStatus(text, cls) {
+  statusEl.textContent = text;
+  statusEl.className = cls || "";
+}
+
+function renderResult(bytes) {
+  let text;
+  if (session.fileType === "J") {
+    try {
+      const obj = JSON.parse(new TextDecoder().decode(bytes));
+      text = JSON.stringify(obj, null, 2);
+    } catch (e) {
+      text = `(claimed JSON but failed to parse: ${e.message})\n\nhex:\n${bytesToHex(bytes)}`;
+    }
+  } else if (session.fileType === "U") {
+    text = new TextDecoder().decode(bytes);
+  } else {
+    text = `file_type=${session.fileType}, ${bytes.length} bytes\n\nhex:\n${bytesToHex(bytes)}`;
+  }
+  resultEl.textContent = text;
+  setStatus(`Complete -- ${bytes.length} bytes decoded.`, "ok");
+}
+
+function handleDecodedText(text) {
+  try {
+    const result = session.addSegment(text);
+    if (result.kind === "not-bbqr") {
+      return; // ignore non-BBQr QR content (e.g. a stray code in frame)
+    }
+    renderProgress(result.isNew ? result.index : undefined);
+    if (session.isComplete) {
+      const bytes = session.decode();
+      renderResult(bytes);
+    }
+  } catch (e) {
+    setStatus(e.message, "error");
+  }
+}
+
+document.getElementById("reset").addEventListener("click", () => {
+  session.reset();
+  statusEl.textContent = "Scanning...";
+  resultEl.textContent = "";
+  renderProgress();
+});
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+    });
+    video.srcObject = stream;
+    await video.play();
+    statusEl.textContent = "Scanning...";
+    requestAnimationFrame(tick);
+  } catch (e) {
+    setStatus(`Camera error: ${e.message} (camera access needs HTTPS or localhost -- check the URL)`, "error");
+  }
+}
+
+function tick() {
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    capture.width = video.videoWidth;
+    capture.height = video.videoHeight;
+    const ctx = capture.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0, capture.width, capture.height);
+    const imageData = ctx.getImageData(0, 0, capture.width, capture.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height);
+    if (code) {
+      handleDecodedText(code.data);
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+startCamera();
+</script>
+</body>
+</html>
