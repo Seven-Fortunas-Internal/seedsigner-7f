@@ -203,12 +203,23 @@ def derive_purpose_seed(master_seed: bytes, purpose_path: str) -> bytes:
     out_buf = ctypes.create_string_buffer(MASTER_SEED_LEN)
     purpose_bytes = purpose_path.encode("utf-8")
 
-    rc = lib.mldsa7f_derive_purpose_seed(
-        master_seed, len(master_seed),
-        purpose_bytes, len(purpose_bytes),
-        out_buf, MASTER_SEED_LEN,
-    )
-    if rc != 0:
-        raise MlDsaError(rc, "derive_purpose_seed")
+    try:
+        rc = lib.mldsa7f_derive_purpose_seed(
+            master_seed, len(master_seed),
+            purpose_bytes, len(purpose_bytes),
+            out_buf, MASTER_SEED_LEN,
+        )
+        if rc != 0:
+            raise MlDsaError(rc, "derive_purpose_seed")
 
-    return out_buf.raw[:MASTER_SEED_LEN]
+        return out_buf.raw[:MASTER_SEED_LEN]
+    finally:
+        # The Python bytes returned above is a copy taken before this runs
+        # (Python evaluates a `return` expression before a `finally` block
+        # executes) -- this only wipes mldsa7f's own intermediate ctypes
+        # buffer, the residual-plaintext gap 7f-signing-support-python-
+        # ctypes-secret-zeroing tracked. `master_seed` itself is the
+        # caller's own immutable bytes object (not this function's to
+        # mutate) and the returned copy is a Python bytes object, which
+        # CPython cannot zero in place -- both are out of scope here.
+        ctypes.memset(out_buf, 0, MASTER_SEED_LEN)

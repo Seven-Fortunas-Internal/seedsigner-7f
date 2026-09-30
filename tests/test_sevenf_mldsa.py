@@ -13,6 +13,7 @@
     cleanly if it's missing, rather than failing the whole suite, since
     packaging that artifact for CI is separate, not-yet-filed work.
 """
+import ctypes
 import hashlib
 
 import pytest
@@ -123,6 +124,32 @@ def test_derive_purpose_seed_differs_from_root_ca():
 def test_derive_purpose_seed_wrong_master_seed_length_raises_value_error():
     with pytest.raises(ValueError):
         mldsa.derive_purpose_seed(b"\x00" * 32, "m/deputy-ca/l1/testnet/0")
+
+
+def test_derive_purpose_seed_wipes_its_intermediate_ctypes_buffer(monkeypatch):
+    """ Regression test for 7f-signing-support-python-ctypes-secret-zeroing:
+        the ctypes buffer mldsa7f_derive_purpose_seed writes the plaintext
+        derived seed into must be zeroed before the Python call returns,
+        not left holding a residual plaintext copy for as long as the
+        buffer object happens to stay alive. Spies on ctypes.create_string_
+        buffer (rather than reaching into mldsa's internals) so this test
+        observes the same buffer object derive_purpose_seed() itself uses. """
+    real_create_string_buffer = ctypes.create_string_buffer
+    captured = []
+
+    def spying_create_string_buffer(size):
+        buf = real_create_string_buffer(size)
+        if size == MASTER_SEED_LEN:
+            captured.append(buf)
+        return buf
+
+    monkeypatch.setattr(ctypes, "create_string_buffer", spying_create_string_buffer)
+
+    result = mldsa.derive_purpose_seed(FIXED_SEED, "m/deputy-ca/l1/testnet/0")
+
+    assert len(captured) == 1
+    assert captured[0].raw == b"\x00" * MASTER_SEED_LEN
+    assert result != b"\x00" * MASTER_SEED_LEN
 
 
 def test_derive_purpose_seed_matches_the_first_stage_of_derive_pubkey():
