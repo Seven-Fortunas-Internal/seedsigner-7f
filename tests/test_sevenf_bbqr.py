@@ -141,6 +141,42 @@ def test_corrupted_frame_fails_loudly_not_silently_wrong():
         assert raised or not got_result
 
 
+def _base36_2char(n: int) -> str:
+    # Uppercase, matching BBQrEncoder._BASE36 (encode_qr.py) -- the wire-
+    # format type-detection regex in decode_qr.py is uppercase-only, so a
+    # lowercase pair here would be misclassified as a different/unrecognized
+    # QR type before ever reaching the total-count check this test targets.
+    digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    return f"{digits[n // 36]}{digits[n % 36]}"
+
+
+def test_corrupted_header_total_count_raises_rather_than_truncating():
+    """ Interoperability vector 5 (Patrick's requirements doc §7.4:
+        "multi-part encode and decode, including a deliberately corrupted
+        frame, which must fail rather than truncate"), the specific case
+        test_corrupted_frame_fails_loudly_not_silently_wrong above doesn't
+        cover: a corrupted HEADER (the total-segment-count field, BBQr
+        bytes [4:6]) rather than corrupted content. BaseAnimatedQrDecoder.add()
+        has a real, previously test-uncovered guard for exactly this
+        (`raise Exception('Segment total changed unexpectedly')`) -- a
+        frame claiming a different total part-count than the first frame
+        declared must raise immediately, not silently accept a wrong count
+        and produce truncated or bogus reconstructed data. """
+    import os
+    encoder = BBQrEncoder(data=os.urandom(1500), bbqr_encoding="Z", max_bytes_per_segment=100)
+    parts = [encoder.next_part() for _ in range(encoder.seq_len())]
+    assert len(parts) > 1, "need multiple segments for a total-count field to meaningfully corrupt"
+
+    real_total = int(parts[1][4:6], 36)
+    corrupted_total = (real_total + 1) % (36 * 36)  # any value differing from the first frame's declared total
+    corrupted_second = parts[1][:4] + _base36_2char(corrupted_total) + parts[1][6:]
+
+    d = DecodeQR()
+    d.add_data(parts[0])
+    with pytest.raises(Exception, match="Segment total changed unexpectedly"):
+        d.add_data(corrupted_second)
+
+
 def test_get_data_returns_none_before_complete():
     """ Closes a real, measured coverage gap (not assumed) -- every other
         test in this file only calls get_data() after reaching COMPLETE. """

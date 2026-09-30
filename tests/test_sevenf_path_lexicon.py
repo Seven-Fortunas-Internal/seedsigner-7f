@@ -92,6 +92,8 @@ def test_invalid_purpose_paths():
     _rejects("m/root ca/l1/testnet/0")     # spaces
     _rejects("m/stablecoin/my_coin/0")     # underscore
     _rejects("m/root-ca/l1/testnet/abc")   # non-numeric index
+    _rejects("m/root-ca/l1/testnet/0/")    # trailing separator (interoperability vector 6,
+                                            # Patrick's requirements doc §7.4)
 
 
 def test_valid_role_paths():

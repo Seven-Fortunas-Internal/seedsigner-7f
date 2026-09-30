@@ -81,18 +81,29 @@ def test_round_trip_message_containing_lookalike_substrings():
     assert fields.message == message
 
 
-def test_build_produces_bytes_matching_real_cross_check_prefix():
-    """ Cross-checks against this project's own real end-to-end sf-root
-        cross-check (backlog story 7f-signing-support-root-ceremony-key-derivation):
-        for devnet, timestamp=1790555198, message="cross-check fixture",
-        consensus={30,50,200}, the canonical bytes must start with the
-        domain tag + version, and the tail must carry the real
-        derivation_scheme constant -- confirmed indirectly by round-tripping
-        successfully (a wrong domain tag or version would make
-        parse_canonical_bytes raise, per the dedicated rejection tests
-        below and in the Rust-level test suite). """
+def test_build_matches_the_real_reference_vector():
+    """ Cross-checks this Python bridge against the exact same real
+        reference vector firmware/mldsa7f/src/genesis_config.rs's own test
+        module pins (extracted directly from sf-core's real
+        genesis_config::canonical_bytes(), not guessed -- see that Rust
+        test's own doc comment for the capture-and-revert provenance).
+        Interoperability vector 3 of Patrick's requirements doc §7.4
+        ("canonical bytes... compared byte for byte"). Confirms the ctypes
+        marshalling itself, not just that Python and Rust agree with each
+        other in isolation -- this test PREVIOUSLY only checked that
+        decoding round-tripped, which a wrong domain tag or field order
+        could still pass by accident if the same bug existed on both the
+        build and parse side; a real byte-for-byte hex match can't. """
     consensus = ConsensusParams(target_block_time_secs=30, difficulty_adjustment_interval_blocks=50, blocks_per_decay_period=200)
     bytes_ = build_canonical_bytes(ChainKind.DEVNET, 1_790_555_198, "cross-check fixture", consensus)
+    expected_hex = (
+        "67656e657369732d636f6e666967016465766e6574000000006ab9b43e"
+        "63726f73732d636865636b20666978747572653766636861696e2e6d6c"
+        "2d6473612d6b657967656e2e7631000000000000001e0000000000000"
+        "03200000000000000c8"
+    )
+    assert bytes_.hex() == expected_hex
+
     fields = parse_canonical_bytes(bytes_)
     assert fields.chain_kind == ChainKind.DEVNET
     assert fields.timestamp == 1_790_555_198
