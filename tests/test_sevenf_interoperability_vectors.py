@@ -31,16 +31,13 @@
     7f-signing-support-no-cross-verification-tooling -- blocked on
     7fchain's own sf-wallet-side design, not attempted here.
 
-    Vector 2's real scope today: root-ca and 7fchain/devfund are the only
-    categories with a real Rust-cross-checked KAT (captured via
-    `cargo test --release ffi_kat_capture_for_python -- --nocapture
-    --ignored`, see test_sevenf_mldsa.py). deputy-ca, centcom-ca,
-    intermediate-ca, stablecoin, giftcard and utilitytoken currently only
-    have internal-determinism coverage (same seed -> same key, different
-    path -> different key), not an independent Rust-side pin -- a real,
-    known gap, filed separately as
-    7f-signing-support-interop-vector-2-category-coverage rather than
-    silently claimed as done here.
+    Vector 2 covers every reserved category (root-ca, deputy-ca including
+    both its L1/L2 forms and a second index, centcom-ca, intermediate-ca,
+    stablecoin, giftcard, utilitytoken, 7fchain/devfund) with a real
+    Rust-cross-checked KAT, captured via `cargo test --release
+    ffi_kat_capture_for_python -- --nocapture --ignored` (see
+    test_sevenf_mldsa.py) -- closed 2026-09-29,
+    7f-signing-support-interop-vector-2-category-coverage.
 
     Requires firmware/mldsa7f's compiled library (most of these vectors
     depend on it); skips cleanly if it's missing.
@@ -71,6 +68,8 @@ from test_sevenf_bbqr import (
 from test_sevenf_devfund_config import test_matches_the_real_reference_vector as _vector_3_devfund_config
 from test_sevenf_genesis_config import test_build_matches_the_real_reference_vector as _vector_3_genesis_config
 from test_sevenf_mldsa import (
+    REMAINING_CATEGORY_KATS as _vector_2_remaining_category_kats,
+    _assert_derive_pubkey_matches_kat as _vector_2_assert_kat,
     test_derive_pubkey_devfund_matches_rust_kat as _vector_2_devfund_category,
     test_derive_pubkey_root_ca_matches_rust_kat as _vector_2_root_ca_category,
 )
@@ -88,6 +87,11 @@ def test_vector_2_master_seed_to_derived_key_root_ca():
 
 def test_vector_2_master_seed_to_derived_key_devfund():
     _vector_2_devfund_category()
+
+
+@pytest.mark.parametrize("purpose_path,expected_pk_sha256,expected_address", _vector_2_remaining_category_kats)
+def test_vector_2_master_seed_to_derived_key_every_remaining_category(purpose_path, expected_pk_sha256, expected_address):
+    _vector_2_assert_kat(purpose_path, expected_pk_sha256, expected_address)
 
 
 def test_vector_3_canonical_bytes_genesis_config():

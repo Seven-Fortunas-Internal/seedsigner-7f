@@ -56,6 +56,48 @@ def test_derive_pubkey_devfund_matches_rust_kat():
     assert address == "t1wxrtaq8t5cuuvea5gm9uzfagggxpasrpc5m93jkvmaqs7ea"
 
 
+# Interop vector 2 (Patrick's requirements doc §7.4): "every category and
+# several indices" -- root-ca/devfund above already exercise the same
+# derivation code path every category runs through (derive_child() in
+# derive.rs doesn't branch on category), so this closes a documentation/
+# proof gap against the vector's literal wording, not a live correctness
+# risk. Pinned against the same ffi_kat_capture_for_python run, extended
+# 2026-09-29 (see that Rust test's own doc comment) --
+# 7f-signing-support-interop-vector-2-category-coverage. A module-level
+# constant (not inlined in the parametrize call) so
+# test_sevenf_interoperability_vectors.py can import and reuse the same
+# pinned values instead of duplicating them.
+REMAINING_CATEGORY_KATS = [
+    ("m/deputy-ca/l1/testnet/0", "fd0695c5cdde237a150db2c00b5e5092aacabc6c85f04491fa4bc078c1c7630f",
+     "t1mn6u4jsyxelwdswh9qzremdqn4chezhvltc4znm2nvjemk0"),
+    ("m/deputy-ca/l1/testnet/1", "ba6654a716ad08994334f6a592258290bd5126a8ef25d2570e42e1aad892d5ef",
+     "t1gsfsr9f56nfwj2lsfqmfqxeafyz5pqxx87pvzrfvv9yyr7g"),
+    ("m/deputy-ca/l2/testnet/42/0", "9fe227cf7556c05164f6802680bfe8818a3783e9dff662f19cac9285e295790f",
+     "t1umladftrpeuvmressk64mlssus87lnczgftg9fa22l6u5df"),
+    ("m/centcom-ca/l1/testnet/0", "b090812f1441e2958a91e9d38381f9c3e022636d70d811802ae5914369ef395d",
+     "t1qtf89fflq7g36q7shz8jx8fs0xrncxdv5cx9cwxme5g33mp"),
+    ("m/intermediate-ca/l1/testnet/0", "be359cbb7a736055e3e1b1b1ede024effefa6cc7cf21c00236ea5504aacc0272",
+     "t1mdm2pc74n95w704dn9pqwxyr0m6j0h4cljxsjqlpt52qyck"),
+    ("m/stablecoin/7fusd/0", "b9116ba7d3539d8a6533a9e119c1892def834e1df2754f9bdbd435d227956826",
+     "t13ah96wv4wae27sjl0ejzw4cl6yl8dkr3s28tpv40jpey8k2"),
+    ("m/giftcard/intercorp/0", "86cbc2071ce955ea782c2f2b619d962bbe6eb9a091275aaf556607e2d9343040",
+     "t1greeupt603tww4zgz54em25kqy3jej3mzkye6wha9f2wxu9"),
+    ("m/utilitytoken/interbank/0", "18eba3acfdc3fda6b14bf904b0dda83fb4170150093fd6163dd6cc13861ed589",
+     "t144xyuzpmn23hurzqylmkkdqfv8yrnwe5qc6wz8shyz0rj5e"),
+]
+
+
+def _assert_derive_pubkey_matches_kat(purpose_path, expected_pk_sha256, expected_address):
+    pk, address = mldsa.derive_pubkey(FIXED_SEED, purpose_path, "ml-dsa/0", network=1, layer=0)
+    assert hashlib.sha256(pk).hexdigest() == expected_pk_sha256
+    assert address == expected_address
+
+
+@pytest.mark.parametrize("purpose_path,expected_pk_sha256,expected_address", REMAINING_CATEGORY_KATS)
+def test_derive_pubkey_every_remaining_category_matches_rust_kat(purpose_path, expected_pk_sha256, expected_address):
+    _assert_derive_pubkey_matches_kat(purpose_path, expected_pk_sha256, expected_address)
+
+
 def test_derive_and_sign_uses_hedged_default_signing():
     """ NOT a fixed-hash KAT, deliberately: signing is hedged (randomized)
         by default (confirmed against sf-crypto/src/ml_dsa.rs, see
