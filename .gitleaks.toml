@@ -26,3 +26,16 @@ regexes = [
   '''t1w65hh4c5ft3anmvc5nd57209vd9pw88un6ekd2hkqavajwc''',
   '''t1wxrtaq8t5cuuvea5gm9uzfagggxpasrpc5m93jkvmaqs7ea''',
 ]
+
+# Path-excluded, not regex-allowlisted: these are official NIST ACVP test
+# vectors (public keys, messages, signatures, seeds) published by NIST for
+# exactly this purpose -- government-issued cryptographic test data, not
+# secrets by any definition. They're long hex blobs, so generic
+# entropy-based rules (aws-access-token, generic-api-key, etc.) match
+# many short substrings inside them; regex-allowlisting each one
+# individually doesn't scale and would need updating every time the fixture
+# changes. See tests/test_ml_dsa_65_nist_acvp_conformance.py for what these
+# actually verify and where they came from.
+paths = [
+  '''tests/fixtures/nist_acvp_ml_dsa_65_sigver_pure_external\.json''',
+]
