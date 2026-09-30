@@ -26,15 +26,24 @@ Usage:
     python tools/verify_sevenf_signature.py \\
         --original path/to/original_scanned_part*.png \\
         --signed path/to/exported_signature_part*.png \\
-        [--pubkey-hex <hex>]
+        --pubkey-hex <hex>
 
 --original and --signed each accept one or more image files holding a
 single- or multi-part BBQr sequence (shell-glob them, or pass every part
 explicitly) -- part order is read from each QR's own BBQr header, not
 filename order, so passing them out of order is harmless.
 
---pubkey-hex is only needed if the signed export didn't embed signer_vk
-(the default -- see genesis_config.py's build_root_sig_json docstring, D11).
+--pubkey-hex is REQUIRED and must come from an independently-trusted
+source (the Root's own one-time enrollment export, a value you recorded
+yourself off the device screen, etc.) -- never from the artifact being
+verified. The signed export's own JSON may carry a `signer_vk` field, but
+that field originates entirely from the file under test: trusting it as
+the verification key would let a self-consistent forged export (attacker's
+own keypair, attacker's own valid signature, attacker's own pubkey
+embedded) report VALID, proving only that some keypair signed the message
+-- not that the real enrolled Root did. Found in adversarial security
+review, 2026-09-29 (HIGH). Pass --trust-embedded-signer-vk to opt into the
+old, unsafe behavior anyway (loud warning printed, never the default).
 """
 import argparse
 import sys
@@ -95,7 +104,12 @@ def main():
     parser.add_argument("--signed", nargs="+", required=True, type=Path,
                          help="image file(s) for the exported signed-output BBQr sequence")
     parser.add_argument("--pubkey-hex", default=None,
-                         help="signer's ML-DSA-65 public key, hex -- required unless the export embeds signer_vk")
+                         help="signer's ML-DSA-65 public key, hex, from a trusted source -- REQUIRED (see module docstring for why)")
+    parser.add_argument("--trust-embedded-signer-vk", action="store_true",
+                         help="UNSAFE: fall back to the signed export's own embedded signer_vk when --pubkey-hex "
+                              "is omitted. This trusts a value that originates entirely from the artifact under "
+                              "test -- a forged export can embed any key it wants. Only use this for sanity-checking "
+                              "your own test artifacts, never to verify a signature you don't already trust.")
     args = parser.parse_args()
 
     import json
@@ -109,9 +123,24 @@ def main():
     sig = bytes.fromhex(signed_obj["sig"])
     print(f"Signature: {len(sig)} bytes")
 
-    pubkey_hex = args.pubkey_hex or signed_obj.get("signer_vk") or ""
-    if not pubkey_hex:
-        print("ERROR: export did not embed signer_vk and --pubkey-hex was not given.", file=sys.stderr)
+    embedded_vk = signed_obj.get("signer_vk") or ""
+    if args.pubkey_hex and embedded_vk and args.pubkey_hex.lower() != embedded_vk.lower():
+        print("WARNING: --pubkey-hex does not match the export's own embedded signer_vk. "
+              "Proceeding with --pubkey-hex (the trusted source) -- but this mismatch itself "
+              "is worth investigating before trusting this artifact.", file=sys.stderr)
+
+    if args.pubkey_hex:
+        pubkey_hex = args.pubkey_hex
+    elif args.trust_embedded_signer_vk and embedded_vk:
+        print("WARNING: verifying against the export's own embedded signer_vk -- this only proves "
+              "internal self-consistency of the artifact (some keypair signed this message), NOT "
+              "that the real enrolled Root/Deputy signed it. A forged export can embed any key it "
+              "wants. Never treat this result as proof of authenticity.", file=sys.stderr)
+        pubkey_hex = embedded_vk
+    else:
+        print("ERROR: --pubkey-hex is required. Get the signer's public key from a source you "
+              "independently trust -- never from the artifact being verified. (Pass "
+              "--trust-embedded-signer-vk only to sanity-check your own test artifacts.)", file=sys.stderr)
         sys.exit(2)
     pk = bytes.fromhex(pubkey_hex)
     print(f"Public key: {len(pk)} bytes")

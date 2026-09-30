@@ -87,3 +87,67 @@ def test_verify_tool_rejects_a_tampered_signature(signed_genesis_config):
     sig = bytes.fromhex(signed_obj["sig"])
     tampered_sig = bytes([sig[0] ^ 0x01]) + sig[1:]
     assert not ML_DSA_65.verify(pk, message, tampered_sig)
+
+
+def _run_cli(monkeypatch, capsys, argv):
+    monkeypatch.setattr("sys.argv", ["verify_sevenf_signature.py"] + argv)
+    exit_code = 0
+    try:
+        verify_tool.main()
+    except SystemExit as e:
+        exit_code = e.code or 0
+    return exit_code, capsys.readouterr()
+
+
+def test_cli_refuses_without_pubkey_hex_or_trust_flag(signed_genesis_config, monkeypatch, capsys):
+    """ H1 fix, adversarial security review 2026-09-29: the tool must not
+        silently trust the export's own embedded signer_vk as the
+        verification key by default -- that would let a forged, internally
+        self-consistent export report VALID. """
+    original_paths, signed_paths = signed_genesis_config
+    argv = ["--original", *map(str, original_paths), "--signed", *map(str, signed_paths)]
+    exit_code, captured = _run_cli(monkeypatch, capsys, argv)
+    assert exit_code == 2
+    assert "pubkey-hex is required" in captured.err
+
+
+def test_cli_verifies_with_explicit_trusted_pubkey(signed_genesis_config, monkeypatch, capsys):
+    from seedsigner.models.sevenf import root_ceremony
+    original_paths, signed_paths = signed_genesis_config
+    root_keys = root_ceremony.derive_root_ceremony_keys(gen_tool.root_seed().seed_bytes, gen_tool.CHAIN_KIND)
+
+    argv = [
+        "--original", *map(str, original_paths),
+        "--signed", *map(str, signed_paths),
+        "--pubkey-hex", root_keys.root_ca.public_key.hex(),
+    ]
+    exit_code, captured = _run_cli(monkeypatch, capsys, argv)
+    assert exit_code == 0
+    assert "VALID" in captured.out
+
+
+def test_cli_trust_embedded_flag_warns_loudly(signed_genesis_config, monkeypatch, capsys):
+    original_paths, signed_paths = signed_genesis_config
+    argv = [
+        "--original", *map(str, original_paths),
+        "--signed", *map(str, signed_paths),
+        "--trust-embedded-signer-vk",
+    ]
+    exit_code, captured = _run_cli(monkeypatch, capsys, argv)
+    assert exit_code == 0
+    assert "only proves internal self-consistency" in captured.err
+    assert "VALID" in captured.out
+
+
+def test_cli_warns_on_pubkey_mismatch_but_trusts_the_explicit_one(signed_genesis_config, monkeypatch, capsys):
+    original_paths, signed_paths = signed_genesis_config
+    wrong_pubkey = "00" * 1952
+    argv = [
+        "--original", *map(str, original_paths),
+        "--signed", *map(str, signed_paths),
+        "--pubkey-hex", wrong_pubkey,
+    ]
+    exit_code, captured = _run_cli(monkeypatch, capsys, argv)
+    assert "does not match the export's own embedded signer_vk" in captured.err
+    assert exit_code == 1
+    assert "INVALID" in captured.out
