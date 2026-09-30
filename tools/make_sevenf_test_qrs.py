@@ -31,7 +31,8 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(_SRC))
 
 from seedsigner.models.seed import Seed  # noqa: E402
-from seedsigner.models.encode_qr import BBQrEncoder  # noqa: E402
+from seedsigner.models.encode_qr import BBQrEncoder, CompactSeedQrEncoder  # noqa: E402
+from seedsigner.models.settings_definition import SettingsConstants  # noqa: E402
 from seedsigner.models.sevenf.constants import ChainKind  # noqa: E402
 from seedsigner.models.sevenf import cert_request, root_ceremony  # noqa: E402
 from seedsigner.models.sevenf.genesis_config import ConsensusParams  # noqa: E402
@@ -98,6 +99,23 @@ def build_devfund_config() -> bytes:
     return devfund_config.build_canonical_bytes(
         CHAIN_KIND, TEST_DEVFUND_ADDRESS, 100, int(time.time()),
     )
+
+
+def render_seed_qr(name: str, mnemonic: list[str], out_dir: Path) -> Path:
+    """ A plain (non-BBQr) CompactSeedQR for scanning the test mnemonic in via
+        the device's camera instead of hand-typing 24 words -- Seeds > Enter
+        24-word seed screen also offers "Scan a SeedQR". Same encoder the
+        device's own export path uses (encode_qr.py's CompactSeedQrEncoder),
+        so nothing about the format is guessed. """
+    import qrcode
+    encoder = CompactSeedQrEncoder(mnemonic=mnemonic, wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=20, border=4)
+    qr.add_data(encoder.next_part())
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+    path = out_dir / f"{name}.png"
+    img.save(path)
+    return path
 
 
 def render_bbqr(name: str, payload: bytes, out_dir: Path) -> list[Path]:
@@ -186,6 +204,11 @@ def main():
             "slideshow": slideshow_path.name,
         }
         print(f"{name}: {len(payload)} bytes -> {len(image_paths)} QR part(s), {slideshow_path.name}")
+
+    seed_qr_path = render_seed_qr("root_test_seed_qr", ROOT_TEST_MNEMONIC, out_dir)
+    manifest["root_test_seed_qr"] = seed_qr_path.name
+    print(f"root_test_seed_qr: {seed_qr_path.name} (scan at Seeds > Enter 24-word seed > Scan a SeedQR; "
+          f"add the Deputy passphrase afterward for the Deputy identity)")
 
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))

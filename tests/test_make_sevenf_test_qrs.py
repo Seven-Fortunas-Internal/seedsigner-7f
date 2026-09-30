@@ -86,6 +86,23 @@ def test_deputy_cert_request_round_trips_and_parses():
     assert req.subject_vk == deputy_keys.root_ca.public_key
 
 
+def test_root_test_seed_qr_round_trips_through_the_real_decode_path(tmp_path):
+    from seedsigner.models.decode_qr import DecodeQR
+
+    path = tool.render_seed_qr("root_test_seed_qr", tool.ROOT_TEST_MNEMONIC, tmp_path)
+    assert path.is_file()
+
+    from seedsigner.models.encode_qr import CompactSeedQrEncoder
+    from seedsigner.models.settings_definition import SettingsConstants
+    encoder = CompactSeedQrEncoder(
+        mnemonic=tool.ROOT_TEST_MNEMONIC, wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+    decoder = DecodeQR()
+    decoder.add_data(encoder.next_part())
+    assert decoder.is_complete
+    assert decoder.is_seed
+    assert decoder.get_seed_phrase() == tool.ROOT_TEST_MNEMONIC
+
+
 def test_root_and_deputy_test_seeds_are_actually_different():
     # The whole point of the passphrase variant is a distinct key -- catch a
     # regression that accidentally makes both identities derive identically.
