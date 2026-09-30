@@ -149,6 +149,15 @@ def derive_pubkey(master_seed: bytes, purpose_path: str, role_path: str, network
     if rc != 0:
         raise MlDsaError(rc, "derive_pubkey")
 
+    # Belt-and-suspenders: addr_buf is exactly ADDRESS_LEN bytes, so the FFI
+    # contract already bounds `written`, but a slice with a garbage/over-
+    # long value would silently return truncated or wrong-looking address
+    # bytes instead of failing loudly -- not exploitable from the Python
+    # side alone (the buffer itself can't be overrun), but worth asserting
+    # explicitly rather than trusting the FFI's own bound silently.
+    if not 0 <= written.value <= ADDRESS_LEN:
+        raise ValueError(f"derive_pubkey returned an out-of-range address length: {written.value}")
+
     address = addr_buf.raw[:written.value].decode("ascii")
     return pk_buf.raw[:ML_DSA_PK_LEN], address
 

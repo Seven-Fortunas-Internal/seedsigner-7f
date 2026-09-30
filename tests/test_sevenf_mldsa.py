@@ -212,6 +212,27 @@ def test_derive_pubkey_raises_mldsa_error_on_bad_network_byte():
     assert exc_info.value.operation == "derive_pubkey"
 
 
+def test_derive_pubkey_rejects_an_out_of_range_written_address_length(monkeypatch):
+    """ Regression test for the defensive length assertion added to
+        derive_pubkey's address-length handling (crypto-review hygiene
+        item 3, 2026-09-29): a real ffi.rs can never actually write more
+        than ADDRESS_LEN into addr_buf (the buffer itself is exactly that
+        size), so this injects a fake success return with a corrupted
+        `written` out-param to exercise the Python-side guard directly --
+        documented as a deliberate mock, not a real FFI failure, matching
+        this file's existing _FakeLib convention (see
+        test_derive_and_sign_raises_mldsa_error_on_nonzero_return above). """
+    class _FakeLib:
+        def mldsa7f_derive_pubkey(self, *args):
+            written_ptr = ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_size_t))
+            written_ptr[0] = 9999
+            return 0
+
+    monkeypatch.setattr(mldsa, "_lib_handle", lambda: _FakeLib())
+    with pytest.raises(ValueError, match="out-of-range address length"):
+        mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+
+
 def test_derive_and_sign_raises_mldsa_error_on_nonzero_return(monkeypatch):
     """ derive_and_sign's Python signature has no network/layer parameter
         to smuggle an invalid discriminant through (signing doesn't need
