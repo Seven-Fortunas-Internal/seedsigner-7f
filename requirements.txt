@@ -5,9 +5,12 @@
 # To update a pin: change the version, then refresh its hashes from
 # https://pypi.org/pypi/<package>/<version>/json (or pip download + pip hash).
 #
-# pyzbar and urtypes point at commit-pinned GitHub source archives instead of
-# git+ URLs: pip's hash-checking mode cannot verify a git checkout, but it can
-# verify the archive tarball built from the same commit.
+# pyzbar has no PyPI release and points at a commit-pinned GitHub source
+# archive instead of a git+ URL: pip's hash-checking mode cannot verify a git
+# checkout, but it can verify the archive tarball built from the same commit.
+# urtypes used to be pinned the same way (no PyPI release existed when this
+# pin was first made); selfcustody/urtypes has since published to PyPI, so
+# it's pinned like any other PyPI package below.
 #
 # NOTE: a hash-locked file may share a `pip install` invocation only with other
 # fully hashed files (e.g. `-r requirements.txt -r tests/requirements.txt`).
@@ -103,8 +106,9 @@ pyzbar @ https://github.com/seedsigner/pyzbar/archive/c3c237821c6a20b17953efe59b
 qrcode==8.0 \
     --hash=sha256:025ce2b150f7fe4296d116ee9bad455a6643ab4f6e7dce541613a4758cbce347 \
     --hash=sha256:9fc05f03305ad27a709eb742cf3097fa19e6f6f93bb9e2f039c0979190f6f1b1
-urtypes @ https://github.com/selfcustody/urtypes/archive/7fb280eab3b3563dfc57d2733b0bf5cbc0a96a6a.tar.gz \
-    --hash=sha256:bab06f952d9c93c8756068e2252751840b3c7ba102cdb273c4325c57e991bd2e
+urtypes==1.0.1 \
+    --hash=sha256:3b6911c6a888c6924da3487f20df75cc60960ba94a2a95c20dc3ffa84ff6aae3 \
+    --hash=sha256:4f1cd0ef34c21ae6f408520ecd9de0d2d157ee885b94ad9e6481cfbb3838558e
 # NOTE: no `rlp` dependency here -- chains/evm/rlp_codec.py is a small hand-rolled
 # RLP codec instead, specifically to avoid needing to author several new Buildroot
 # packages (rlp's transitive deps include a C extension and a Rust extension) for a
