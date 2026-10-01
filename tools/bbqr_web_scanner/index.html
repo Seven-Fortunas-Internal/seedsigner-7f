@@ -49,6 +49,7 @@
 <div id="missing"></div>
 <div>
   <button id="reset">Reset</button>
+  <button id="torch" class="secondary" hidden>Torch: off</button>
 </div>
 <div id="result"></div>
 
@@ -197,6 +198,47 @@ document.getElementById("reset").addEventListener("click", () => {
   renderProgress();
 });
 
+// Continuous autofocus and torch are both device-gated (iPhones and most
+// laptop webcams expose neither) -- every call here is guarded by a real
+// getCapabilities() check first, never assumed, matching the documented
+// MediaStreamTrack behavior (a bare applyConstraints call for an
+// unsupported constraint throws OverconstrainedError).
+let videoTrack = null;
+
+async function enableContinuousFocus(track) {
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  if (!caps.focusMode || !caps.focusMode.includes("continuous")) {
+    return; // device doesn't support programmatic focus control -- leave it alone
+  }
+  try {
+    await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+  } catch (e) {
+    // Non-fatal: scanning still works, just without the focus hint applied.
+    console.warn("continuous focus request failed:", e.message);
+  }
+}
+
+function setUpTorchToggle(track) {
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  const torchBtn = document.getElementById("torch");
+  if (!caps.torch) {
+    torchBtn.hidden = true;
+    return;
+  }
+  let torchOn = false;
+  torchBtn.hidden = false;
+  torchBtn.addEventListener("click", async () => {
+    torchOn = !torchOn;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+      torchBtn.textContent = `Torch: ${torchOn ? "on" : "off"}`;
+    } catch (e) {
+      torchOn = !torchOn; // revert optimistic toggle on failure
+      console.warn("torch toggle failed:", e.message);
+    }
+  });
+}
+
 async function startCamera() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -204,6 +246,11 @@ async function startCamera() {
     });
     video.srcObject = stream;
     await video.play();
+    videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      await enableContinuousFocus(videoTrack);
+      setUpTorchToggle(videoTrack);
+    }
     statusEl.textContent = "Scanning...";
     cameraStarted = true;
     requestAnimationFrame(tick);
