@@ -23,9 +23,15 @@ regexes = [
   # 7fchain ADDRESSES (public by design, same as a Bitcoin address), derived from
   # FIXED_SEED = bytes([0x2A] * MASTER_SEED_LEN) -- a trivial, all-identical-byte
   # test constant defined one line above, itself not a real seed.
+  # `gitleaks detect` scans full history, so a value removed from the *current*
+  # tree is still permanently present in an old commit -- allowlist entries are
+  # additive forever, never replaced, once a matching string has ever been
+  # committed (found the hard way: CI failed after this entry was edited
+  # in-place instead of appended to, 2026-10-01).
+  '''t1w65hh4c5ft3anmvc5nd57209vd9pw88un6ekd2hkqavajwc''',
+  '''t1wxrtaq8t5cuuvea5gm9uzfagggxpasrpc5m93jkvmaqs7ea''',
   # RE-PINNED 2026-10-01: the role path's version segment became mandatory
-  # ("ml-dsa/0" -> "ml-dsa/v1/0"), which moved these two addresses -- the
-  # prior pair is no longer referenced anywhere and has been removed.
+  # ("ml-dsa/0" -> "ml-dsa/v1/0"), which moved these two addresses.
   '''t1jzu0kpu6eqfjq2y3wk6msk95wtuvx2fu4vk4lp3m79xkdec''',
   '''t1wa0dfam0d0xxnxv8tw657wvlr6tcz2c3fxs9w2dr9adyw7t''',
 ]
