@@ -11,6 +11,9 @@
   #status { color: #9ad; margin-bottom: 8px; }
   #status.ok { color: #6f6; }
   #status.error { color: #f66; }
+  #signal { font-size: 0.85rem; margin-bottom: 8px; color: #999; }
+  #signal.good { color: #6f6; }
+  #signal.weak { color: #fa6; }
   #video-wrap { position: relative; width: 100%; max-width: 480px; margin: 0 auto; }
   video, canvas { width: 100%; border-radius: 8px; display: block; }
   canvas#overlay { position: absolute; top: 0; left: 0; pointer-events: none; }
@@ -35,6 +38,7 @@
 <body>
 <h1>7F BBQr Scanner</h1>
 <div id="status">Requesting camera...</div>
+<div id="signal"></div>
 <div id="video-wrap">
   <video id="video" autoplay playsinline muted></video>
   <canvas id="overlay"></canvas>
@@ -54,6 +58,7 @@
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
+const signalEl = document.getElementById("signal");
 const progressEl = document.getElementById("progress");
 const gridEl = document.getElementById("grid");
 const missingEl = document.getElementById("missing");
@@ -61,6 +66,54 @@ const resultEl = document.getElementById("result");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const capture = document.getElementById("capture");
+
+// Operator feedback for "am I in range," distinct from scan progress.
+// Without this, a correctly-aimed camera re-reading a part it already has
+// looks IDENTICAL to one that's out of focus and seeing nothing at all --
+// both show no visible change. A re-read of an already-captured part is
+// itself proof the framing/distance/focus is fine; the fix needed then is
+// "show the next part," not "adjust the camera." This surfaces that
+// distinction instead of leaving the operator to guess from a static screen.
+const SIGNAL_WINDOW_MS = 1500;
+const RECENT_RESULT_MS = 2000;
+let cameraStarted = false;
+let detectionTimestamps = []; // ms timestamps of ticks where jsQR found any code
+let lastResult = null; // { index, isNew, at }
+
+function recordDetection(found, now) {
+  if (found) detectionTimestamps.push(now);
+  while (detectionTimestamps.length && now - detectionTimestamps[0] > SIGNAL_WINDOW_MS) {
+    detectionTimestamps.shift();
+  }
+}
+
+function renderSignal(now) {
+  if (!cameraStarted) {
+    signalEl.textContent = "";
+    signalEl.className = "";
+    return;
+  }
+  if (lastResult && now - lastResult.at < RECENT_RESULT_MS) {
+    if (lastResult.isNew) {
+      signalEl.textContent = `Captured part ${lastResult.index + 1} -- good range`;
+    } else {
+      signalEl.textContent = `Part ${lastResult.index + 1} already captured, still in range -- show the next part`;
+    }
+    signalEl.className = "good";
+    return;
+  }
+  const detections = detectionTimestamps.length;
+  if (detections === 0) {
+    signalEl.textContent = "No QR detected -- move closer or check focus/lighting";
+    signalEl.className = "weak";
+  } else if (detections < 6) {
+    signalEl.textContent = "Faint signal -- hold steadier";
+    signalEl.className = "weak";
+  } else {
+    signalEl.textContent = "Good signal";
+    signalEl.className = "good";
+  }
+}
 
 function renderProgress(justGotIndex) {
   if (session.total === null) {
@@ -118,12 +171,13 @@ function renderResult(bytes) {
   setStatus(`Complete -- ${bytes.length} bytes decoded.`, "ok");
 }
 
-function handleDecodedText(text) {
+function handleDecodedText(text, now) {
   try {
     const result = session.addSegment(text);
     if (result.kind === "not-bbqr") {
       return; // ignore non-BBQr QR content (e.g. a stray code in frame)
     }
+    lastResult = { index: result.index, isNew: result.isNew, at: now };
     renderProgress(result.isNew ? result.index : undefined);
     if (session.isComplete) {
       const bytes = session.decode();
@@ -138,6 +192,8 @@ document.getElementById("reset").addEventListener("click", () => {
   session.reset();
   statusEl.textContent = "Scanning...";
   resultEl.textContent = "";
+  lastResult = null;
+  detectionTimestamps = [];
   renderProgress();
 });
 
@@ -149,6 +205,7 @@ async function startCamera() {
     video.srcObject = stream;
     await video.play();
     statusEl.textContent = "Scanning...";
+    cameraStarted = true;
     requestAnimationFrame(tick);
   } catch (e) {
     setStatus(`Camera error: ${e.message} (camera access needs HTTPS or localhost -- check the URL)`, "error");
@@ -156,6 +213,7 @@ async function startCamera() {
 }
 
 function tick() {
+  const now = performance.now();
   if (video.readyState === video.HAVE_ENOUGH_DATA) {
     capture.width = video.videoWidth;
     capture.height = video.videoHeight;
@@ -163,10 +221,14 @@ function tick() {
     ctx.drawImage(video, 0, 0, capture.width, capture.height);
     const imageData = ctx.getImageData(0, 0, capture.width, capture.height);
     const code = jsQR(imageData.data, imageData.width, imageData.height);
+    recordDetection(!!code, now);
     if (code) {
-      handleDecodedText(code.data);
+      handleDecodedText(code.data, now);
     }
+  } else {
+    recordDetection(false, now);
   }
+  renderSignal(now);
   requestAnimationFrame(tick);
 }
 
