@@ -54,10 +54,14 @@ def devfund_purpose_path(chain_kind: ChainKind) -> str:
 
 
 # The leaf role under either purpose path -- confirmed against
-# sf-root.rs:658,660,783,785 (`"{root_ca_path}/ml-dsa/0"`, `derive_leaf_seed(&root_seed, "ml-dsa/0")`).
+# sf-root.rs:860,1273-1276,1800,2003 (`derive_leaf_seed(&root_seed, "ml-dsa/v1/0")`).
+# RE-CONFIRMED 2026-10-01: the version segment became mandatory
+# (docs/derivation-path-lexicon.md, path.rs's validate_role_path) as part of
+# regenerating the nine Root keys for the 6-of-9 testnet relaunch -- this
+# constant was still "ml-dsa/0" (pre-dates that change) until this fix.
 # Always index 0: the Root ceremony derives exactly one Root CA key and one
 # devfund key per chain_kind, never a family of indexed keys.
-ML_DSA_LEAF_ROLE = "ml-dsa/0"
+ML_DSA_LEAF_ROLE = "ml-dsa/v1/0"
 
 
 @dataclass(frozen=True)

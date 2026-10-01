@@ -48,15 +48,52 @@ def test_derive_root_ceremony_keys_matches_rust_kat():
     """ Pinned against the same fixed-seed KAT as test_sevenf_mldsa.py --
         confirms this higher-level function derives the exact same keys as
         calling mldsa.derive_pubkey directly with the documented paths,
-        not a subtly different path string. """
+        not a subtly different path string. RE-CAPTURED 2026-10-01: the role
+        path's version segment became mandatory ("ml-dsa/0" -> "ml-dsa/v1/0"),
+        which moves both pinned keys below -- see constants.py's
+        ML_DSA_LEAF_ROLE for why. """
     keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
     assert keys.chain_kind == ChainKind.TESTNET
     assert hashlib.sha256(keys.root_ca.public_key).hexdigest() == \
-        "35dcb73976fb10ad1d9393d742e33bba9ac890c449a26fe90d0a93d786e1396a"
-    assert keys.root_ca.address == "t1w65hh4c5ft3anmvc5nd57209vd9pw88un6ekd2hkqavajwc"
+        "7db3396b3460645029b26a397d9c8bd89dc6c2e202fa1e552b8e0a9101f0e0a5"
+    assert keys.root_ca.address == "t1jzu0kpu6eqfjq2y3wk6msk95wtuvx2fu4vk4lp3m79xkdec"
     assert hashlib.sha256(keys.devfund.public_key).hexdigest() == \
-        "72bf15c60c1ba2f6a7a778910ec974c5eb4d240fe8544ce87bb0691ca467bccc"
-    assert keys.devfund.address == "t1wxrtaq8t5cuuvea5gm9uzfagggxpasrpc5m93jkvmaqs7ea"
+        "cb138e8a7415fe02b851b1ec1cd3a8fa2a32afb06ca2fba51c3e776d91c95781"
+    assert keys.devfund.address == "t1wa0dfam0d0xxnxv8tw657wvlr6tcz2c3fxs9w2dr9adyw7t"
+
+
+def test_root_ca_matches_7fchains_real_canonical_vector():
+    """ Ground-truth cross-verification, not internal self-consistency: 7fchain
+        added crates/sf-keytree/tests/path_vectors.rs (2026-09-30, as part of
+        making the role-path version segment mandatory) specifically so the
+        device's FFI can be checked against real sf-keytree output, using the
+        canonical all-zero 24-word BIP-39 vector ("abandon ... art") so the
+        comparison is reproducible by anyone without sharing a real phrase.
+
+        This is the single most direct proof this device derives the same
+        Root CA key sf-root itself would for the same seed -- the exact
+        correctness question this whole file exists to answer, now checked
+        against the real federation software's own pinned output rather than
+        only against another run of our own port. """
+    canonical_phrase = (
+        "abandon abandon abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon "
+        "abandon abandon abandon abandon abandon art"
+    )
+    seed_bytes = mnemonic_to_seed(canonical_phrase, password="")
+
+    keys = derive_root_ceremony_keys(seed_bytes, ChainKind.TESTNET)
+
+    # First 64 hex characters, matching path_vectors.rs's own pinning
+    # convention ("a prefix that long is a collision nobody is going to
+    # stumble into").
+    pk_hex = keys.root_ca.public_key.hex()[:64]
+    assert pk_hex == "2106cbbe81f7c407f1f66e48a5db852ece883016a1fe3b39c450ed9914269691", (
+        "Root CA public key no longer matches 7fchain's real pinned vector "
+        "(sf-keytree/tests/path_vectors.rs::ROOT_CA_TESTNET) for the canonical "
+        "all-zero BIP-39 phrase at m/root-ca/l1/testnet/0 + ml-dsa/v1/0 -- "
+        "this device would sign under a different key than sf-root expects."
+    )
 
 
 def test_root_ca_and_devfund_addresses_differ():

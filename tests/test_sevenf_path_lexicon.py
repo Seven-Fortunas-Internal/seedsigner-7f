@@ -8,6 +8,7 @@ import pytest
 
 from seedsigner.models.sevenf.path_lexicon import (
     KNOWN_TOKENS,
+    RESERVED_ROLES,
     PathLexiconError,
     validate_purpose_path,
     validate_role_path,
@@ -97,18 +98,65 @@ def test_invalid_purpose_paths():
 
 
 def test_valid_role_paths():
-    for role in ("ml-dsa", "falcon", "bip32", "minter", "master-minter",
-                 "pauser", "blacklister", "admin", "owner", "deployer"):
-        validate_role_path(f"{role}/0")
+    """ Every reserved role, in the mandatory-version shape. """
+    for role in RESERVED_ROLES:
+        validate_role_path(f"{role}/v1/0")
+
+
+def test_every_live_leaf_shape_validates():
+    """ The shapes the tree actually derives with today. """
+    for path in (
+        "ml-dsa/v1/0",              # CA tiers and wallet value keys
+        "falcon/v1/0",              # L2 value keys
+        "minter/v1/0",              # L2 minter
+        "ml-dsa/v1/hot",            # a node's hot key
+        "ml-dsa/v1/block-reward",   # a miner's payout key
+        "falcon/v1/block-reward",   # the Falcon payout it replaced
+    ):
+        validate_role_path(path)
+
+
+def test_a_later_version_is_legal():
+    """ A higher version is legal -- that's what the segment is for. """
+    validate_role_path("ml-dsa/v2/0")
+    validate_role_path("ml-dsa/v10/block-reward")
+
+
+def test_the_unversioned_spelling_is_refused():
+    """ The version is mandatory, so the retired two-segment spelling fails.
+        Both of these derived real keys before this rule existed; neither is
+        legal now. """
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ml-dsa/0")
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ml-dsa/hot")
+    with pytest.raises(PathLexiconError):
+        validate_role_path("minter/0")
 
 
 def test_invalid_role_paths():
     with pytest.raises(PathLexiconError):
-        validate_role_path("ml-dsa")
+        validate_role_path("ml-dsa")  # no leaf at all
     with pytest.raises(PathLexiconError):
-        validate_role_path("ml-dsa/0/extra")
+        validate_role_path("ml-dsa/v1")  # missing leaf
     with pytest.raises(PathLexiconError):
-        validate_role_path("minter/abc")
+        validate_role_path("ml-dsa/v1/0/extra")  # four segments
+    with pytest.raises(PathLexiconError):
+        validate_role_path("minter/v1/abc")  # leaf neither numeric nor reserved
+    with pytest.raises(PathLexiconError):
+        validate_role_path("bogus/v1/0")  # unknown role
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ml-dsa/1/0")  # malformed version: no 'v' prefix
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ml-dsa/v/0")  # malformed version: no digits
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ml-dsa/vx/0")  # malformed version: non-numeric
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ml-dsa/V1/0")  # malformed version: uppercase V
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ml_dsa/v1/0")  # underscore in role
+    with pytest.raises(PathLexiconError):
+        validate_role_path("ML-DSA/v1/0")  # uppercase role
 
 
 def test_segment_max_length():
@@ -160,6 +208,31 @@ def test_role_path_validation_reuses_the_same_segment_rules():
         _validate_segment used for purpose-path segments, so the same
         character-set/length rules apply to both. """
     with pytest.raises(PathLexiconError):
-        validate_role_path("Minter/0")  # uppercase
+        validate_role_path("Minter/v1/0")  # uppercase
     with pytest.raises(PathLexiconError):
-        validate_role_path((("a" * 33)) + "/0")  # over MAX_SEGMENT_LEN
+        validate_role_path(("a" * 33) + "/v1/0")  # over MAX_SEGMENT_LEN
+
+
+def test_the_two_value_key_shapes_validate():
+    """ Both shapes the 2026-09-30 widening admits. These two were refused
+        until then while being derived in anger: every wallet address comes
+        from the first and every L2 receive address from the second. """
+    # Chain-kind-agnostic: an account is the same account everywhere.
+    _ok("m/7fchain/wallet/0")
+    _ok("m/7fchain/wallet/7")
+    # Chain-bound, like a sequencer.
+    _ok("m/7fchain/l2/testnet/value/1/0")
+    _ok("m/7fchain/l2/mainnet/value/999/3")
+
+
+def test_the_widening_admits_nothing_further():
+    # A wallet path is exactly three segments.
+    _rejects("m/7fchain/wallet")
+    _rejects("m/7fchain/wallet/0/extra")
+    _rejects("m/7fchain/wallet/abc")
+    # "value" is chain-bound, so the chain-agnostic form is refused.
+    _rejects("m/7fchain/l2/testnet/value/0")
+    # A non-numeric chain id is still a non-numeric chain id.
+    _rejects("m/7fchain/l2/testnet/value/abc/0")
+    # And an invented role is still refused.
+    _rejects("m/7fchain/l2/testnet/bogus/0")

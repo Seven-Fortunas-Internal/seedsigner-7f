@@ -93,7 +93,7 @@ def test_real_mldsa7f_signature_independently_verifies():
     seed = bytes([0x2A] * MASTER_SEED_LEN)  # same FIXED_SEED as test_sevenf_root_ceremony.py
     message = b"NIST ACVP conformance cross-check -- not a real ceremony artefact"
     pk, sig = mldsa.derive_and_sign(
-        seed, "m/root-ca/l1/testnet/0", "ml-dsa/0", message,
+        seed, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", message,
     )
     assert ML_DSA_65.verify(pk, message, sig), "an independent, NIST-vector-validated verifier rejected a real mldsa7f signature"
 
@@ -106,7 +106,7 @@ def test_tampered_signature_is_correctly_rejected():
 
     seed = bytes([0x2A] * MASTER_SEED_LEN)
     message = b"NIST ACVP conformance cross-check -- not a real ceremony artefact"
-    pk, sig = mldsa.derive_and_sign(seed, "m/root-ca/l1/testnet/0", "ml-dsa/0", message)
+    pk, sig = mldsa.derive_and_sign(seed, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", message)
 
     tampered_sig = bytes([sig[0] ^ 0x01]) + sig[1:]
     assert not ML_DSA_65.verify(pk, message, tampered_sig)

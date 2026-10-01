@@ -38,8 +38,8 @@ def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind) -> RootC
         `seed_bytes` (SeedSigner's Seed.seed_bytes -- standard BIP-39,
         empty passphrase, 64 bytes).
 
-        Both keys use layer=L1 and leaf role "ml-dsa/0" -- confirmed
-        against sf-root.rs:368-370,658-660,783-785. Raises
+        Both keys use layer=L1 and leaf role "ml-dsa/v1/0" -- confirmed
+        against sf-root.rs:368-370,860,1273-1276,1800,2003. Raises
         seedsigner.models.sevenf.mldsa.MlDsaError on any derivation
         failure, ValueError if seed_bytes is the wrong length.
     """

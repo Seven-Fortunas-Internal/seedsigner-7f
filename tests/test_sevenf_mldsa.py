@@ -40,20 +40,22 @@ FIXED_SEED = bytes([0x2A] * MASTER_SEED_LEN)
 
 def test_derive_pubkey_root_ca_matches_rust_kat():
     """ Pinned against `cargo test --release ffi_kat_capture_for_python
-        -- --nocapture --ignored`'s actual printed output, captured
-        2026-09-27. """
-    pk, address = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+        -- --nocapture --ignored`'s actual printed output. RE-CAPTURED
+        2026-10-01: the role path's version segment became mandatory
+        ("ml-dsa/0" -> "ml-dsa/v1/0"), which moves every pinned key below --
+        see constants.py's ML_DSA_LEAF_ROLE for why. """
+    pk, address = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
     assert len(pk) == ML_DSA_PK_LEN
-    assert hashlib.sha256(pk).hexdigest() == "35dcb73976fb10ad1d9393d742e33bba9ac890c449a26fe90d0a93d786e1396a"
-    assert address == "t1w65hh4c5ft3anmvc5nd57209vd9pw88un6ekd2hkqavajwc"
+    assert hashlib.sha256(pk).hexdigest() == "7db3396b3460645029b26a397d9c8bd89dc6c2e202fa1e552b8e0a9101f0e0a5"
+    assert address == "t1jzu0kpu6eqfjq2y3wk6msk95wtuvx2fu4vk4lp3m79xkdec"
 
 
 def test_derive_pubkey_devfund_matches_rust_kat():
     pk, address = mldsa.derive_pubkey(
-        FIXED_SEED, "m/7fchain/l1/testnet/devfund/0", "ml-dsa/0", network=1, layer=0
+        FIXED_SEED, "m/7fchain/l1/testnet/devfund/0", "ml-dsa/v1/0", network=1, layer=0
     )
-    assert hashlib.sha256(pk).hexdigest() == "72bf15c60c1ba2f6a7a778910ec974c5eb4d240fe8544ce87bb0691ca467bccc"
-    assert address == "t1wxrtaq8t5cuuvea5gm9uzfagggxpasrpc5m93jkvmaqs7ea"
+    assert hashlib.sha256(pk).hexdigest() == "cb138e8a7415fe02b851b1ec1cd3a8fa2a32afb06ca2fba51c3e776d91c95781"
+    assert address == "t1wa0dfam0d0xxnxv8tw657wvlr6tcz2c3fxs9w2dr9adyw7t"
 
 
 # Interop vector 2 (Patrick's requirements doc §7.4): "every category and
@@ -68,27 +70,27 @@ def test_derive_pubkey_devfund_matches_rust_kat():
 # test_sevenf_interoperability_vectors.py can import and reuse the same
 # pinned values instead of duplicating them.
 REMAINING_CATEGORY_KATS = [
-    ("m/deputy-ca/l1/testnet/0", "fd0695c5cdde237a150db2c00b5e5092aacabc6c85f04491fa4bc078c1c7630f",
-     "t1mn6u4jsyxelwdswh9qzremdqn4chezhvltc4znm2nvjemk0"),
-    ("m/deputy-ca/l1/testnet/1", "ba6654a716ad08994334f6a592258290bd5126a8ef25d2570e42e1aad892d5ef",
-     "t1gsfsr9f56nfwj2lsfqmfqxeafyz5pqxx87pvzrfvv9yyr7g"),
-    ("m/deputy-ca/l2/testnet/42/0", "9fe227cf7556c05164f6802680bfe8818a3783e9dff662f19cac9285e295790f",
-     "t1umladftrpeuvmressk64mlssus87lnczgftg9fa22l6u5df"),
-    ("m/centcom-ca/l1/testnet/0", "b090812f1441e2958a91e9d38381f9c3e022636d70d811802ae5914369ef395d",
-     "t1qtf89fflq7g36q7shz8jx8fs0xrncxdv5cx9cwxme5g33mp"),
-    ("m/intermediate-ca/l1/testnet/0", "be359cbb7a736055e3e1b1b1ede024effefa6cc7cf21c00236ea5504aacc0272",
-     "t1mdm2pc74n95w704dn9pqwxyr0m6j0h4cljxsjqlpt52qyck"),
-    ("m/stablecoin/7fusd/0", "b9116ba7d3539d8a6533a9e119c1892def834e1df2754f9bdbd435d227956826",
-     "t13ah96wv4wae27sjl0ejzw4cl6yl8dkr3s28tpv40jpey8k2"),
-    ("m/giftcard/intercorp/0", "86cbc2071ce955ea782c2f2b619d962bbe6eb9a091275aaf556607e2d9343040",
-     "t1greeupt603tww4zgz54em25kqy3jej3mzkye6wha9f2wxu9"),
-    ("m/utilitytoken/interbank/0", "18eba3acfdc3fda6b14bf904b0dda83fb4170150093fd6163dd6cc13861ed589",
-     "t144xyuzpmn23hurzqylmkkdqfv8yrnwe5qc6wz8shyz0rj5e"),
+    ("m/deputy-ca/l1/testnet/0", "73e21fca01310b151f05659d3328c2386586bca631214a8183174e6fc44b201d",
+     "t1xkf5pmd9uhjvrzzjsc2qrmldgqrdrzlptrm4nkqnl00fvcn"),
+    ("m/deputy-ca/l1/testnet/1", "686efe54a608e3232afdb38da2227817337c3ee912e02f3a888529326d874f97",
+     "t149g7x3vkg00qsx8hfamdc8ygv7tm00ly6yvkp7fjjqkdr38"),
+    ("m/deputy-ca/l2/testnet/42/0", "89fa7ddd91d7f97ee7447271435f6e2c0c11be5fe841aec1f0cbdeae168c7000",
+     "t1c497prqp29yz6fvzc4fwvqc5xc9x9kjafz8l9zxh7hemxfg"),
+    ("m/centcom-ca/l1/testnet/0", "4aa5b1ab7f10c8b186eee4d710ba75d6e42123de9d6cb4a7964e9da89c596260",
+     "t1me8nxlgm767pau2snctntjqf7ar9ezae3dpt4wsejsus8cd"),
+    ("m/intermediate-ca/l1/testnet/0", "f166aef8cc4f03ea02b11a954862e9c49830d0e526a3d1404f2cca3a6e7b8cb1",
+     "t1zrv8uwlycfjdqnlfndjvdkml6kw3ulpfmt5wzjajakhwvj7"),
+    ("m/stablecoin/7fusd/0", "38bd311a3bed69f8b104b6aaede10c6a9370dbf7cbcf3404a639d1b1a892104f",
+     "t1d2msa64kqjhma54swmrrvx5jhpvut9pxl9kgz0aewx95d9x"),
+    ("m/giftcard/intercorp/0", "23b3b2ff00f29e142fa13132750726444d5456dc05aa0895ed6fbbdae1d83d09",
+     "t1tseqeqnwkkcj3nkyps9wy0kasx7r8cgt86grtk20d89pajv"),
+    ("m/utilitytoken/interbank/0", "1e8d81be22e2892b5e2be50d0a529870c3cd0d3c23fbe53bf63491286bb4e3e2",
+     "t1x57j9m4wktdm80ay47eq6524xttp9z4szrnazlwrg2lax9n"),
 ]
 
 
 def _assert_derive_pubkey_matches_kat(purpose_path, expected_pk_sha256, expected_address):
-    pk, address = mldsa.derive_pubkey(FIXED_SEED, purpose_path, "ml-dsa/0", network=1, layer=0)
+    pk, address = mldsa.derive_pubkey(FIXED_SEED, purpose_path, "ml-dsa/v1/0", network=1, layer=0)
     assert hashlib.sha256(pk).hexdigest() == expected_pk_sha256
     assert address == expected_address
 
@@ -108,40 +110,40 @@ def test_derive_and_sign_uses_hedged_default_signing():
         by design, not by bug -- caught by actually running the test
         rather than assuming it would pass. """
     message = b"genesis-config canonical bytes fixture"
-    pk1, sig1 = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", message)
-    pk2, sig2 = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", message)
+    pk1, sig1 = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", message)
+    pk2, sig2 = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", message)
     assert len(sig1) == ML_DSA_SIG_LEN
     assert pk1 == pk2, "same path must derive the same keypair every call"
     assert sig1 != sig2, "the default signing path must stay hedged"
     # Same pubkey either entry point, for the same path.
-    pk_only, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+    pk_only, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
     assert pk1 == pk_only
 
 
 def test_derive_pubkey_is_deterministic():
-    pk1, addr1 = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
-    pk2, addr2 = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+    pk1, addr1 = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
+    pk2, addr2 = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
     assert pk1 == pk2
     assert addr1 == addr2
 
 
 def test_derive_pubkey_differs_per_chain_kind():
-    pk_testnet, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
-    pk_mainnet, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/mainnet/0", "ml-dsa/0", network=0, layer=0)
+    pk_testnet, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
+    pk_mainnet, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/mainnet/0", "ml-dsa/v1/0", network=0, layer=0)
     assert pk_testnet != pk_mainnet
 
 
 def test_root_ca_and_devfund_differ():
-    root_ca_pk, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+    root_ca_pk, _ = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
     devfund_pk, _ = mldsa.derive_pubkey(
-        FIXED_SEED, "m/7fchain/l1/testnet/devfund/0", "ml-dsa/0", network=1, layer=0
+        FIXED_SEED, "m/7fchain/l1/testnet/devfund/0", "ml-dsa/v1/0", network=1, layer=0
     )
     assert root_ca_pk != devfund_pk
 
 
 def test_wrong_master_seed_length_raises_value_error():
     with pytest.raises(ValueError):
-        mldsa.derive_pubkey(b"\x00" * 32, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+        mldsa.derive_pubkey(b"\x00" * 32, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
 
 
 def test_derive_purpose_seed_is_deterministic():
@@ -203,14 +205,14 @@ def test_derive_purpose_seed_matches_the_first_stage_of_derive_pubkey():
         same paths. """
     purpose_seed = mldsa.derive_purpose_seed(FIXED_SEED, "m/root-ca/l1/testnet/0")
     assert len(purpose_seed) == MASTER_SEED_LEN
-    pk, _sig = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", b"x")
-    pk_direct, _addr = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+    pk, _sig = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", b"x")
+    pk_direct, _addr = mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
     assert pk == pk_direct
 
 
 def test_derive_and_sign_wrong_master_seed_length_raises_value_error():
     with pytest.raises(ValueError):
-        mldsa.derive_and_sign(b"\x00" * 32, "m/root-ca/l1/testnet/0", "ml-dsa/0", b"x")
+        mldsa.derive_and_sign(b"\x00" * 32, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", b"x")
 
 
 def test_mldsa_error_carries_code_and_operation():
@@ -249,7 +251,7 @@ def test_derive_pubkey_raises_mldsa_error_on_bad_network_byte():
         derive_pubkey error-raising branch with a real failure from the
         FFI boundary, not a mocked one. """
     with pytest.raises(mldsa.MlDsaError) as exc_info:
-        mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=99, layer=0)
+        mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=99, layer=0)
     assert exc_info.value.code == -4  # ERR_BAD_NETWORK, ffi.rs
     assert exc_info.value.operation == "derive_pubkey"
 
@@ -272,7 +274,7 @@ def test_derive_pubkey_rejects_an_out_of_range_written_address_length(monkeypatc
 
     monkeypatch.setattr(mldsa, "_lib_handle", lambda: _FakeLib())
     with pytest.raises(ValueError, match="out-of-range address length"):
-        mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", network=1, layer=0)
+        mldsa.derive_pubkey(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", network=1, layer=0)
 
 
 def test_derive_and_sign_raises_mldsa_error_on_nonzero_return(monkeypatch):
@@ -291,7 +293,7 @@ def test_derive_and_sign_raises_mldsa_error_on_nonzero_return(monkeypatch):
 
     monkeypatch.setattr(mldsa, "_lib_handle", lambda: _FakeLib())
     with pytest.raises(mldsa.MlDsaError) as exc_info:
-        mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", b"x")
+        mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", b"x")
     assert exc_info.value.code == -11
     assert exc_info.value.operation == "derive_and_sign"
 
@@ -308,6 +310,6 @@ def test_signature_verifies_against_derived_pubkey():
         than silently assumed, since a reader might otherwise expect this
         test to be doing cryptographic verification itself. """
     message = b"another fixture message"
-    pk, sig = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/0", message)
+    pk, sig = mldsa.derive_and_sign(FIXED_SEED, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", message)
     assert len(pk) == ML_DSA_PK_LEN
     assert len(sig) == ML_DSA_SIG_LEN

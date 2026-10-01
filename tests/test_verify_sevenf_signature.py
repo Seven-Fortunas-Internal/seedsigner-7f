@@ -50,7 +50,7 @@ def signed_genesis_config(tmp_path):
     canonical_bytes = gen_tool.build_genesis_config()
     root_keys = root_ceremony.derive_root_ceremony_keys(gen_tool.root_seed().seed_bytes, gen_tool.CHAIN_KIND)
     _, sig = mldsa.derive_and_sign(
-        gen_tool.root_seed().seed_bytes, "m/root-ca/l1/testnet/0", "ml-dsa/0", canonical_bytes,
+        gen_tool.root_seed().seed_bytes, "m/root-ca/l1/testnet/0", "ml-dsa/v1/0", canonical_bytes,
     )
     signed_json = genesis_config.build_root_sig_json(root_keys.root_ca.public_key, sig, with_vk=True)
 
