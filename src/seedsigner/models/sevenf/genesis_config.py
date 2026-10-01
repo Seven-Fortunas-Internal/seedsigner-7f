@@ -16,6 +16,7 @@
     of those things.
 """
 import ctypes
+import hashlib
 from datetime import datetime, timezone
 
 from seedsigner.chains.base import ReviewField
@@ -226,13 +227,22 @@ def review_fields(fields: GenesisConfigFields) -> list[ReviewField]:
 
 def root_id(vk_hex: str) -> str:
     """ Ports 7fchain's crates/sf-core/src/genesis_config.rs::root_id()
-        exactly: the first 20 hex characters (10 bytes) of a verification
-        key's hex encoding, lowercased -- confirmed against that real,
-        current source, not guessed. Used to name a signature file the same
-        way sf-root.rs's own outbox does (`<id>.genesis`, `<id>.rootcert`,
-        `<id>.deputy`), so a signature produced here is recognizable on the
-        receiving end without decoding it first. """
-    return vk_hex[:20].lower()
+        exactly: `hex::encode(&Sha256::digest(&vk)[..10])` -- SHA-256 of the
+        raw key, truncated to 10 bytes, hex-encoded (20 characters).
+        Re-confirmed directly against that real, current source 2026-09-30
+        after finding this function's PREVIOUS implementation here
+        (`vk_hex[:20].lower()`, a bare string truncation with no hashing at
+        all) computed a value with zero relationship to the real one --
+        found via a 7fchain sync, not by this module's own test suite,
+        since that suite's own fixture values encoded the same wrong
+        assumption rather than a real reference vector. Used to name a
+        signature file the same way sf-root.rs's own outbox does
+        (`<id>.genesis`, `<id>.rootcert`, `<id>.deputy`) and to show the
+        operator a verifiable identity fingerprint on the review screen
+        before signing (D11) -- both uses depend on this matching the real
+        function exactly, not just being *a* fingerprint. """
+    vk = bytes.fromhex(vk_hex)
+    return hashlib.sha256(vk).digest()[:10].hex()
 
 
 def build_root_sig_json(signer_vk: bytes, sig: bytes, *, with_vk: bool = False) -> dict:

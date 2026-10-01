@@ -250,19 +250,30 @@ def test_build_root_sig_json_with_vk_includes_the_hex_key():
 
 def test_root_id_matches_real_sf_core_convention():
     """ Pinned against crates/sf-core/src/genesis_config.rs::root_id()'s own
-        `vk_hex.chars().take(20).flat_map(|c| c.to_lowercase()).collect()`
-        -- confirmed against that real, current source. """
-    vk_hex = "AB" * 976  # ML_DSA_PK_LEN hex chars, uppercase to exercise lowercasing
-    assert root_id(vk_hex) == "ab" * 10
+        `hex::encode(&Sha256::digest(&vk)[..10])` -- SHA-256 of the raw key,
+        truncated to 10 bytes, hex-encoded. Re-confirmed directly against
+        that real, current source 2026-09-30 after this test's PREVIOUS
+        version pinned a plain-truncation value that had no relationship to
+        the real function at all -- this module's own root_id() had the
+        same bug, found via a 7fchain sync, not by this test (its old
+        fixture value was self-consistently wrong). The expected value
+        below is computed with Python's own hashlib directly against the
+        input, not copied from the implementation under test. """
+    vk_hex = "AB" * 976  # exercises uppercase-input handling
+    import hashlib
+    expected = hashlib.sha256(bytes.fromhex(vk_hex)).digest()[:10].hex()
+    assert root_id(vk_hex) == expected
+    assert root_id(vk_hex) == "0377200d0972f6389d22"  # pinned, not just self-referential
 
 
 def test_root_sig_filename_matches_real_sf_root_convention():
     """ Pinned against crates/sf-keytree/src/bin/sf-root.rs's own
         `cmd_sign_genesis` outbox naming: `{id}.genesis` where
         `id = root_id(vk_hex)` -- confirmed against that real, current
-        source (commit 3bb5da3). """
+        source (commit 3bb5da3). Expected id recomputed 2026-09-30 after
+        root_id()'s own bug fix (see test_root_id_matches_real_sf_core_convention). """
     signer_vk = bytes.fromhex("ab" * 1952)  # ML_DSA_PK_LEN
-    assert root_sig_filename(signer_vk) == "abababababababababab.genesis"
+    assert root_sig_filename(signer_vk) == "f818b47b772449955fed.genesis"
 
 
 def test_root_sig_filename_uses_hex_not_raw_bytes():
