@@ -84,7 +84,19 @@ jobs:
             -vv
           cp -r ./seedsigner-screenshots ./artifacts/
       - name: Coverage report
-        run: coverage report
+        # Coverage was computed and printed every run but never enforced --
+        # floor set just below the real current total (72.07% as of
+        # 2026-09-30, confirmed from this exact step's own merged
+        # pytest+screenshot-generator report, not the earlier mid-run
+        # printout from the "Test with pytest" step alone, which only
+        # reflects pytest's own run before --cov-append merges in the
+        # screenshot generator's coverage). Small buffer, not 80%: the
+        # 80% project-wide target (python/testing.md) is a real gap here
+        # (gui/renderer.py 20%, scan_screens.py 18%, sevenf_screens.py 0%)
+        # that a hard jump to 80% would just fail CI against, not close --
+        # this gate's job is to stop further silent erosion, not to claim
+        # the target is already met.
+        run: coverage report --fail-under=70
       - name: Install gitleaks (pinned binary, checksum-verified)
         # Runs once, not once per matrix leg -- a secret-scan result doesn't
         # depend on the Python version under test. Not the official
