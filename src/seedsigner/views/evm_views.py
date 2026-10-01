@@ -76,17 +76,31 @@ class EvmNetworkView(View):
         from seedsigner.gui.screens.screen import ButtonListScreen
         button_data = [ButtonOption(n.display_name) for n in NETWORKS]
 
+        # multi-chain-ux-default-network-session-only: pre-select (never skip) the
+        # last network picked this power-on session. Fall back to index 0 both when
+        # nothing has been picked yet (evm_last_network_id is None) and, defensively,
+        # if it names a network no longer in NETWORKS (e.g. a removed testnet) --
+        # same match-loop-index convention as LocaleSelectionView/SettingsMenuView
+        # in settings_views.py: initialize before the loop, only overwrite on a hit.
+        selected_button = 0
+        for i, network in enumerate(NETWORKS):
+            if network.network_id == self.controller.evm_last_network_id:
+                selected_button = i
+                break
+
         selected_menu_num = self.run_screen(
             ButtonListScreen,
             title=_("EVM Network"),
             is_button_text_centered=True,
             button_data=button_data,
+            selected_button=selected_button,
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
         network = NETWORKS[selected_menu_num]
+        self.controller.evm_last_network_id = network.network_id
         return Destination(EvmSelectAddressIndexView, view_args=dict(seed=self.seed, network_id=network.network_id))
 
 

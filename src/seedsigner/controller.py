@@ -143,6 +143,15 @@ class Controller(Singleton):
     # Controller instance) may clear it. None means "not yet chosen this session."
     active_chain_id: str = None
 
+    # multi-chain-ux-default-network-session-only: the last EVM network picked on
+    # EvmNetworkView, remembered only to pre-select it next time that screen is
+    # shown this same session -- still shown, still changeable, no-blind-signing
+    # unaffected. Declared alongside active_chain_id for the same reason: a fresh
+    # Controller instance (the real equivalent of a reboot) is the only thing that
+    # may clear it, not MainMenuView's per-Home-visit reset block. None means "no
+    # pick yet this session" -- EvmNetworkView.run() falls back to index 0.
+    evm_last_network_id: str = None
+
     # Destination placeholder for when we need to jump out to a side flow but intend to
     # return navigation to the main flow (e.g. PSBT flow, load multisig descriptor,
     # then resume PSBT flow).

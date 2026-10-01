@@ -80,6 +80,76 @@ class TestEvmFlows(FlowTest):
         ])
 
 
+    def test_evm_network_view_has_no_preselection_before_any_pick_this_session(self):
+        """ Fresh Controller (every test's setup_method), nothing picked yet this
+            session -- selected_button must default to 0 (the match-loop-index
+            convention already used by LocaleSelectionView/SettingsMenuView in
+            settings_views.py), not left unset or pointing at a stale index. """
+        seed = self.seed_fixture()
+        view = evm_views.EvmNetworkView(seed=seed)
+
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+
+        assert mock_run_screen.call_args.kwargs["selected_button"] == 0
+
+
+    def test_evm_network_view_remembers_last_pick_within_the_same_session(self):
+        """ multi-chain-ux-default-network-session-only: picking a network must
+            pre-select (not skip -- still shown, still changeable) that same network
+            the next time this screen is shown, for the rest of this power-on
+            session only. """
+        seed = self.seed_fixture()
+
+        # Pick "optimism" (index 2) once.
+        view = evm_views.EvmNetworkView(seed=seed)
+        with patch.object(view, "run_screen", return_value=2):
+            view.run()
+
+        assert self.controller.evm_last_network_id == "optimism"
+
+        # Re-entering the screen must now pre-select index 2.
+        view = evm_views.EvmNetworkView(seed=seed)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+
+        assert mock_run_screen.call_args.kwargs["selected_button"] == 2
+
+
+    def test_evm_network_view_last_pick_does_not_survive_a_fresh_controller(self):
+        """ In-memory only, by construction: a fresh Controller (the real equivalent
+            of a reboot -- see Controller.get_instance()'s own singleton-reset
+            pattern) must not carry the prior session's pick forward. """
+        seed = self.seed_fixture()
+        view = evm_views.EvmNetworkView(seed=seed)
+        with patch.object(view, "run_screen", return_value=2):
+            view.run()
+        assert self.controller.evm_last_network_id == "optimism"
+
+        from seedsigner.controller import Controller
+        Controller._instance = None
+        Controller.configure_instance()
+        fresh_controller = Controller.get_instance()
+
+        assert fresh_controller.evm_last_network_id is None
+
+
+    def test_evm_network_view_falls_back_to_index_zero_for_an_unknown_remembered_id(self):
+        """ Defensive guard named explicitly in this story's backlog notes: if
+            evm_last_network_id ever references a network no longer in NETWORKS
+            (e.g. a removed testnet), fall back to index 0 rather than crashing or
+            leaving selected_button unset. Lower-stakes than a persisted value since
+            nothing survives past one session anyway, but free to guard against. """
+        seed = self.seed_fixture()
+        self.controller.evm_last_network_id = "some-removed-testnet"
+
+        view = evm_views.EvmNetworkView(seed=seed)
+        with patch.object(view, "run_screen", return_value=RET_CODE__BACK_BUTTON) as mock_run_screen:
+            view.run()
+
+        assert mock_run_screen.call_args.kwargs["selected_button"] == 0
+
+
     def test_evm_address_view_connect_button_routes_to_connect_qr_view(self):
         """ Plan Phase 2's merged screen: the *same* EvmAddressView, but the second
             button ("Export Connect QR") must route to EvmConnectQRView, not
