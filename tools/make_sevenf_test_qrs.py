@@ -96,8 +96,9 @@ def build_genesis_config() -> bytes:
 
 
 def build_devfund_config() -> bytes:
+    recipient = devfund_config.DevfundRecipient(devfund_config.DevfundRecipient.ADDRESS, TEST_DEVFUND_ADDRESS)
     return devfund_config.build_canonical_bytes(
-        CHAIN_KIND, TEST_DEVFUND_ADDRESS, 100, int(time.time()),
+        CHAIN_KIND, recipient, 100, int(time.time()),
     )
 
 

@@ -3,6 +3,11 @@
     build/parse functions (src/ffi.rs's mldsa7f_devfund_build_canonical_bytes /
     mldsa7f_devfund_parse_canonical_bytes, backed by src/devfund_config.rs).
 
+    RE-PORTED 2026-10-02: schema bumped to v2 on the real side -- the
+    recipient is now a tagged union (Address/Multisig), not a bare address
+    string. See devfund_config.rs's own module docstring for the full
+    provenance. DevfundRecipient below mirrors that Rust enum.
+
     Reuses seedsigner.models.sevenf.mldsa's library loader (same compiled
     .so, same search order) rather than duplicating it. Mirrors
     genesis_config.py's own structure exactly -- see that module's docstring
@@ -26,10 +31,29 @@ class DevFundConfigError(Exception):
         super().__init__(f"mldsa7f devfund-config {operation} failed with code {code}")
 
 
+class DevfundRecipient:
+    """ Tagged union mirroring devfund_config.rs's own DevfundRecipient --
+        tag values (1=Address, 2=Multisig) match that enum's explicit tag
+        bytes exactly, never remapped at this boundary. """
+    ADDRESS = 1
+    MULTISIG = 2
+
+    def __init__(self, tag: int, payload: str):
+        self.tag = tag
+        self.payload = payload
+
+    def __eq__(self, other):
+        return isinstance(other, DevfundRecipient) and vars(self) == vars(other)
+
+    def __repr__(self):
+        kind = "Address" if self.tag == self.ADDRESS else "Multisig" if self.tag == self.MULTISIG else self.tag
+        return f"DevfundRecipient({kind}, {self.payload!r})"
+
+
 class DevFundConfigFields:
-    def __init__(self, network: ChainKind, devfund_address: str, effective_block: int, timestamp: int):
+    def __init__(self, network: ChainKind, recipient: DevfundRecipient, effective_block: int, timestamp: int):
         self.network = network
-        self.devfund_address = devfund_address
+        self.recipient = recipient
         self.effective_block = effective_block
         self.timestamp = timestamp
 
@@ -38,13 +62,14 @@ class DevFundConfigFields:
 
 
 # Fixed overhead per firmware/mldsa7f/src/ffi.rs's DEVFUND_FIXED_OVERHEAD
-# constant (domain tag 14 + version 1 + network max 7 + effective_block 8 +
-# timestamp 8 = 38). Kept as a literal here for the same reason
+# constant (domain tag 14 + version 1 + network length prefix 2 + network
+# max 7 + recipient tag 1 + payload length prefix 2 + effective_block 8 +
+# timestamp 8 = 43). Kept as a literal here for the same reason
 # genesis_config.py's _GENESIS_FIXED_OVERHEAD is -- the FFI call itself
 # fails loudly with ERR_OUTPUT_BUFFER_TOO_SMALL rather than silently
 # truncating either way, so this is a sizing convenience, not a security
 # boundary.
-_DEVFUND_FIXED_OVERHEAD = 38
+_DEVFUND_FIXED_OVERHEAD = 43
 
 
 def _lib():
@@ -52,7 +77,8 @@ def _lib():
     if not hasattr(lib, "_sevenf_devfund_argtypes_registered"):
         lib.mldsa7f_devfund_build_canonical_bytes.argtypes = [
             ctypes.c_uint8,                        # network
-            ctypes.c_char_p, ctypes.c_size_t,      # devfund_address
+            ctypes.c_uint8,                        # recipient_tag
+            ctypes.c_char_p, ctypes.c_size_t,      # payload
             ctypes.c_uint64, ctypes.c_uint64,      # effective_block, timestamp
             ctypes.c_char_p, ctypes.c_size_t,      # out
             ctypes.POINTER(ctypes.c_size_t),       # out_written
@@ -62,8 +88,9 @@ def _lib():
         lib.mldsa7f_devfund_parse_canonical_bytes.argtypes = [
             ctypes.c_char_p, ctypes.c_size_t,      # bytes
             ctypes.POINTER(ctypes.c_uint8),        # network_out
-            ctypes.c_char_p, ctypes.c_size_t,      # devfund_address_out
-            ctypes.POINTER(ctypes.c_size_t),       # devfund_address_written_out
+            ctypes.POINTER(ctypes.c_uint8),        # recipient_tag_out
+            ctypes.c_char_p, ctypes.c_size_t,      # payload_out
+            ctypes.POINTER(ctypes.c_size_t),       # payload_written_out
             ctypes.POINTER(ctypes.c_uint64),       # effective_block_out
             ctypes.POINTER(ctypes.c_uint64),       # timestamp_out
         ]
@@ -72,18 +99,19 @@ def _lib():
     return lib
 
 
-def build_canonical_bytes(network: ChainKind, devfund_address: str, effective_block: int, timestamp: int) -> bytes:
+def build_canonical_bytes(network: ChainKind, recipient: DevfundRecipient, effective_block: int, timestamp: int) -> bytes:
     """ Build devfund-config canonical bytes -- the exact bytes to sign.
         Raises DevFundConfigError on any failure. """
     lib = _lib()
-    address_bytes = devfund_address.encode("utf-8")
-    out_len = _DEVFUND_FIXED_OVERHEAD + len(address_bytes) + 64  # margin, see module-level comment
+    payload_bytes = recipient.payload.encode("utf-8")
+    out_len = _DEVFUND_FIXED_OVERHEAD + len(payload_bytes) + 64  # margin, see module-level comment
     out_buf = ctypes.create_string_buffer(out_len)
     written = ctypes.c_size_t(0)
 
     rc = lib.mldsa7f_devfund_build_canonical_bytes(
         int(network),
-        address_bytes, len(address_bytes),
+        recipient.tag,
+        payload_bytes, len(payload_bytes),
         effective_block, timestamp,
         out_buf, out_len,
         ctypes.byref(written),
@@ -94,24 +122,25 @@ def build_canonical_bytes(network: ChainKind, devfund_address: str, effective_bl
     return out_buf.raw[:written.value]
 
 
-def parse_canonical_bytes(data: bytes, max_address_len: int = 4096) -> DevFundConfigFields:
+def parse_canonical_bytes(data: bytes, max_payload_len: int = 4096) -> DevFundConfigFields:
     """ Parse devfund-config canonical bytes into fields, for on-device
         review. Raises DevFundConfigError on any failure (including an
-        unrecognized/corrupted payload -- see
-        firmware/mldsa7f/src/devfund_config.rs's own doc comment for this
-        parser's stated limitations). """
+        unrecognized/corrupted payload or unknown recipient tag -- see
+        firmware/mldsa7f/src/devfund_config.rs's own doc comment). """
     lib = _lib()
     network_out = ctypes.c_uint8(0)
-    address_out = ctypes.create_string_buffer(max_address_len)
-    address_written = ctypes.c_size_t(0)
+    recipient_tag_out = ctypes.c_uint8(0)
+    payload_out = ctypes.create_string_buffer(max_payload_len)
+    payload_written = ctypes.c_size_t(0)
     effective_block_out = ctypes.c_uint64(0)
     timestamp_out = ctypes.c_uint64(0)
 
     rc = lib.mldsa7f_devfund_parse_canonical_bytes(
         data, len(data),
         ctypes.byref(network_out),
-        address_out, max_address_len,
-        ctypes.byref(address_written),
+        ctypes.byref(recipient_tag_out),
+        payload_out, max_payload_len,
+        ctypes.byref(payload_written),
         ctypes.byref(effective_block_out),
         ctypes.byref(timestamp_out),
     )
@@ -120,7 +149,10 @@ def parse_canonical_bytes(data: bytes, max_address_len: int = 4096) -> DevFundCo
 
     return DevFundConfigFields(
         network=ChainKind(network_out.value),
-        devfund_address=address_out.raw[:address_written.value].decode("utf-8"),
+        recipient=DevfundRecipient(
+            tag=recipient_tag_out.value,
+            payload=payload_out.raw[:payload_written.value].decode("utf-8"),
+        ),
         effective_block=effective_block_out.value,
         timestamp=timestamp_out.value,
     )
@@ -140,12 +172,18 @@ def _format_timestamp(timestamp: int) -> str:
 def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
     """ Single source of truth for review_fields() below -- matches
         firmware/mldsa7f/src/devfund_config.rs's render_lines() field
-        order/content exactly: network, devfund_address, effective_block,
-        timestamp -- sf-core's own DevFundConfig field order (minus
-        `signatures`, which this device produces rather than reads). """
+        order/content exactly: network, recipient kind, recipient payload,
+        effective block, timestamp -- sf-core's own DevFundConfig field
+        order (minus `signatures`, which this device produces rather than
+        reads). Recipient kind is its own field, not folded into the
+        payload label: the no-blind-signing requirement means an operator
+        must see explicitly whether they're paying a single address or an
+        M-of-N multisig commitment, not infer it from the string's shape. """
+    kind = "Address" if fields.recipient.tag == DevfundRecipient.ADDRESS else "Multisig"
     return [
         ("Network", fields.network.name.lower()),
-        ("Devfund address", fields.devfund_address),
+        ("Recipient kind", kind),
+        ("Recipient", fields.recipient.payload),
         ("Effective block", str(fields.effective_block)),
         ("Timestamp", _format_timestamp(fields.timestamp)),
     ]

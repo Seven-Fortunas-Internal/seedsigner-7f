@@ -1362,8 +1362,10 @@ class TestSevenFDeputySeedExportFlow(FlowTest):
 
 
 def _sample_devfund_canonical_bytes() -> bytes:
+    from seedsigner.models.sevenf.devfund_config import DevfundRecipient
     from seedsigner.models.sevenf.devfund_config import build_canonical_bytes as build_devfund_canonical_bytes
-    return build_devfund_canonical_bytes(ChainKind.TESTNET, "t1devfundexampleaddress", 12_345, 1_790_555_198)
+    recipient = DevfundRecipient(DevfundRecipient.ADDRESS, "t1devfundexampleaddress")
+    return build_devfund_canonical_bytes(ChainKind.TESTNET, recipient, 12_345, 1_790_555_198)
 
 
 class TestSevenFDevFundConfigSigningFlow(FlowTest):
@@ -1413,7 +1415,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
 
     def test_full_flow_with_real_devfund_key_signs_and_exports(self):
         """ End-to-end from a real BBQr-encoded devfund-config, through
-            scan -> review (4 fields) -> confirm+sign -> signed -> export
+            scan -> review (5 fields, v2 schema) -> confirm+sign -> signed -> export
             -> Home. Confirms the real public_key/signature match a direct
             derive_root_ceremony_keys()/sign_with_devfund() call -- not a
             placeholder, and specifically the DEVFUND key, not the Root CA
@@ -1438,7 +1440,8 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
                     screen_return_value=0,
                 ),
                 FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Network
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Devfund address
+                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Recipient kind
+                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Recipient
                 FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Effective block
                 FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Timestamp (final)
                 FlowStep(sevenf_views.SevenFConfirmSignDevFundView, screen_return_value=0),  # "Sign"

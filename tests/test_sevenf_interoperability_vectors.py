@@ -65,7 +65,7 @@ from test_sevenf_bbqr import (
     test_corrupted_header_total_count_raises_rather_than_truncating as _vector_5_corrupted_header,
     test_get_data_returns_none_before_complete as _vector_5_dropped_frames,
 )
-from test_sevenf_devfund_config import test_matches_the_real_reference_vector as _vector_3_devfund_config
+from test_sevenf_devfund_config import test_matches_the_real_reference_vector_address as _vector_3_devfund_config
 from test_sevenf_genesis_config import test_build_matches_the_real_reference_vector as _vector_3_genesis_config
 from test_sevenf_mldsa import (
     REMAINING_CATEGORY_KATS as _vector_2_remaining_category_kats,
