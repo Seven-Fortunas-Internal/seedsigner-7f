@@ -149,18 +149,20 @@ class SevenFScanGenesisConfigView(ScanView):
 
 def _parse_root_request_or_error_destination(seed: Seed, data: bytes):
     """ Parse+validate a role="root" CertRequest naming this device's own
-        derived key. Shared by SevenFScanRootCertRequestView (Root self-
-        certification's entry point) and SevenFScanRootRequestForDeputyView
-        (Deputy cross-certification's first of two scans, re-scanning the
-        Root's own request to serve as issuer context -- D5 statelessness
-        resolution, see 7f-signing-support-deputy-cross-certification's
-        backlog notes). Does the fail-closed subject_vk check here, at the
-        scan boundary, rather than deferring it to review: a request for a
-        DIFFERENT Root's key is not this device's business to even show for
-        review (CRITICAL/HIGH findings, adversarial security review,
-        2026-09-28). Derives using req.kind, never a separately-configured
-        chain, for the same reason SevenFPlugin.sign() re-derives chain_kind
-        from its payload rather than trusting a separate argument.
+        derived key. Backs SevenFScanRootCertRequestView (Root self-
+        certification's entry point) -- the only remaining caller since the
+        Deputy cross-certification flow was reworked onto real X.509
+        certificates/PKCS#10 CSRs, which carry no CertRequest JSON to parse
+        here (see cert_request.py's own "PKCS#10 REWORK" docstring note;
+        SevenFScanRootCertificateView now does its own analogous
+        chain/subject_vk checks directly against a parsed certificate).
+        Does the fail-closed subject_vk check here, at the scan boundary,
+        rather than deferring it to review: a request for a DIFFERENT
+        Root's key is not this device's business to even show for review
+        (CRITICAL/HIGH findings, adversarial security review, 2026-09-28).
+        Derives using req.kind, never a separately-configured chain, for
+        the same reason SevenFPlugin.sign() re-derives chain_kind from its
+        payload rather than trusting a separate argument.
 
         Returns (req, keys) on success, or a ready-to-return Destination
         (SevenFUnsupportedArtefactView, with the right headline/reason) on
@@ -248,21 +250,20 @@ class SevenFScanRootCertRequestView(ScanView):
 
 
 
-class SevenFScanRootRequestForDeputyView(ScanView):
-    """ First of two scans for Deputy cross-certification
-        (7f-signing-support-deputy-cross-certification): re-scan the Root's
-        own CertRequest -- the SAME request Root self-certification used --
-        to serve as issuer context for the Deputy's TBS body. Resolves D5
-        statelessness by never persisting anything across ceremony
-        sessions: the coordinator already has this request and can
-        re-present it, and rebuilding from it is provably deterministic
-        (see this story's own backlog notes for the real-source proof).
-        Shares its parse/validate logic with SevenFScanRootCertRequestView
-        via _parse_root_request_or_error_destination(). """
-    instructions_text = _mft("Scan your own Root certificate request")
-    invalid_qr_type_message = _mft("Expected a Root certificate request QR (BBQr, from the coordinator)")
-
-
+class SevenFSelectChainKindForDeputyCrossCertView(View):
+    """ First step of the PKCS#10-based Deputy cross-certification flow
+        (see cert_request.py's own "PKCS#10 REWORK" docstring note, and
+        docs/7f-integration/deputy-cross-cert-pkcs10-rework-plan.md). A real
+        signed X.509 certificate carries no separate "which 7F network"
+        signal of its own distinct from its embedded chain_kind extension
+        (plan §3.4) -- so, unlike the retired JSON-CertRequest flow, the
+        operator must state the chain explicitly before anything is
+        scanned. The chain chosen here is then cross-checked against the
+        scanned Root certificate's own embedded chain_kind in
+        SevenFScanRootCertificateView (fail-closed on mismatch), exactly
+        the way the retired flow's Deputy request was checked against the
+        Root request's `kind` -- the cross-check moved, it was not
+        dropped. Mirrors EvmNetworkView's own ButtonListScreen usage. """
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
@@ -271,49 +272,60 @@ class SevenFScanRootRequestForDeputyView(ScanView):
             return
 
 
-    @property
-    def is_valid_qr_type(self):
-        return self.decoder.is_sevenf_bbqr
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        kinds = list(ChainKind)
+        button_data = [ButtonOption(k.name.lower()) for k in kinds]
 
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Deputy Cross-Cert: Chain"),
+            is_button_text_centered=True,
+            button_data=button_data,
+        )
 
-    def _handle_complete_scan(self):
-        data = self.decoder.get_sevenf_bbqr_data()
-
-        result = _parse_root_request_or_error_destination(self.seed, data)
-        if isinstance(result, Destination):
-            return result
-        root_req, keys = result
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
 
         return Destination(
-            SevenFScanDeputyCertRequestView,
-            view_args=dict(seed=self.seed, root_req=root_req, root_ca_pubkey=keys.root_ca.public_key),
-            skip_current_view=True,
+            SevenFScanRootCertificateView,
+            view_args=dict(seed=self.seed, chain_kind=kinds[selected_menu_num]),
         )
 
 
 
-class SevenFScanDeputyCertRequestView(ScanView):
-    """ Second of two scans for Deputy cross-certification: the Deputy's
-        own CertRequest. Builds the Deputy TBS body under the
-        already-validated Root context from the first scan, then shows
-        BOTH the re-derived Root's own identity (so the operator can
-        cross-check its fingerprint against what they recorded at
-        enrollment -- the MEDIUM finding from adversarial security review:
-        a stale/wrong re-scanned Root request would otherwise silently
-        issue a Deputy certificate under a plausible-but-wrong issuer
-        identity with no operator-visible signal) and the Deputy's own
-        fields (the ordinary no-blind-signing requirement for what's
-        actually being certified), labeled distinctly so the operator
-        never confuses which identity a given field describes. """
-    instructions_text = _mft("Scan the Deputy certificate request")
-    invalid_qr_type_message = _mft("Expected a Deputy certificate request QR (BBQr, from the coordinator)")
+class SevenFScanRootCertificateView(ScanView):
+    """ First of two scans for the PKCS#10-based Deputy cross-certification
+        flow: the Root's OWN real, signed X.509 certificate -- never
+        reconstructed (plan §2's rejected-alternative). Two fail-closed
+        checks before proceeding, both at the scan boundary rather than
+        deferred to review (same doctrine as the retired flow's
+        _parse_root_request_or_error_destination(), which this flow no
+        longer shares since there is no CertRequest JSON left to parse
+        here):
+
+        1. Chain mismatch: the certificate's own embedded chain_kind
+           (parse_root_certificate_der) must equal the operator's
+           selection from the prior screen -- a PKCS#10-adjacent
+           certificate carries no other network signal to check against
+           (plan §3.4).
+        2. Wrong key: the certificate's subject_vk must equal THIS
+           device's own derived Root CA key for the selected chain --
+           otherwise this device would go on to issue a Deputy
+           certificate under an identity it doesn't hold, mirroring the
+           "Wrong Key" refusal _parse_root_request_or_error_destination()
+           already enforced in the retired flow (not named as its own
+           explicit plan bullet, but the same reasoning applies
+           unchanged: a well-formed artefact for the wrong identity is
+           still not this device's business to sign). """
+    instructions_text = _mft("Scan the Root's own certificate")
+    invalid_qr_type_message = _mft("Expected a Root certificate QR (BBQr, from the coordinator)")
 
 
-    def __init__(self, seed: Seed, root_req, root_ca_pubkey: bytes):
+    def __init__(self, seed: Seed, chain_kind: ChainKind):
         super().__init__()
         self.seed = seed
-        self.root_req = root_req
-        self.root_ca_pubkey = root_ca_pubkey
+        self.chain_kind = chain_kind
 
         if guard_active_chain(self, "sevenf"):
             return
@@ -328,49 +340,105 @@ class SevenFScanDeputyCertRequestView(ScanView):
         data = self.decoder.get_sevenf_bbqr_data()
 
         try:
-            deputy_req = cert_request.parse_cert_request_json(data)
+            root_cert = cert_request.parse_root_certificate_der(data)
         except CertRequestError as e:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-                reason=_("Couldn't parse this as a certificate request: {}").format(e)))
+                reason=_("Couldn't parse this as a Root certificate: {}").format(e)))
 
-        if deputy_req.role != cert_request.ROLE_DEPUTY:
-            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-                reason=_("Expected a Deputy certificate request, got a {} request.").format(deputy_req.role)))
-
-        if deputy_req.kind != self.root_req.kind:
+        if root_cert.chain_kind != self.chain_kind:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 headline=_("Chain Mismatch"),
-                reason=_("This Deputy request is for {}, but the Root request scanned first was for {}. "
+                reason=_("This certificate is for {}, but {} was selected. "
                          "A cross-certification never spans networks.").format(
-                             deputy_req.kind.name.lower(), self.root_req.kind.name.lower()),
+                             root_cert.chain_kind.name.lower(), self.chain_kind.name.lower()),
             ))
 
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
+        if root_cert.subject_vk != keys.root_ca.public_key:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                headline=_("Wrong Key"),
+                reason=_("This certificate is for a different Root's key. This seed's own Root CA key for "
+                         "{} does not match the subject key in the scanned certificate.").format(
+                             self.chain_kind.name.lower()),
+            ))
+
+        return Destination(
+            SevenFScanDeputyCsrView,
+            view_args=dict(seed=self.seed, chain_kind=self.chain_kind, root_cert_der=data, root_cert=root_cert),
+            skip_current_view=True,
+        )
+
+
+
+class SevenFScanDeputyCsrView(ScanView):
+    """ Second of two scans: the Deputy's own self-signed PKCS#10 CSR,
+        proof-of-possession verified on-device (this device's first-ever
+        signature verification over untrusted scanned input -- see
+        cert_request.py's own "PKCS#10 REWORK" docstring note). Builds the
+        Deputy TBS body against the real Root certificate from the prior
+        scan, using a fresh device-CSPRNG serial and the current wall-clock
+        time (the Rust-side `build_deputy_tbs_v2` re-parses/re-verifies
+        both inputs itself -- no earlier parse is trusted, closing any
+        TOCTOU gap). Review fields show BOTH the real Root certificate's
+        own identity and validity window (plan §8: a genuine-but-wrong
+        certificate -- different Root, backdated, unexpectedly long-lived
+        -- must be just as catchable as a wrong fingerprint) and the
+        Deputy's own fields, via cert_request.deputy_cross_cert_v2_review_fields(). """
+    instructions_text = _mft("Scan the Deputy's certificate request")
+    invalid_qr_type_message = _mft("Expected a Deputy certificate request QR (BBQr, from the coordinator)")
+
+
+    def __init__(self, seed: Seed, chain_kind: ChainKind, root_cert_der: bytes, root_cert):
+        super().__init__()
+        self.seed = seed
+        self.chain_kind = chain_kind
+        self.root_cert_der = root_cert_der
+        self.root_cert = root_cert
+
+        if guard_active_chain(self, "sevenf"):
+            return
+
+
+    @property
+    def is_valid_qr_type(self):
+        return self.decoder.is_sevenf_bbqr
+
+
+    def _handle_complete_scan(self):
+        import time
+        deputy_csr_der = self.decoder.get_sevenf_bbqr_data()
+
         try:
-            tbs_bytes = cert_request.deputy_tbs_from_request(
-                self.root_ca_pubkey, self.root_req.kind, self.root_req.not_before, self.root_req.days, deputy_req,
+            csr = cert_request.verify_and_parse_csr_der(deputy_csr_der)
+        except CertRequestError as e:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't verify this certificate request: {}").format(e)))
+
+        now = int(time.time())
+        days = cert_request.DEPUTY_DAYS
+        serial = cert_request.generate_serial()
+
+        try:
+            tbs_bytes = cert_request.build_deputy_tbs_v2(
+                self.root_cert_der, deputy_csr_der, self.chain_kind, now, days, serial,
             )
         except CertRequestError as e:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-                reason=_("Couldn't rebuild the Deputy certificate body: {}").format(e)))
+                reason=_("Couldn't build the Deputy certificate body: {}").format(e)))
 
-        root_fields = [
-            ReviewField(label=_("Issuing Root: {}").format(f.label), value=f.value)
-            for f in cert_request.review_fields(self.root_req)
-        ]
-        deputy_fields = [
-            ReviewField(label=_("Deputy: {}").format(f.label), value=f.value)
-            for f in cert_request.review_fields(deputy_req)
-        ]
+        review_fields = cert_request.deputy_cross_cert_v2_review_fields(
+            self.root_cert, csr, self.chain_kind, now, days, serial,
+        )
 
         return Destination(
             SevenFCertRequestReviewFieldView,
             view_args=dict(
-                review_fields=root_fields + deputy_fields,
+                review_fields=review_fields,
                 page_title=_("Review Deputy Certificate"),
                 confirmed_destination=SevenFConfirmSignRootCertView,
                 confirmed_view_args=dict(
                     seed=self.seed,
-                    chain_kind=self.root_req.kind,
+                    chain_kind=self.chain_kind,
                     tbs_bytes=tbs_bytes,
                     signed_view_args=dict(
                         title=_("Deputy Certificate Signed"),

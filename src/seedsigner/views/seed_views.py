@@ -733,8 +733,8 @@ class SeedOptionsView(View):
             return Destination(SevenFScanRootCertRequestView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.SEVENF_SCAN_DEPUTY_CROSS_CERT:
-            from seedsigner.views.sevenf_views import SevenFScanRootRequestForDeputyView
-            return Destination(SevenFScanRootRequestForDeputyView, view_args=dict(seed=self.seed))
+            from seedsigner.views.sevenf_views import SevenFSelectChainKindForDeputyCrossCertView
+            return Destination(SevenFSelectChainKindForDeputyCrossCertView, view_args=dict(seed=self.seed))
 
         elif button_data[selected_menu_num] == self.SEVENF_SCAN_DEVFUND_CONFIG:
             from seedsigner.views.sevenf_views import SevenFScanDevFundConfigView

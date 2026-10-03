@@ -1,17 +1,21 @@
 """
     Python bridge for 7fchain's X.509 CertRequest signing (Root self-
-    certification / enrollment, Deputy cross-certification). Two parts:
+    certification / enrollment) and Deputy cross-certification. Two
+    generations of the Deputy flow coexist in this module's own history --
+    see the "PKCS#10 REWORK" note below for which one is current.
 
     1. Parsing/validating the CertRequest JSON envelope itself -- pure
        envelope parsing (field types, hex decoding, length bounds), not
        derivation or canonical-bytes logic, so doing it in Python here
        doesn't violate D12 (see genesis_config.py's own docstring for the
        same reasoning already applied to genesis-config's review-line
-       formatting).
+       formatting). Still current for Root self-certification -- confirmed
+       unaffected by the Deputy rework (see
+       docs/7f-integration/deputy-cross-cert-pkcs10-rework-plan.md §6).
     2. A ctypes bridge to firmware/mldsa7f's TBS-building functions
-       (ffi.rs's mldsa7f_cert_root_tbs / mldsa7f_cert_deputy_tbs, backed by
-       src/cert_request.rs) -- the actual crypto-adjacent, byte-precise work,
-       which IS Rust, per D12.
+       (ffi.rs's mldsa7f_cert_root_tbs and the PKCS#10-based entry points
+       below, backed by src/cert_request.rs) -- the actual crypto-adjacent,
+       byte-precise work, which IS Rust, per D12.
 
     Confirmed field-for-field against 7fchain's real
     crates/sf-ca/src/x509_ceremony.rs::CertRequest struct (not guessed):
@@ -30,9 +34,32 @@
     device that used the wrong chain for derivation would produce a
     different, VALID key and silently sign a wrong-network certificate with
     no error. Found in adversarial plan-stage review, 2026-09-28 (CRITICAL).
+
+    **PKCS#10 REWORK, 2026-10-03** (closes
+    7f-signing-support-deputy-cross-certification-pkcs10-rework): 7fchain
+    commit `ea91758` ("retire the detached Deputy path") removed the JSON
+    `CertRequest{role:"deputy"}` wire shape and `deputy_tbs_from_request`
+    entirely -- "A Root answers a Deputy's PKCS#10 with a whole certificate,
+    so there is nothing to assemble and no serial to pin across the Roots."
+    `build_deputy_tbs`/`deputy_tbs_from_request` (and the FFI/Rust functions
+    they called) were removed from this device in the same pass -- they
+    implemented a ceremony the network no longer performs. The real current
+    Deputy flow (see the Gate-1 plan's §2-§3 for the full reasoning, and its
+    §9 for the adversarial review that shaped it) is: a Root receives (1)
+    its OWN real, signed X.509 certificate (never reconstructed -- the one
+    real production path, `sign-deputy --csr`, requires and validates the
+    actual file) and (2) the Deputy's self-signed PKCS#10 CSR (proof of
+    possession, verified on-device -- the first time this device verifies
+    rather than only signs). `chain_kind` is operator-supplied (a PKCS#10
+    carries no network) and cross-checked against the real certificate's
+    own embedded value. `parse_root_certificate_der`/`verify_and_parse_csr_der`/
+    `generate_serial`/`build_deputy_tbs_v2`/`deputy_cross_cert_v2_review_fields`
+    below implement this; `ParsedRootCertificate`/`ParsedCsr` are their
+    return shapes.
 """
 import ctypes
 import json
+import secrets
 from dataclasses import dataclass
 
 from seedsigner.chains.base import ReviewField
@@ -154,17 +181,31 @@ def _lib():
         ]
         lib.mldsa7f_cert_root_tbs.restype = ctypes.c_int32
 
-        lib.mldsa7f_cert_deputy_tbs.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # root_vk
+        lib.mldsa7f_cert_parse_root.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,      # cert_der
+            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk_out
+            ctypes.POINTER(ctypes.c_uint64),       # not_before_out
+            ctypes.POINTER(ctypes.c_uint64),       # not_after_out
+            ctypes.POINTER(ctypes.c_uint8),        # chain_kind_out
+        ]
+        lib.mldsa7f_cert_parse_root.restype = ctypes.c_int32
+
+        lib.mldsa7f_cert_verify_csr.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,      # csr_der
+            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk_out
+        ]
+        lib.mldsa7f_cert_verify_csr.restype = ctypes.c_int32
+
+        lib.mldsa7f_cert_deputy_tbs_v2.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,      # root_cert_der
+            ctypes.c_char_p, ctypes.c_size_t,      # deputy_csr_der
             ctypes.c_uint8,                        # chain_kind
-            ctypes.c_uint64, ctypes.c_uint64,      # root_not_before, root_days
-            ctypes.c_char_p, ctypes.c_size_t,      # deputy_vk
-            ctypes.c_uint64, ctypes.c_uint64,      # deputy_not_before, deputy_days
-            ctypes.c_char_p, ctypes.c_size_t,      # deputy_serial
+            ctypes.c_uint64, ctypes.c_uint64,      # now, days
+            ctypes.c_char_p, ctypes.c_size_t,      # serial
             ctypes.c_char_p, ctypes.c_size_t,      # out
             ctypes.POINTER(ctypes.c_size_t),       # out_written
         ]
-        lib.mldsa7f_cert_deputy_tbs.restype = ctypes.c_int32
+        lib.mldsa7f_cert_deputy_tbs_v2.restype = ctypes.c_int32
         lib._sevenf_cert_request_argtypes_registered = True
     return lib
 
@@ -189,33 +230,6 @@ def build_root_tbs(subject_vk: bytes, kind: ChainKind, not_before: int, days: in
     return out_buf.raw[:written.value]
 
 
-def build_deputy_tbs(
-    root_vk: bytes, root_kind: ChainKind, root_not_before: int, root_days: int,
-    deputy_vk: bytes, deputy_not_before: int, deputy_days: int, deputy_serial: bytes,
-) -> bytes:
-    """ The unsigned body of one Root's Deputy certificate. `root_*`
-        parameters are the SAME values used to build that Root's own
-        `build_root_tbs()` -- see cert_request.rs's own doc comment for why
-        this device never needs to parse/verify an assembled certificate for
-        this. Raises CertRequestError on any failure. """
-    lib = _lib()
-    out_buf = ctypes.create_string_buffer(_CERT_TBS_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_cert_deputy_tbs(
-        root_vk, len(root_vk),
-        int(root_kind),
-        root_not_before, root_days,
-        deputy_vk, len(deputy_vk),
-        deputy_not_before, deputy_days,
-        deputy_serial, len(deputy_serial),
-        out_buf, _CERT_TBS_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise CertRequestError("build_deputy_tbs failed", code=rc)
-    return out_buf.raw[:written.value]
-
-
 def root_tbs_from_request(req: CertRequestFields) -> bytes:
     """ Rebuild a Root's own body from its CertRequest. Confirmed against
         x509_ceremony.rs's `root_tbs_from_request()`. """
@@ -224,13 +238,161 @@ def root_tbs_from_request(req: CertRequestFields) -> bytes:
     return build_root_tbs(req.subject_vk, req.kind, req.not_before, req.days, req.serial)
 
 
-def deputy_tbs_from_request(root_vk: bytes, root_kind: ChainKind, root_not_before: int, root_days: int, req: CertRequestFields) -> bytes:
-    """ Rebuild one Root's Deputy body from the Deputy's CertRequest and that
-        Root's own (already-reviewed) fields. Confirmed against
-        x509_ceremony.rs's `deputy_tbs_from_request()`. """
-    if req.role != ROLE_DEPUTY:
-        raise CertRequestError(f"this is a {req.role!r} request, and it was handed to the {ROLE_DEPUTY!r} operation")
-    return build_deputy_tbs(root_vk, root_kind, root_not_before, root_days, req.subject_vk, req.not_before, req.days, req.serial)
+# --- PKCS#10 / real-certificate-based Deputy cross-certification ---
+# (see this module's own "PKCS#10 REWORK" docstring note above).
+
+# Must match firmware/mldsa7f/src/ffi.rs's CERT_SUBJECT_VK_LEN exactly.
+_CERT_SUBJECT_VK_LEN = ML_DSA_PK_LEN
+
+# Must match 7fchain's real crates/sf-ca/src/x509_ceremony.rs::DEPUTY_DAYS
+# exactly (10 years) -- confirmed directly against that source.
+DEPUTY_DAYS = 3650
+
+
+@dataclass
+class ParsedRootCertificate:
+    """ A real X.509 Root certificate's fields, parsed off the wire -- never
+        reconstructed. Mirrors cert_request.rs's own ParsedRootCertificate
+        (minus `authority_key_id`, which only the Rust-side TBS builder
+        needs internally). """
+    subject_vk: bytes
+    not_before: int
+    not_after: int
+    chain_kind: ChainKind
+
+
+@dataclass
+class ParsedCsr:
+    """ A PKCS#10 CSR's subject public key, returned only after its
+        self-signature verifies -- proof the requester holds the matching
+        private key. Does NOT establish identity (see the Gate-1 plan's §8
+        enrollment-fingerprint doctrine, applied in the view layer). """
+    subject_vk: bytes
+
+
+def generate_serial(length: int = 16) -> bytes:
+    """ A fresh positive serial number from the device's own CSPRNG.
+        `mldsa7f_cert_deputy_tbs_v2` requires the caller to supply one --
+        see ffi.rs's own doc comment: "this function never silently falls
+        back to a different source of randomness than the rest of this
+        device uses." Matches build_ca_tbs's own validation (1 to 20 bytes,
+        high bit of the first byte clear so the DER INTEGER encoding stays
+        positive) -- see root_tbs/CertRequest's own serial validation above
+        for the same bound, applied there to a coordinator-supplied value
+        instead of a generated one. """
+    serial = bytearray(secrets.token_bytes(length))
+    serial[0] &= 0x7F
+    return bytes(serial)
+
+
+def parse_root_certificate_der(cert_der: bytes) -> ParsedRootCertificate:
+    """ Parse a real, signed X.509 Root certificate (scanned from a QR) --
+        the issuing Root's own certificate, used as issuer context for a
+        Deputy cross-certification. Raises CertRequestError on anything
+        malformed, missing, or not a CA certificate. See cert_request.rs's
+        own parse_root_certificate() doc comment for exactly which fields
+        this reads (confirmed field-for-field against what
+        deputy_tbs_for_root's real IssuerRef::Ca(cert) branch needs). """
+    lib = _lib()
+    subject_vk_out = ctypes.create_string_buffer(_CERT_SUBJECT_VK_LEN)
+    not_before_out = ctypes.c_uint64(0)
+    not_after_out = ctypes.c_uint64(0)
+    chain_kind_out = ctypes.c_uint8(0)
+    rc = lib.mldsa7f_cert_parse_root(
+        cert_der, len(cert_der),
+        subject_vk_out, _CERT_SUBJECT_VK_LEN,
+        ctypes.byref(not_before_out),
+        ctypes.byref(not_after_out),
+        ctypes.byref(chain_kind_out),
+    )
+    if rc != 0:
+        raise CertRequestError("couldn't parse the Root certificate", code=rc)
+    return ParsedRootCertificate(
+        subject_vk=subject_vk_out.raw[:_CERT_SUBJECT_VK_LEN],
+        not_before=not_before_out.value,
+        not_after=not_after_out.value,
+        chain_kind=ChainKind(chain_kind_out.value),
+    )
+
+
+def verify_and_parse_csr_der(csr_der: bytes) -> ParsedCsr:
+    """ Parse a PKCS#10 CSR (scanned from a QR) and verify its
+        self-signature -- proof the requester holds the matching private
+        key. Raises CertRequestError on malformed DER, a wrong algorithm,
+        or a signature that does not verify. This device's first-ever
+        on-device signature verification over untrusted scanned input --
+        see this module's own "PKCS#10 REWORK" docstring note.
+
+        A CSR's `extensionRequest` attribute (RFC 2985), if present, is
+        never read or honored here or anywhere downstream -- confirmed
+        against cert_request.rs's own verify_and_parse_csr() doc comment,
+        which only reads the CSR's algorithm/signature/public-key fields.
+        The Deputy certificate's own extensions are always built from the
+        issuing Root's real certificate and the operator-confirmed
+        chain_kind (Gate-1 plan's §7.6), never from anything the CSR asks
+        for. """
+    lib = _lib()
+    subject_vk_out = ctypes.create_string_buffer(_CERT_SUBJECT_VK_LEN)
+    rc = lib.mldsa7f_cert_verify_csr(
+        csr_der, len(csr_der),
+        subject_vk_out, _CERT_SUBJECT_VK_LEN,
+    )
+    if rc != 0:
+        raise CertRequestError("couldn't verify this certificate request", code=rc)
+    return ParsedCsr(subject_vk=subject_vk_out.raw[:_CERT_SUBJECT_VK_LEN])
+
+
+def build_deputy_tbs_v2(
+    root_cert_der: bytes, deputy_csr_der: bytes, chain_kind: ChainKind, now: int, days: int, serial: bytes,
+) -> bytes:
+    """ Build a Deputy certificate TBS body against the issuing Root's REAL
+        certificate and the Deputy's PKCS#10 CSR -- both independently
+        re-parsed/re-verified inside this one Rust call, never trusting an
+        earlier parse (closes any time-of-check/time-of-use gap; see
+        ffi.rs's own mldsa7f_cert_deputy_tbs_v2 doc comment). `chain_kind`
+        is the operator-confirmed value and is checked against the real
+        Root certificate's own chain_kind, fail-closed on mismatch. Raises
+        CertRequestError on any failure. """
+    lib = _lib()
+    out_buf = ctypes.create_string_buffer(_CERT_TBS_MAX_LEN)
+    written = ctypes.c_size_t(0)
+    rc = lib.mldsa7f_cert_deputy_tbs_v2(
+        root_cert_der, len(root_cert_der),
+        deputy_csr_der, len(deputy_csr_der),
+        int(chain_kind),
+        now, days,
+        serial, len(serial),
+        out_buf, _CERT_TBS_MAX_LEN,
+        ctypes.byref(written),
+    )
+    if rc != 0:
+        raise CertRequestError("couldn't build the Deputy certificate body", code=rc)
+    return out_buf.raw[:written.value]
+
+
+def deputy_cross_cert_v2_review_fields(
+    root_cert: ParsedRootCertificate, csr: ParsedCsr, chain_kind: ChainKind, now: int, days: int, serial: bytes,
+) -> list[ReviewField]:
+    """ The no-blind-signing field list for the PKCS#10-based Deputy
+        cross-certification review screen (Gate-1 plan §5/§8). Shows the
+        REAL issuing Root certificate's own fingerprint AND validity
+        window -- plan §8 extends the existing fingerprint-only doctrine to
+        the window too, since a coordinator presenting a genuine-but-wrong
+        certificate (different Root, backdated, unexpectedly long-lived)
+        must be just as catchable as a wrong fingerprint -- the Deputy
+        CSR's proven-possession fingerprint, the operator-confirmed
+        chain_kind, and the new certificate's own granted validity window
+        and serial. """
+    return [
+        ReviewField(label="Issuing Root: Subject key id", value=root_id(root_cert.subject_vk.hex())),
+        ReviewField(label="Issuing Root: Valid from", value=_format_timestamp(root_cert.not_before)),
+        ReviewField(label="Issuing Root: Valid until", value=_format_timestamp(root_cert.not_after)),
+        ReviewField(label="Chain", value=chain_kind.name.lower()),
+        ReviewField(label="Deputy: Subject key id", value=root_id(csr.subject_vk.hex())),
+        ReviewField(label="Deputy: Valid from", value=_format_timestamp(now)),
+        ReviewField(label="Deputy: Valid for", value=f"{days} days"),
+        ReviewField(label="Deputy: Serial", value=serial.hex()),
+    ]
 
 
 def _labeled_values(req: CertRequestFields) -> list[tuple[str, str]]:
