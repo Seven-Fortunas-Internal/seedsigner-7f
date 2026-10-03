@@ -14,9 +14,27 @@
     below) doesn't violate this project's own D12 principle ("No
     reimplementation of derivation or canonical bytes") -- it isn't either
     of those things.
+
+    RESOLVED 2026-10-03 (closes 7f-signing-support-genesis-wire-envelope-
+    undefined): the "open question" firmware/mldsa7f/src/genesis_config.rs's
+    own doc comment flagged -- whether a BBQr-scanned payload is exactly
+    canonical_bytes or something wraps it first -- is now answered by direct
+    reading of 7fchain's real `sf-root prepare-genesis`/`sign-genesis`
+    (crates/sf-keytree/src/bin/sf-root.rs): the coordinator produces and
+    every Root consumes a JSON file (sf_core::genesis_config::GenesisConfig),
+    never raw canonical bytes. `parse_genesis_config_json()` below parses
+    that REAL artifact directly -- the same "port the real format, don't
+    invent one" discipline as every other wire-format module in this
+    package -- then calls build_canonical_bytes() to compute the exact same
+    bytes `sf-root sign-genesis` would sign. Patrick's own tooling needs no
+    change: it already produces this file today. parse_canonical_bytes()
+    stays, both as the underlying primitive this module's own round trip
+    uses and in case a future wire layer ever does carry bare canonical
+    bytes directly.
 """
 import ctypes
 import hashlib
+import json
 from datetime import datetime, timezone
 
 from seedsigner.chains.base import ReviewField
@@ -29,6 +47,10 @@ from seedsigner.models.sevenf.constants import ChainKind
 # review screen, not weaken validation).
 DERIVATION_SCHEME_V1 = "7fchain.ml-dsa-keygen.v1"
 
+# Must match sf_core::genesis_config::SCHEMA_VERSION exactly -- confirmed
+# directly against that real, current source 2026-10-03.
+SCHEMA_VERSION = 1
+
 
 class GenesisConfigError(Exception):
     """ Raised for any non-zero return from the genesis-config FFI
@@ -38,6 +60,17 @@ class GenesisConfigError(Exception):
         self.code = code
         self.operation = operation
         super().__init__(f"mldsa7f genesis-config {operation} failed with code {code}")
+
+
+class GenesisConfigJsonError(Exception):
+    """ Raised by parse_genesis_config_json() for anything structurally
+        wrong with a scanned genesis-config JSON payload: not valid
+        UTF-8/JSON, not an object, or a field that's missing, wrong-typed,
+        or doesn't match the one value this device understands
+        (version, derivation_scheme, chain_kind). Refuses rather than
+        guesses -- same discipline as GenesisConfigError and every other
+        wire-format parser in this package (path_lexicon.PathLexiconError,
+        devfund_config.DevFundConfigError, cert_request.CertRequestError). """
 
 
 class ConsensusParams:
@@ -157,6 +190,131 @@ def parse_canonical_bytes(data: bytes, max_message_len: int = 4096) -> GenesisCo
         timestamp=timestamp_out.value,
         message=message_out.raw[:message_written.value].decode("utf-8"),
         consensus=ConsensusParams(t1.value, t2.value, t3.value),
+    )
+
+
+def _require_u64(obj: dict, key: str, where: str) -> int:
+    value = obj.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= 0xFFFFFFFFFFFFFFFF):
+        raise GenesisConfigJsonError(f"{where}.{key} must be a non-negative 64-bit integer, got {value!r}")
+    return value
+
+
+def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
+    """ Parse the REAL coordinator artifact: the genesis-config JSON file
+        `sf-root prepare-genesis` writes and `sf-root sign-genesis` reads
+        (sf_core::genesis_config::GenesisConfig), confirmed field-for-field
+        against that real struct 2026-10-03 -- see this module's own
+        "RESOLVED" docstring note. This is the actual scan-time entry point
+        now; see SevenFScanGenesisConfigView (views/sevenf_views.py) and
+        SevenFPlugin.parse_sign_request/sign (chains/sevenf/plugin.py).
+
+        `signatures`, if present (the file may already carry other Roots'
+        detached signatures -- canonical_bytes never covers them, so
+        signing a partly assembled file produces the same signature as
+        signing the bare one, confirmed against sf-root.rs's own
+        cmd_sign_genesis doc comment), is read but not used: this device
+        always exports its own detached signature-only artifact
+        (build_root_sig_json), never re-embeds into this file.
+
+        Raises GenesisConfigJsonError for anything structurally wrong --
+        not valid UTF-8/JSON, not an object, or a field missing/wrong-typed/
+        not matching the one value this device understands. Refuses rather
+        than guesses, same as every other wire-format parser here. Does
+        NOT call the Rust FFI at all; this is pure JSON decoding, the same
+        "plain parsing, not canonical-bytes logic" reasoning this module's
+        own docstring already applies to genesis_config_review_lines(). """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise GenesisConfigJsonError(f"payload is not valid UTF-8: {e}") from e
+
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, RecursionError) as e:
+        # RecursionError: Python's json module is recursive-descent, so a
+        # pathologically deeply-nested payload (e.g. ~100k levels of "[") --
+        # untrusted, coordinator-supplied, BBQr-scanned bytes -- raises
+        # RecursionError rather than JSONDecodeError. Caught here so it
+        # still surfaces as a clean refusal (GenesisConfigJsonError, which
+        # SevenFScanGenesisConfigView/SevenFPlugin actually catch), not an
+        # unhandled exception that falls through to a generic/debug error
+        # screen. Found by adversarial review, 2026-10-03.
+        raise GenesisConfigJsonError(f"payload is not valid JSON: {e}") from e
+
+    if not isinstance(obj, dict):
+        raise GenesisConfigJsonError(f"expected a JSON object, got {type(obj).__name__}")
+
+    version = obj.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
+        raise GenesisConfigJsonError(f"genesis-config version is {version!r}, expected {SCHEMA_VERSION}")
+
+    derivation_scheme = obj.get("derivation_scheme")
+    if derivation_scheme != DERIVATION_SCHEME_V1:
+        raise GenesisConfigJsonError(
+            f"unrecognized derivation_scheme {derivation_scheme!r}, expected {DERIVATION_SCHEME_V1!r}"
+        )
+
+    # Exact, case-sensitive match -- the real side's #[serde(rename_all =
+    # "lowercase")] on sf_crypto::address::ChainKind (confirmed directly
+    # against that source 2026-10-03) deserializes only the exact lowercase
+    # variant spelling, nothing case-insensitive. Matching more leniently
+    # here would accept a payload the real binary itself would reject.
+    chain_kind_str = obj.get("chain_kind")
+    chain_kind = {
+        "mainnet": ChainKind.MAINNET,
+        "testnet": ChainKind.TESTNET,
+        "devnet": ChainKind.DEVNET,
+    }.get(chain_kind_str)
+    if chain_kind is None:
+        raise GenesisConfigJsonError(
+            f"unrecognized chain_kind {chain_kind_str!r}, expected one of ['mainnet', 'testnet', 'devnet']"
+        )
+
+    timestamp = obj.get("timestamp")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, int) or not (0 <= timestamp <= 0xFFFFFFFFFFFFFFFF):
+        raise GenesisConfigJsonError(f"timestamp must be a non-negative 64-bit integer, got {timestamp!r}")
+
+    message = obj.get("message")
+    if not isinstance(message, str):
+        raise GenesisConfigJsonError(f"message must be a string, got {type(message).__name__}")
+
+    consensus_obj = obj.get("consensus")
+    if not isinstance(consensus_obj, dict):
+        raise GenesisConfigJsonError(f"consensus must be an object, got {type(consensus_obj).__name__}")
+    consensus = ConsensusParams(
+        target_block_time_secs=_require_u64(consensus_obj, "target_block_time_secs", "consensus"),
+        difficulty_adjustment_interval_blocks=_require_u64(
+            consensus_obj, "difficulty_adjustment_interval_blocks", "consensus"
+        ),
+        blocks_per_decay_period=_require_u64(consensus_obj, "blocks_per_decay_period", "consensus"),
+    )
+
+    # Optional (#[serde(default)] on the real struct), and never read for
+    # its content here (canonical_bytes never covers it, this device always
+    # exports its own detached signature). Still shape-validated, not just
+    # ignored outright: the real GenesisConfig fails to deserialize AT ALL
+    # if `signatures` is present but any entry doesn't match RootSig's
+    # shape (both fields required strings) -- found by adversarial review,
+    # 2026-10-03, confirmed by direct testing against the real struct. This
+    # device should refuse a file the real tooling would never have
+    # produced, the same "refuse rather than guess" reasoning applied to
+    # every other field above.
+    signatures_obj = obj.get("signatures", [])
+    if not isinstance(signatures_obj, list):
+        raise GenesisConfigJsonError(f"signatures must be an array, got {type(signatures_obj).__name__}")
+    for i, entry in enumerate(signatures_obj):
+        if not isinstance(entry, dict):
+            raise GenesisConfigJsonError(f"signatures[{i}] must be an object, got {type(entry).__name__}")
+        for key in ("signer_vk", "sig"):
+            if not isinstance(entry.get(key), str):
+                raise GenesisConfigJsonError(f"signatures[{i}].{key} must be a string")
+
+    return GenesisConfigFields(
+        chain_kind=chain_kind,
+        timestamp=timestamp,
+        message=message,
+        consensus=consensus,
     )
 
 

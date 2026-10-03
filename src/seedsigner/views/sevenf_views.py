@@ -36,7 +36,7 @@ from seedsigner.models.sevenf import cert_request, devfund_config, genesis_confi
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.cert_request import CertRequestError
 from seedsigner.models.sevenf.devfund_config import DevFundConfigError
-from seedsigner.models.sevenf.genesis_config import GenesisConfigError
+from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
@@ -92,7 +92,17 @@ class SevenFScanGenesisConfigView(ScanView):
         eth_sign_request (reachable from Home's generic Scan button before
         any seed is known, hence that flow's double-scan design), this view
         is only ever reached with a seed already selected -- no separate
-        seed-selection sub-flow is needed at all. """
+        seed-selection sub-flow is needed at all.
+
+        RESOLVED 2026-10-03 (7f-signing-support-genesis-wire-envelope-
+        undefined): the scanned payload is the REAL coordinator artifact --
+        `sf-root prepare-genesis`'s JSON file -- not raw canonical bytes.
+        This view parses that JSON directly (genesis_config.
+        parse_genesis_config_json()) and builds canonical bytes from the
+        extracted fields internally; everything downstream
+        (SevenFGenesisReviewStartView onward) is unchanged and still
+        operates on, and signs, the exact bytes `sf-root sign-genesis`
+        would. """
     instructions_text = _mft("Scan genesis config")
     invalid_qr_type_message = _mft("Expected a genesis-config QR (BBQr, from the coordinator)")
 
@@ -111,19 +121,23 @@ class SevenFScanGenesisConfigView(ScanView):
 
 
     def _handle_complete_scan(self):
-        canonical_bytes = self.decoder.get_sevenf_bbqr_data()
+        payload = self.decoder.get_sevenf_bbqr_data()
 
         # Self-validation: file_type on the wire is not authoritative (any
         # BBQr file-type byte could be attached to any bytes) -- the real
-        # check is whether parse_canonical_bytes() itself accepts them, the
-        # same "refuse rather than guess" doctrine every other scan-dispatch
-        # branch in this codebase already applies (see e.g.
+        # check is whether parse_genesis_config_json() itself accepts them,
+        # the same "refuse rather than guess" doctrine every other
+        # scan-dispatch branch in this codebase already applies (see e.g.
         # EvmScanSignRequestView's own is_real_transaction_payload() check).
         try:
-            genesis_config.parse_canonical_bytes(canonical_bytes)
-        except GenesisConfigError as e:
+            fields = genesis_config.parse_genesis_config_json(payload)
+        except GenesisConfigJsonError as e:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't parse this as a genesis-config: {}").format(e)))
+
+        canonical_bytes = genesis_config.build_canonical_bytes(
+            fields.chain_kind, fields.timestamp, fields.message, fields.consensus,
+        )
 
         return Destination(
             SevenFGenesisReviewStartView,

@@ -7,13 +7,15 @@
     Requires firmware/mldsa7f's compiled library (see test_sevenf_mldsa.py's
     own docstring for the search order); skips cleanly if it's missing.
 """
+import json
+
 import pytest
 
 from seedsigner.chains import ChainRegistry
 from seedsigner.chains.base import Address, ParsedRequest, Signature
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind, root_path
-from seedsigner.models.sevenf.genesis_config import ConsensusParams, build_canonical_bytes
+from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError
 from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys, sign_with_root_ca
 
 
@@ -33,9 +35,24 @@ pytestmark = pytest.mark.skipif(
 FIXED_SEED = bytes([0x2A] * 64)
 
 
-def _sample_canonical_bytes(chain_kind: ChainKind = ChainKind.TESTNET) -> bytes:
-    consensus = ConsensusParams(target_block_time_secs=420, difficulty_adjustment_interval_blocks=3500, blocks_per_decay_period=70_000)
-    return build_canonical_bytes(chain_kind, 1_790_555_198, "plugin cross-check", consensus)
+def _sample_genesis_config_json(chain_kind_str: str = "testnet", **overrides) -> bytes:
+    """ The REAL coordinator artifact (sf-root prepare-genesis's JSON file)
+        -- see genesis_config.py's own "RESOLVED" docstring note. """
+    doc = dict(
+        version=1,
+        chain_kind=chain_kind_str,
+        timestamp=1_790_555_198,
+        message="plugin cross-check",
+        derivation_scheme="7fchain.ml-dsa-keygen.v1",
+        consensus={
+            "target_block_time_secs": 420,
+            "difficulty_adjustment_interval_blocks": 3500,
+            "blocks_per_decay_period": 70_000,
+        },
+        signatures=[],
+    )
+    doc.update(overrides)
+    return json.dumps(doc).encode("utf-8")
 
 
 def test_chain_registry_has_sevenf_plugin():
@@ -47,9 +64,9 @@ def test_chain_registry_has_sevenf_plugin():
 def test_parse_sign_request_matches_real_genesis_config_fields():
     from seedsigner.chains.sevenf.plugin import SevenFPlugin
     plugin = SevenFPlugin()
-    canonical_bytes = _sample_canonical_bytes()
+    genesis_json = _sample_genesis_config_json()
 
-    parsed = plugin.parse_sign_request(canonical_bytes)
+    parsed = plugin.parse_sign_request(genesis_json)
     assert isinstance(parsed, ParsedRequest)
     assert parsed.operation == "Genesis Config"
     assert parsed.network_name == "testnet"
@@ -60,27 +77,38 @@ def test_parse_sign_request_matches_real_genesis_config_fields():
     assert len(parsed.review_fields) == 7
 
 
+def test_parse_sign_request_rejects_a_malformed_payload():
+    from seedsigner.chains.sevenf.plugin import SevenFPlugin
+    plugin = SevenFPlugin()
+    with pytest.raises(GenesisConfigJsonError):
+        plugin.parse_sign_request(b"not a genesis config at all")
+
+
 def test_review_fields_returns_the_parsed_fields_unchanged():
     from seedsigner.chains.sevenf.plugin import SevenFPlugin
     plugin = SevenFPlugin()
-    canonical_bytes = _sample_canonical_bytes()
-    parsed = plugin.parse_sign_request(canonical_bytes)
+    genesis_json = _sample_genesis_config_json()
+    parsed = plugin.parse_sign_request(genesis_json)
     assert plugin.review_fields(parsed) is parsed.review_fields
 
 
 def test_sign_produces_the_real_root_ca_signature():
     """ Cross-checks against an independent direct call to
-        root_ceremony.sign_with_root_ca() -- confirms the plugin wrapper
-        isn't a placeholder and derives the same key/signature the rest of
-        the ceremony flow does. """
+        root_ceremony.sign_with_root_ca() over the SAME canonical bytes the
+        plugin builds internally from the JSON payload -- confirms the
+        plugin wrapper isn't a placeholder and signs the exact bytes
+        sf-root sign-genesis would for the same file. """
     from seedsigner.chains.sevenf.plugin import SevenFPlugin
+    from seedsigner.models.sevenf.genesis_config import build_canonical_bytes, parse_genesis_config_json
     plugin = SevenFPlugin()
-    canonical_bytes = _sample_canonical_bytes(ChainKind.TESTNET)
+    genesis_json = _sample_genesis_config_json(chain_kind_str="testnet")
 
-    signature = plugin.sign(FIXED_SEED, "irrelevant-path", canonical_bytes)
+    signature = plugin.sign(FIXED_SEED, "irrelevant-path", genesis_json)
     assert isinstance(signature, Signature)
     assert len(signature.signature_bytes) == 3309
 
+    fields = parse_genesis_config_json(genesis_json)
+    canonical_bytes = build_canonical_bytes(fields.chain_kind, fields.timestamp, fields.message, fields.consensus)
     expected_pk, expected_sig = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, canonical_bytes, confirmed=True)
     assert signature.public_key == expected_pk
     # ML-DSA-65 signing is hedged/randomized (confirmed elsewhere in this
@@ -97,9 +125,9 @@ def test_sign_ignores_a_mismatched_path_argument_and_uses_the_payloads_own_chain
         change which key gets used. """
     from seedsigner.chains.sevenf.plugin import SevenFPlugin
     plugin = SevenFPlugin()
-    testnet_bytes = _sample_canonical_bytes(ChainKind.TESTNET)
+    testnet_json = _sample_genesis_config_json(chain_kind_str="testnet")
 
-    signature = plugin.sign(FIXED_SEED, root_path(ChainKind.MAINNET), testnet_bytes)
+    signature = plugin.sign(FIXED_SEED, root_path(ChainKind.MAINNET), testnet_json)
     keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
     assert signature.public_key == keys.root_ca.public_key
     mainnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.MAINNET)

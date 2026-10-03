@@ -47,6 +47,28 @@ def _sample_canonical_bytes() -> bytes:
     return build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", consensus)
 
 
+def _sample_genesis_config_json(chain_kind_str: str = "testnet", **overrides) -> bytes:
+    """ The REAL coordinator artifact (sf-root prepare-genesis's JSON file,
+        sf_core::genesis_config::GenesisConfig) -- what actually arrives
+        over BBQr as of the genesis-wire-envelope fix, not raw
+        canonical_bytes (see SevenFScanGenesisConfigView's own doc comment). """
+    doc = dict(
+        version=1,
+        chain_kind=chain_kind_str,
+        timestamp=1_790_555_198,
+        message="cross-check fixture",
+        derivation_scheme="7fchain.ml-dsa-keygen.v1",
+        consensus={
+            "target_block_time_secs": 420,
+            "difficulty_adjustment_interval_blocks": 3500,
+            "blocks_per_decay_period": 70_000,
+        },
+        signatures=[],
+    )
+    doc.update(overrides)
+    return json.dumps(doc).encode("utf-8")
+
+
 class TestSevenFGenesisReviewFlow(FlowTest):
     def seed_fixture(self) -> Seed:
         seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
@@ -936,18 +958,23 @@ class TestSevenFScanEntryPoint(FlowTest):
 
 
     def test_scan_genesis_config_view_accepts_a_real_payload_and_routes_to_review(self):
-        """ End-to-end from a real BBQr-encoded genesis-config through the
-            actual scan/decode machinery -- not a hand-built canonical_bytes
-            handoff -- into the review flow's real entry point. """
+        """ End-to-end from a real BBQr-encoded genesis-config JSON file --
+            the actual coordinator artifact (sf-root prepare-genesis), not a
+            hand-built canonical_bytes handoff -- through the actual
+            scan/decode machinery into the review flow's real entry point.
+            Confirms the view builds canonical_bytes from the scanned JSON
+            internally and that those bytes match calling
+            build_canonical_bytes() directly with the same fields. """
         seed = self.seed_fixture()
-        canonical_bytes = _sample_canonical_bytes()
+        genesis_json = _sample_genesis_config_json()
+        expected_canonical_bytes = _sample_canonical_bytes()
 
         self.run_sequence(
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG),
                 FlowStep(
                     sevenf_views.SevenFScanGenesisConfigView,
-                    before_run=_load_genesis_config_into_decoder(canonical_bytes),
+                    before_run=_load_genesis_config_into_decoder(genesis_json),
                     screen_return_value=0,
                 ),
                 FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True),
@@ -958,16 +985,42 @@ class TestSevenFScanEntryPoint(FlowTest):
 
         data = self.controller.sevenf_ceremony_data
         assert data["seed"] is seed
-        assert data["canonical_bytes"] == canonical_bytes
+        assert data["canonical_bytes"] == expected_canonical_bytes
         assert data["chain_kind"] == ChainKind.TESTNET
+
+
+    def test_scan_genesis_config_view_rejects_raw_canonical_bytes_no_longer_accepted(self):
+        """ Regression test for the genesis-wire-envelope fix: the OLD
+            format this view used to accept directly (raw canonical_bytes,
+            no JSON wrapper) must now be REFUSED, not silently accepted --
+            confirms this is an intentional behavior change with real
+            coverage, not just an untested assumption. """
+        seed = self.seed_fixture()
+        raw_canonical_bytes = _sample_canonical_bytes()
+
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG),
+                FlowStep(
+                    sevenf_views.SevenFScanGenesisConfigView,
+                    before_run=_load_genesis_config_into_decoder(raw_canonical_bytes),
+                    screen_return_value=0,
+                ),
+                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
+                FlowStep(MainMenuView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_scan_genesis_config_view_rejects_a_payload_that_doesnt_parse(self):
         """ A BBQr payload that decodes fine at the transport layer but isn't
-            a real genesis-config (wrong domain tag) must be refused with a
+            a real genesis-config (not valid JSON) must be refused with a
             clear reason, not crash or silently proceed into the review flow
             with garbage fields -- confirms SevenFScanGenesisConfigView's own
-            self-validation, not just genesis_config.parse_canonical_bytes()
+            self-validation, not just genesis_config.parse_genesis_config_json()
             in isolation (already covered by test_sevenf_genesis_config.py). """
         seed = self.seed_fixture()
         garbage = b"not a genesis config at all, but still valid BBQr transport bytes"

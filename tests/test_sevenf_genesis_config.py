@@ -7,6 +7,8 @@
     Requires firmware/mldsa7f's compiled library (see test_sevenf_mldsa.py's
     own docstring for the search order); skips cleanly if it's missing.
 """
+import json
+
 import pytest
 
 from seedsigner.models.sevenf import mldsa
@@ -15,12 +17,15 @@ from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf.genesis_config import (
     ConsensusParams,
     DERIVATION_SCHEME_V1,
+    SCHEMA_VERSION,
     GenesisConfigError,
+    GenesisConfigJsonError,
     _format_timestamp,
     build_canonical_bytes,
     build_root_sig_json,
     genesis_config_review_lines,
     parse_canonical_bytes,
+    parse_genesis_config_json,
     review_fields,
     root_id,
     root_sig_filename,
@@ -126,6 +131,220 @@ def test_parse_rejects_message_buffer_too_small():
     bytes_ = build_canonical_bytes(ChainKind.TESTNET, 1, "a message that is definitely longer than one byte", consensus)
     with pytest.raises(GenesisConfigError):
         parse_canonical_bytes(bytes_, max_message_len=1)
+
+
+def _sample_genesis_config_dict(chain_kind_str: str = "testnet", **overrides) -> dict:
+    """ The REAL coordinator artifact shape (sf_core::genesis_config::
+        GenesisConfig), confirmed field-for-field against that struct
+        2026-10-03 -- not an independently invented test fixture shape. """
+    doc = {
+        "version": SCHEMA_VERSION,
+        "chain_kind": chain_kind_str,
+        "timestamp": 1_790_555_198,
+        "message": "cross-check fixture",
+        "derivation_scheme": DERIVATION_SCHEME_V1,
+        "consensus": {
+            "target_block_time_secs": 420,
+            "difficulty_adjustment_interval_blocks": 3500,
+            "blocks_per_decay_period": 70_000,
+        },
+        "signatures": [],
+    }
+    doc.update(overrides)
+    return doc
+
+
+def test_parse_genesis_config_json_matches_the_real_artifact_shape():
+    """ The actual scan-time entry point as of the R27-adjacent
+        genesis-wire-envelope fix: parses the REAL coordinator JSON file,
+        not a hand-built canonical-bytes fixture. """
+    doc = _sample_genesis_config_dict()
+    fields = parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+    assert fields.chain_kind == ChainKind.TESTNET
+    assert fields.timestamp == 1_790_555_198
+    assert fields.message == "cross-check fixture"
+    assert fields.consensus == ConsensusParams(420, 3500, 70_000)
+
+
+@pytest.mark.parametrize("chain_kind_str,expected", [
+    ("mainnet", ChainKind.MAINNET), ("testnet", ChainKind.TESTNET), ("devnet", ChainKind.DEVNET),
+])
+def test_parse_genesis_config_json_all_chain_kinds(chain_kind_str, expected):
+    doc = _sample_genesis_config_dict(chain_kind_str=chain_kind_str)
+    fields = parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+    assert fields.chain_kind == expected
+
+
+def test_parse_genesis_config_json_produces_the_same_canonical_bytes_as_build_canonical_bytes():
+    """ The actual point of this parser: building canonical_bytes from its
+        output must match calling build_canonical_bytes() with the same
+        values directly -- the exact bytes sf-root sign-genesis would sign
+        for the same real JSON file. """
+    doc = _sample_genesis_config_dict()
+    fields = parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+    bytes_from_json = build_canonical_bytes(fields.chain_kind, fields.timestamp, fields.message, fields.consensus)
+    bytes_direct = build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", ConsensusParams(420, 3500, 70_000))
+    assert bytes_from_json == bytes_direct
+
+
+def test_parse_genesis_config_json_ignores_present_signatures():
+    """ A partly-assembled file (other Roots already signed) must parse
+        identically to a bare one -- canonical_bytes never covers
+        `signatures`, confirmed against sf-root.rs's own cmd_sign_genesis
+        doc comment ("signing a partly assembled file gives the same
+        signature as signing the bare one"). """
+    bare = _sample_genesis_config_dict()
+    partly_signed = _sample_genesis_config_dict(signatures=[{"signer_vk": "ab" * 976, "sig": "cd" * 1654}])
+    fields_bare = parse_genesis_config_json(json.dumps(bare).encode("utf-8"))
+    fields_signed = parse_genesis_config_json(json.dumps(partly_signed).encode("utf-8"))
+    assert fields_bare == fields_signed
+
+
+def test_parse_genesis_config_json_tolerates_missing_signatures_field():
+    """ `signatures` is `#[serde(default)]` on the real struct -- optional,
+        not required -- confirmed against that real field attribute. """
+    doc = _sample_genesis_config_dict()
+    del doc["signatures"]
+    fields = parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+    assert fields.chain_kind == ChainKind.TESTNET
+
+
+def test_parse_genesis_config_json_rejects_invalid_utf8():
+    with pytest.raises(GenesisConfigJsonError, match="UTF-8"):
+        parse_genesis_config_json(b"\xff\xfe not utf-8")
+
+
+def test_parse_genesis_config_json_rejects_malformed_json():
+    with pytest.raises(GenesisConfigJsonError, match="JSON"):
+        parse_genesis_config_json(b"{not valid json at all")
+
+
+def test_parse_genesis_config_json_rejects_pathologically_deep_nesting():
+    """ Regression test, adversarial review 2026-10-03: Python's json module
+        is recursive-descent, so a deeply-nested payload raises
+        RecursionError, not json.JSONDecodeError. Before this fix that
+        propagated unhandled past SevenFScanGenesisConfigView's
+        `except GenesisConfigJsonError` clause, surfacing a generic
+        debug/traceback screen instead of the intended clean refusal --
+        untrusted, coordinator-supplied, BBQr-scanned bytes must never do
+        that. """
+    pathological = b"[" * 100_000
+    with pytest.raises(GenesisConfigJsonError, match="JSON"):
+        parse_genesis_config_json(pathological)
+
+
+@pytest.mark.parametrize("payload", [b"[]", b'"a string"', b"42", b"null", b"true"])
+def test_parse_genesis_config_json_rejects_non_object_top_level(payload):
+    with pytest.raises(GenesisConfigJsonError, match="object"):
+        parse_genesis_config_json(payload)
+
+
+def test_parse_genesis_config_json_rejects_float_version():
+    """ Regression test, adversarial review 2026-10-03: `1.0 == 1` in
+        Python, so a bare `version != SCHEMA_VERSION` check (missing the
+        isinstance guard every other scalar field check here has) silently
+        accepted a JSON float where the real sf-root's serde deserialization
+        of a `u8` field would reject one outright. """
+    doc = _sample_genesis_config_dict(version=1.0)
+    with pytest.raises(GenesisConfigJsonError, match="version"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("bad_signatures", [
+    "not a list", 42, None,
+    [1, 2],  # entries not objects
+    [{"signer_vk": "ab" * 976}],  # missing "sig"
+    [{"sig": "cd" * 1654}],  # missing "signer_vk"
+    [{"signer_vk": 123, "sig": "cd" * 1654}],  # wrong type
+])
+def test_parse_genesis_config_json_rejects_malformed_signatures(bad_signatures):
+    """ Regression test, adversarial review 2026-10-03 (differential check
+        against the real sf_core::genesis_config::GenesisConfig struct):
+        the real struct fails to deserialize AT ALL if `signatures` is
+        present but malformed-shaped -- confirmed by direct testing against
+        that real struct. This parser never reads `signatures` content, but
+        must still refuse a file the real tooling would never have
+        produced, not silently accept it. """
+    doc = _sample_genesis_config_dict(signatures=bad_signatures)
+    with pytest.raises(GenesisConfigJsonError, match="signatures"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+def test_parse_genesis_config_json_accepts_a_well_formed_signatures_entry():
+    doc = _sample_genesis_config_dict(signatures=[{"signer_vk": "ab" * 976, "sig": "cd" * 1654}])
+    fields = parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+    assert fields.chain_kind == ChainKind.TESTNET
+
+
+@pytest.mark.parametrize("bad_version", [2, 0, "1", True, None])
+def test_parse_genesis_config_json_rejects_wrong_version(bad_version):
+    doc = _sample_genesis_config_dict(version=bad_version)
+    with pytest.raises(GenesisConfigJsonError, match="version"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+def test_parse_genesis_config_json_rejects_missing_version():
+    doc = _sample_genesis_config_dict()
+    del doc["version"]
+    with pytest.raises(GenesisConfigJsonError, match="version"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("bad_scheme", ["7fchain.ml-dsa-keygen.v2", "", None, 42])
+def test_parse_genesis_config_json_rejects_wrong_derivation_scheme(bad_scheme):
+    doc = _sample_genesis_config_dict(derivation_scheme=bad_scheme)
+    with pytest.raises(GenesisConfigJsonError, match="derivation_scheme"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("bad_chain_kind", ["regtest", "Testnet", "TESTNET", "", None, 1])
+def test_parse_genesis_config_json_rejects_unrecognized_chain_kind(bad_chain_kind):
+    """ Includes wrong-case spellings ("Testnet"/"TESTNET") -- the real
+        side's #[serde(rename_all = "lowercase")] is an exact, case-sensitive
+        match, so this parser must be too, not more lenient than the real
+        binary it stands in for. """
+    doc = _sample_genesis_config_dict(chain_kind_str=bad_chain_kind)
+    with pytest.raises(GenesisConfigJsonError, match="chain_kind"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("bad_timestamp", [-1, "1790555198", 1.5, True, None, 2**64])
+def test_parse_genesis_config_json_rejects_bad_timestamp(bad_timestamp):
+    doc = _sample_genesis_config_dict(timestamp=bad_timestamp)
+    with pytest.raises(GenesisConfigJsonError, match="timestamp"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("bad_message", [42, None, ["a", "list"]])
+def test_parse_genesis_config_json_rejects_bad_message_type(bad_message):
+    doc = _sample_genesis_config_dict(message=bad_message)
+    with pytest.raises(GenesisConfigJsonError, match="message"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("bad_consensus", [None, [], "not an object", 42])
+def test_parse_genesis_config_json_rejects_bad_consensus_type(bad_consensus):
+    doc = _sample_genesis_config_dict(consensus=bad_consensus)
+    with pytest.raises(GenesisConfigJsonError, match="consensus"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("missing_key", [
+    "target_block_time_secs", "difficulty_adjustment_interval_blocks", "blocks_per_decay_period",
+])
+def test_parse_genesis_config_json_rejects_missing_consensus_field(missing_key):
+    doc = _sample_genesis_config_dict()
+    del doc["consensus"][missing_key]
+    with pytest.raises(GenesisConfigJsonError, match=missing_key):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
+
+
+@pytest.mark.parametrize("bad_value", [-1, "420", 1.5, True, 2**64])
+def test_parse_genesis_config_json_rejects_bad_consensus_field_value(bad_value):
+    doc = _sample_genesis_config_dict()
+    doc["consensus"]["target_block_time_secs"] = bad_value
+    with pytest.raises(GenesisConfigJsonError, match="target_block_time_secs"):
+        parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
 
 
 def test_genesis_config_fields_equality():
