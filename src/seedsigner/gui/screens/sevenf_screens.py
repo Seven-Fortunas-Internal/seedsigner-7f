@@ -63,13 +63,30 @@ class SevenFReviewFieldScreen(ButtonListScreen):
 
 @dataclass
 class SevenFConfirmSignScreen(ButtonListScreen):
-    """ Final review step before signing: which chain and which Root CA
+    """ Final review step before signing: which chain and which key's
         address the signature will be attributed to -- the signing-identity
         check, distinct from the per-field genesis-config content review
         that already happened on the preceding pages (SevenFReviewFieldScreen).
-        Same role as evm_screens.py's EvmConfirmSignScreen. """
+        Same role as evm_screens.py's EvmConfirmSignScreen.
+
+        `signing_role_label` names the actual key signing (default "Root CA"
+        for genesis-config/Root self-cert/Deputy cross-cert, all signed by
+        the Root CA key) -- added 2026-10-03
+        (7f-review-devfund-confirm-screen-wrong-label, found by the
+        full-project adversarial review's UI/UX dimension) after this screen
+        was found hardcoding "signing as Root CA for" even when
+        SevenFConfirmSignDevFundView used it to sign with the DEVFUND key, a
+        different key from the same seed. That mislabeling directly
+        undermined the one wrong-key check the hardware walkthrough singles
+        out for this exact screen (docs/7f-integration/root-ceremony-
+        hardware-walkthrough.md Step 6: "the confirm screen must show the
+        devfund address... If the address shown here matches the Root CA
+        address instead, that's a real regression") -- an operator primed to
+        watch for that exact mismatch would have seen the words "Root CA" on
+        the one screen that was supposed to prove it wasn't. """
     chain_kind_name: str = None
     address: str = None
+    signing_role_label: str = "Root CA"
 
     def __post_init__(self):
         self.title = _("Confirm & Sign")
@@ -81,7 +98,7 @@ class SevenFConfirmSignScreen(ButtonListScreen):
         chain_display = IconTextLine(
             icon_name=SeedSignerIconConstants.INFO,
             icon_color=GUIConstants.INFO_COLOR,
-            label_text=_("signing as Root CA for"),
+            label_text=_("signing as {} for").format(self.signing_role_label),
             value_text=self.chain_kind_name,
             is_text_centered=True,
             auto_line_break=True,

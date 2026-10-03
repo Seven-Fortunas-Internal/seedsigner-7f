@@ -1534,6 +1534,34 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         assert len(data["signature"]) == len(expected_sig) == 3309
 
 
+    def test_confirm_sign_screen_labels_the_devfund_key_not_root_ca(self):
+        """ Regression test for 7f-review-devfund-confirm-screen-wrong-label
+            (found by the full-project adversarial review's UI/UX
+            dimension, 2026-10-03): the confirm screen used to hardcode
+            "signing as Root CA for" even when signing with the devfund key
+            -- the one screen the hardware walkthrough singles out as the
+            flagship wrong-key check (Step 6), undermined by its own label
+            contradicting what it was checking for. """
+        from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
+
+        seed = self.seed_fixture()
+        canonical_bytes = _sample_devfund_canonical_bytes()
+        fields = parse_devfund_canonical_bytes(canonical_bytes)
+
+        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["signing_role_label"] = kwargs.get("signing_role_label")
+            return 0
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+
+        assert captured["signing_role_label"] == "devfund key"
+
+
     def test_scan_rejects_a_payload_that_isnt_valid_devfund_config(self):
         seed = self.seed_fixture()
         garbage = b"not a devfund config at all, but still valid BBQr transport bytes"

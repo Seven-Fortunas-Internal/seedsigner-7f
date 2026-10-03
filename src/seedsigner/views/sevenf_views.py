@@ -1042,6 +1042,7 @@ class SevenFConfirmSignDevFundView(View):
             SevenFConfirmSignScreen,
             chain_kind_name=self.chain_kind.name.lower(),
             address=self.devfund_address,
+            signing_role_label=_("devfund key"),
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:

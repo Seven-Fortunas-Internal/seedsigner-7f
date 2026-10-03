@@ -102,6 +102,27 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         the gate this parameter protects is "did a human see the fields
         before this device signed them," which doesn't apply to a script
         generating its own test input.
+
+        A SECOND, DEVICE-SIDE exception: chains.sevenf.plugin.SevenFPlugin.sign()
+        also passes confirmed=True unconditionally. This was found as a
+        "signing-oracle" finding during the 2026-10-03 full-project
+        adversarial review (7f-review-plugin-signing-oracle-bypass in
+        _delivery/backlog.yaml) and verified NOT to be a 7F-specific gap:
+        EvmPlugin.sign() (chains/evm/plugin.py) has the exact same
+        no-internal-gate shape -- neither chain's generic ChainPlugin.sign()
+        implementation reviews anything itself; no-blind-signing for BOTH
+        chains lives entirely in the VIEW layer that calls sign() after
+        paging through review_fields() (confirmed directly: EvmSignedUrQRView/
+        EvmSignedQRView only ever call plugin.sign() after
+        EvmConfirmPayloadView has shown every field). SevenFPlugin.sign()
+        is additionally confirmed unreached by any current 7F view --
+        sevenf_views.py calls this function directly, never through
+        ChainRegistry.get("sevenf") -- so today's device-UI behavior is
+        unaffected either way. If a future 7F view routes through the
+        generic plugin interface the way EVM's already does, that view MUST
+        review every field (the same way EvmConfirmPayloadView does) before
+        ever reaching SevenFPlugin.sign() -- the obligation sits with that
+        future caller, exactly as it already does for EVM today.
     """
     if not confirmed:
         raise SigningNotConfirmedError(
