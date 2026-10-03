@@ -185,6 +185,18 @@ def test_the_version_is_mandatory_and_shaped():
     _ok("root/testnet/0/ml-dsa/v10")
 
 
+def test_the_version_is_a_u32():
+    """ Adversarial-review regression (2026-10-03): found by direct
+        execution against the real path.rs::parse_version(), which calls
+        digits.parse::<u32>() and errors on overflow -- an earlier version
+        of _parse_version here checked the digit charset but not the u32
+        bound, so "v4294967296" silently parsed instead of being rejected.
+        Not reachable from any live flow today (see this module's own
+        docstring), but a real condition mismatch against the reference. """
+    _ok("root/testnet/0/ml-dsa/v4294967295")
+    _rejects("root/testnet/0/ml-dsa/v4294967296")
+
+
 def test_an_index_is_a_u32():
     _rejects("root/testnet/abc/ml-dsa/v1")
     _rejects("root/testnet/-1/ml-dsa/v1")

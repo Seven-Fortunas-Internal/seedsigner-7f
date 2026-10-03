@@ -138,10 +138,19 @@ def _parse_version(seg: str) -> int:
         algorithm migration changes the keys a role derives, so the
         version belongs in the path that names them. An optional segment
         would mean two spellings of one key, which is exactly how three
-        spellings diverged before this rule existed. """
+        spellings diverged before this rule existed.
+
+        FIXED 2026-10-03: was missing the u32 upper-bound check `_parse_u32`
+        has, so `v4294967296` silently parsed instead of being rejected --
+        found by direct adversarial execution against the real
+        `path.rs::parse_version()` (which calls `digits.parse::<u32>()`,
+        erroring on overflow), not by inspection alone. """
     if not (len(seg) >= 2 and seg[0] == "v" and all(c in _ASCII_DIGITS for c in seg[1:])):
         raise PathLexiconError(f"version segment must be v<N>, got '{seg}'")
-    return int(seg[1:])
+    value = int(seg[1:])
+    if value > 0xFFFFFFFF:
+        raise PathLexiconError(f"version segment must be v<N>, got '{seg}'")
+    return value
 
 
 def parse(path: str) -> dict:

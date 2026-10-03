@@ -859,15 +859,25 @@ class SevenFScanDevFundConfigView(ScanView):
 
 class SevenFConfirmSignDevFundView(View):
     """ Final review step for devfund-config signing: confirms which chain
-        and which DEVFUND address the signature will be attributed to --
-        the signing-identity check, distinct from the per-field content
-        review that already happened on the preceding pages. Deliberately
-        shows the DEVFUND address, not the Root CA address
-        (SevenFConfirmSignRootCertView's own confirm screen) -- the two are
-        different derived keys off the same seed
-        (root_ceremony.derive_root_ceremony_keys() derives both), and
-        showing the wrong one here would let an operator approve a
-        signature under an identity they never actually reviewed.
+        and which address the signature will be attributed to -- the
+        signing-identity check, distinct from the per-field content review
+        that already happened on the preceding pages.
+
+        CORRECTED 2026-10-03 (R27 re-port, adversarial review): this
+        docstring used to claim the devfund address differs from the Root
+        CA address shown by SevenFConfirmSignRootCertView's own confirm
+        screen, "different derived keys off the same seed." That was the
+        exact bug root_ceremony.py's own BUG FIX note fixed -- devfund and
+        Root CA are now the SAME key (confirmed against 7fchain's real
+        sf-root.rs: cmd_sign_genesis/cmd_sign_devfund both call the
+        byte-identical root_key_from_file()). This screen still shows
+        `keys.devfund.address` (now always equal to `keys.root_ca.address`)
+        -- kept as a separate View/confirm screen from
+        SevenFConfirmSignRootCertView for artefact-type clarity (genesis
+        vs. devfund-config is still a real distinction the operator should
+        see named), not because it disambiguates two different signing
+        identities any more. Do not "restore" a separate devfund derivation
+        here -- that would reintroduce the fixed bug.
 
         Reuses root_ceremony.sign_with_devfund() unmodified. This is the
         ONLY caller permitted to pass confirmed=True for this flow, same
