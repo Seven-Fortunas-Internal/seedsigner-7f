@@ -411,12 +411,19 @@ def _load_cert_request_into_decoder(data: bytes, file_type: str = "J"):
 
 
 class TestSevenFRootSelfCertificationFlow(FlowTest):
-    """ The Root self-certification flow (7f-signing-support-root-self-certification):
-        SeedOptionsView's "7F: Self-Certify Root" button -> SevenFScanRootCertRequestView
-        -> (valid, subject matches this seed's own key) SevenFCertRequestReviewFieldView
-        -> SevenFConfirmSignRootCertView -> SevenFRootCertSignedView -> SevenFExportView
-        (the SAME export menu genesis-config signing uses -- see
-        SevenFConfirmSignRootCertView's own docstring for why). """
+    """ The Root self-certification flow's PKCS#10-era rework
+        (7f-signing-support-root-self-certification-pkcs10-rework; see
+        cert_request.py's own "ROOT SELF-CERT PKCS#10 REWORK" docstring
+        note and docs/7f-integration/root-self-cert-pkcs10-rework-plan.md):
+        SeedOptionsView's "7F: Self-Certify Root" button ->
+        SevenFSelectChainKindForRootSelfCertView (no scan at all -- the
+        device derives its own key, builds its own TBS with a fresh
+        CSPRNG serial and the current wall-clock time, entirely locally) ->
+        SevenFCertRequestReviewFieldView (5 fields) ->
+        SevenFConfirmSignRootCertView -> SevenFRootCertSignedView ->
+        SevenFExportRootCertQRView (exports the complete ASSEMBLED
+        certificate, not a detached signature -- the plan's §3 fix for the
+        detached-signature-export bug) -> MainMenuView. """
     def setup_method(self):
         super().setup_method()
         self.controller.active_chain_id = "sevenf"
@@ -446,52 +453,82 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             assert is_present == should_appear, f"active_chain_id={active_chain_id!r}: expected present={should_appear}, got {is_present}"
 
 
-    def test_seed_options_view_routes_to_scan_root_cert_request_view(self):
+    def test_seed_options_view_routes_to_select_chain_kind_view(self):
         seed = self.seed_fixture()
         self.run_sequence(
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST),
-                FlowStep(sevenf_views.SevenFScanRootCertRequestView),
+                FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView),
             ],
             initial_destination_view_args=dict(seed=seed),
         )
 
 
-    def test_full_flow_with_a_real_matching_subject_key_signs_and_exports(self):
-        """ End-to-end from a real BBQr-encoded CertRequest, whose subject_vk
-            is this seed's own real derived Root CA key for testnet, through
-            scan -> review (6 fields) -> confirm+sign -> signed -> export
-            menu, confirming the real public_key/signature this flow
-            produces (same assertions test_signed_result_matches_direct_sign_with_root_ca_call
-            makes for genesis-config signing: matching pubkey, real 3309-byte
-            ML-DSA-65 signature -- not a placeholder). """
+    def test_chain_kind_select_builds_a_real_tbs_and_routes_to_review(self):
+        """ Unit-level: selecting a chain builds a real TBS embedding THIS
+            seed's own derived key (confirmed by signing it for real and
+            assembling -- assemble_root_cert_der's own binding check would
+            refuse if the TBS named a different key), with a fresh serial
+            each call, and routes to review with the export destination
+            already wired to the certificate export (not the old
+            signed-config menu). """
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+        from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
+
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        req_json = _sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex())
+
+        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET (Mainnet=0, Testnet=1, Devnet=2)
+            destination1 = view.run()
+            destination2 = view.run()
+
+        assert destination1.View_cls == sevenf_views.SevenFCertRequestReviewFieldView
+        args1 = destination1.view_args
+        assert len(args1["review_fields"]) == 5
+        assert [f.label for f in args1["review_fields"]] == ["Subject key id", "Chain", "Valid from", "Valid until", "Serial"]
+        confirmed_args = args1["confirmed_view_args"]
+        assert confirmed_args["chain_kind"] == ChainKind.TESTNET
+        assert confirmed_args["signed_view_args"] == dict(export_destination=sevenf_views.SevenFExportRootCertQRView)
+
+        tbs_bytes = confirmed_args["tbs_bytes"]
+        _, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, tbs_bytes, confirmed=True)
+        cert_der = cert_request_module.assemble_root_cert_der(tbs_bytes, signature, keys.root_ca.public_key)
+        parsed = cert_request_module.parse_root_certificate_der(cert_der)
+        assert parsed.subject_vk == keys.root_ca.public_key
+
+        # Two separate runs must pick different serials -- not a fixed/stub value.
+        assert tbs_bytes != destination2.view_args["confirmed_view_args"]["tbs_bytes"]
+
+
+    def test_full_flow_builds_signs_assembles_and_exports(self):
+        """ End-to-end: select testnet -> device builds+reviews+signs its
+            own certificate entirely locally -> export. Confirms the real
+            public_key/signature (matching 3309-byte ML-DSA-65 signature),
+            and -- the actual fix this story ships -- that tbs_bytes
+            survives into ceremony_data and the final exported bytes
+            assemble into a certificate that parses back to the exact
+            fields this ceremony run chose, not just "didn't raise". """
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
 
         captured = {}
 
-        def capture_before_home(view):
-            captured["public_key"] = self.controller.sevenf_ceremony_data["public_key"]
-            captured["signature"] = self.controller.sevenf_ceremony_data["signature"]
+        def capture_before_export(view):
+            data = self.controller.sevenf_ceremony_data
+            captured["public_key"] = data["public_key"]
+            captured["signature"] = data["signature"]
+            captured["tbs_bytes"] = data["tbs_bytes"]
 
         self.run_sequence(
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST),
-                FlowStep(
-                    sevenf_views.SevenFScanRootCertRequestView,
-                    before_run=_load_cert_request_into_decoder(req_json),
-                    screen_return_value=0,
-                ),
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Role
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Subject key id
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Chain
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Valid from
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Valid for
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Serial (final)
+                FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, button_data_selection=ButtonOption("testnet")),
+                *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(5)],
                 FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
-                FlowStep(sevenf_views.SevenFRootCertSignedView, before_run=capture_before_home, screen_return_value=0),  # "OK"
-                FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
+                FlowStep(sevenf_views.SevenFRootCertSignedView, screen_return_value=0),  # "OK"
+                FlowStep(sevenf_views.SevenFExportRootCertQRView, before_run=capture_before_export, screen_return_value=0),
                 FlowStep(MainMenuView),
             ],
             initial_destination_view_args=dict(seed=seed),
@@ -500,92 +537,80 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         assert captured["public_key"] == keys.root_ca.public_key
         assert len(captured["signature"]) == 3309
 
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+        cert_der = cert_request_module.assemble_root_cert_der(captured["tbs_bytes"], captured["signature"], captured["public_key"])
+        parsed = cert_request_module.parse_root_certificate_der(cert_der)
+        assert parsed.subject_vk == keys.root_ca.public_key
+        assert parsed.chain_kind == ChainKind.TESTNET
+
         # Home always wipes flow-scoped state.
         assert self.controller.sevenf_ceremony_data is None
 
 
-    def test_signed_result_matches_direct_tbs_and_sign_call(self):
-        """ Unit-level cross-check (not the full flow): SevenFConfirmSignRootCertView's
-            output must match a direct root_tbs_from_request() + sign_with_root_ca()
-            call over the same request -- confirms this isn't a placeholder or a
-            different derivation/TBS construction. """
+    def test_export_root_cert_qr_view_encodes_a_real_assembled_certificate(self):
+        """ Unit-level, mirroring test_export_pubkey_qr_view_encodes_the_real_
+            root_ca_pubkey's own pattern: confirms the exported QR carries a
+            genuine assembled certificate (BBQr-encoded, file_type 'B'),
+            round-tripped through the real BBQr encoder/decoder pair and
+            re-parsed back to the exact fields this ceremony chose -- not a
+            placeholder and not merely "some bytes got passed to some
+            encoder". Also confirms this routes to MainMenuView directly,
+            NOT through SevenFExportView's old pubkey/signed-config menu. """
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.MAINNET)
         from seedsigner.models.sevenf import cert_request as cert_request_module
         from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
 
-        seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        req = cert_request_module.parse_cert_request_json(_sample_cert_request_json(subject_vk=keys.root_ca.public_key.hex()))
-        tbs_bytes = cert_request_module.root_tbs_from_request(req)
+        serial = cert_request_module.generate_serial()
+        not_before = 1_750_000_000
+        tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.MAINNET, not_before, cert_request_module.ROOT_DAYS, serial)
+        public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.MAINNET, tbs_bytes, confirmed=True)
+        self.controller.sevenf_ceremony_data = dict(public_key=public_key, signature=signature, tbs_bytes=tbs_bytes)
 
-        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=req.kind, tbs_bytes=tbs_bytes)
+        view = sevenf_views.SevenFExportRootCertQRView()
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["qr_encoder"] = kwargs["qr_encoder"]
+
         with pytest.MonkeyPatch().context() as mp:
-            mp.setattr(view, "run_screen", lambda *a, **kw: 0)
+            mp.setattr(view, "run_screen", fake_run_screen)
             destination = view.run()
 
-        assert destination.View_cls == sevenf_views.SevenFRootCertSignedView
-        data = self.controller.sevenf_ceremony_data
-        expected_pk, expected_sig = sign_with_root_ca(seed.seed_bytes, req.kind, tbs_bytes, confirmed=True)
-        assert data["public_key"] == keys.root_ca.public_key == expected_pk
-        assert len(data["signature"]) == len(expected_sig) == 3309
+        encoder = captured["qr_encoder"]
+        assert encoder.file_type == "B"
+
+        d = DecodeQR()
+        while True:
+            status = d.add_data(encoder.next_part())
+            if status == DecodeQRStatus.COMPLETE:
+                break
+        cert_der = d.decoder.get_data()
+        parsed = cert_request_module.parse_root_certificate_der(cert_der)
+        assert parsed.subject_vk == keys.root_ca.public_key
+        assert parsed.chain_kind == ChainKind.MAINNET
+        assert parsed.not_before == not_before
+
+        assert destination.View_cls == MainMenuView
 
 
-    def test_scan_rejects_a_payload_that_isnt_valid_json(self):
+    def test_select_chain_kind_fails_closed_if_tbs_building_fails(self):
+        """ build_root_tbs raising must route to the error view, not crash
+            or silently proceed to review with a broken body. """
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+
         seed = self.seed_fixture()
-        garbage = b"not a cert request at all, but still valid BBQr transport bytes"
+        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed)
 
-        self.run_sequence(
-            [
-                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST),
-                FlowStep(
-                    sevenf_views.SevenFScanRootCertRequestView,
-                    before_run=_load_cert_request_into_decoder(garbage),
-                    screen_return_value=0,
-                ),
-                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
-            ],
-            initial_destination_view_args=dict(seed=seed),
-        )
+        def fake_build_root_tbs(*a, **kw):
+            raise cert_request_module.CertRequestError("simulated build failure")
 
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # TESTNET
+            mp.setattr(cert_request_module, "build_root_tbs", fake_build_root_tbs)
+            destination = view.run()
 
-    def test_scan_rejects_a_deputy_request_scanned_here(self):
-        seed = self.seed_fixture()
-        req_json = _sample_cert_request_json(role=ROLE_DEPUTY, subject_vk=(bytes([0xCD]) * 1952).hex())
-
-        self.run_sequence(
-            [
-                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST),
-                FlowStep(
-                    sevenf_views.SevenFScanRootCertRequestView,
-                    before_run=_load_cert_request_into_decoder(req_json),
-                    screen_return_value=0,
-                ),
-                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
-            ],
-            initial_destination_view_args=dict(seed=seed),
-        )
-
-
-    def test_scan_fail_closed_refuses_a_request_for_a_different_roots_key(self):
-        """ CRITICAL/HIGH finding from adversarial security review: a
-            well-formed request whose subject_vk does NOT match this
-            device's own derived key must be refused, not signed, and not
-            even shown for review. """
-        seed = self.seed_fixture()
-        wrong_vk = (bytes([0xEE]) * 1952).hex()  # deliberately not this seed's own derived key
-        req_json = _sample_cert_request_json(subject_vk=wrong_vk)
-
-        self.run_sequence(
-            [
-                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST),
-                FlowStep(
-                    sevenf_views.SevenFScanRootCertRequestView,
-                    before_run=_load_cert_request_into_decoder(req_json),
-                    screen_return_value=0,
-                ),
-                FlowStep(sevenf_views.SevenFUnsupportedArtefactView, screen_return_value=0),
-            ],
-            initial_destination_view_args=dict(seed=seed),
-        )
+        assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
 
 
     def test_back_button_on_confirm_sign_screen_returns_to_back_stack_without_signing(self):
@@ -595,10 +620,10 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
         seed = self.seed_fixture()
-        req = cert_request_module.parse_cert_request_json(_sample_cert_request_json())
-        tbs_bytes = cert_request_module.root_tbs_from_request(req)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
-        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=req.kind, tbs_bytes=tbs_bytes)
+        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
@@ -612,19 +637,37 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
         seed = self.seed_fixture()
-        req = cert_request_module.parse_cert_request_json(_sample_cert_request_json())
-        tbs_bytes = cert_request_module.root_tbs_from_request(req)
-
-        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=req.kind, tbs_bytes=tbs_bytes)
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
+
+        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
         assert view.root_ca_address == keys.root_ca.address
+
+
+    def test_confirm_sign_view_stores_tbs_bytes_into_ceremony_data(self):
+        """ The actual bug fix this story ships (plan's §3): tbs_bytes must
+            survive into ceremony_data, not be discarded after signing. """
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
+
+        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 0)
+            view.run()
+
+        assert self.controller.sevenf_ceremony_data["tbs_bytes"] == tbs_bytes
 
 
 class TestSevenFUnsupportedArtefactViewHeadline:
     """ SevenFUnsupportedArtefactView's optional `headline` override, added
-        for the Root self-certification fail-closed refusal (a well-formed
-        request that must still be refused, not a parse failure -- see
-        SevenFScanRootCertRequestView's own docstring). """
+        for a well-formed artefact that must still be refused for a reason
+        beyond a parse failure (originally the Root self-certification
+        flow's own fail-closed "Wrong Key" refusal, before that flow's
+        PKCS#10-era rework removed the scan it applied to -- now exercised
+        by SevenFScanRootCertificateView's identically-named check). """
     def test_default_headline_is_unchanged(self):
         view = sevenf_views.SevenFUnsupportedArtefactView(reason="some reason")
         assert view.headline == "Can't Parse This"

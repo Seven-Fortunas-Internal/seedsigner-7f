@@ -18,10 +18,12 @@ from seedsigner.models.sevenf.cert_request import (
     DEPUTY_DAYS,
     ROLE_DEPUTY,
     ROLE_ROOT,
+    ROOT_DAYS,
     CertRequestError,
     CertRequestFields,
     ParsedCsr,
     ParsedRootCertificate,
+    assemble_root_cert_der,
     build_deputy_tbs_v2,
     build_root_tbs,
     deputy_cross_cert_v2_review_fields,
@@ -29,6 +31,7 @@ from seedsigner.models.sevenf.cert_request import (
     parse_cert_request_json,
     parse_root_certificate_der,
     review_fields,
+    root_self_cert_review_fields,
     root_tbs_from_request,
     subject_matches,
     verify_and_parse_csr_der,
@@ -745,3 +748,109 @@ def test_deputy_cross_cert_v2_review_fields_key_ids_use_the_root_id_convention()
     by_label = {f.label: f.value for f in fields}
     assert by_label["Issuing Root: Subject key id"] == root_id(root_cert.subject_vk.hex())
     assert by_label["Deputy: Subject key id"] == root_id(csr.subject_vk.hex())
+
+
+# --- Root self-certification: real-certificate assembly (PKCS#10-era rework) ---
+
+def test_root_days_matches_the_real_reference_constant():
+    # Confirmed directly against 7fchain's x509_ceremony.rs:42 (20 years),
+    # distinct from DEPUTY_DAYS (10 years) -- see that constant's own
+    # comment for the same cross-check applied there.
+    assert ROOT_DAYS == 7_300
+
+
+def _derive_root_keypair(chain_kind: ChainKind) -> bytes:
+    """ A minimal, test-only key derivation (no Seed/root_ceremony fixture
+        needed) -- just enough to exercise assemble_root_cert_der's full
+        pipeline against a real ML-DSA-65 keypair. """
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import Layer, root_path
+    master_seed = bytes([0x07]) * 64
+    vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind), int(chain_kind), int(Layer.L1))
+    return vk, master_seed
+
+
+def test_assemble_root_cert_der_full_pipeline_round_trip():
+    """ No ASN.1 tooling exists in this Python environment to split the
+        real captured reference certificate into its TBS/signature halves
+        (that byte-exact round-trip is already proven at the Rust level,
+        test_sevenf_cert_request.rs's own
+        assemble_root_cert_der_matches_the_real_reference_certificate_exactly)
+        -- this test instead exercises the full Python-bridge pipeline
+        end to end against a real derived keypair: build -> sign ->
+        assemble -> parse back, confirming the ctypes wiring itself is
+        correct, not just the underlying Rust logic. """
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import root_path
+
+    chain_kind = ChainKind.TESTNET
+    vk, master_seed = _derive_root_keypair(chain_kind)
+    serial = generate_serial()
+    not_before = 1_750_000_000
+    days = ROOT_DAYS
+
+    tbs = build_root_tbs(vk, chain_kind, not_before, days, serial)
+    _, signature = mldsa.derive_and_sign(master_seed, root_path(chain_kind), tbs)
+
+    cert_der = assemble_root_cert_der(tbs, signature, vk)
+    parsed = parse_root_certificate_der(cert_der)
+    assert parsed.subject_vk == vk
+    assert parsed.chain_kind == chain_kind
+    assert parsed.not_before == not_before
+    assert parsed.not_after == not_before + days * 86_400
+
+
+def test_assemble_root_cert_der_rejects_a_tampered_signature():
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import root_path
+
+    chain_kind = ChainKind.TESTNET
+    vk, master_seed = _derive_root_keypair(chain_kind)
+    tbs = build_root_tbs(vk, chain_kind, 1_750_000_000, ROOT_DAYS, generate_serial())
+    _, signature = mldsa.derive_and_sign(master_seed, root_path(chain_kind), tbs)
+    tampered = bytearray(signature)
+    tampered[-1] ^= 0xFF
+
+    with pytest.raises(CertRequestError):
+        assemble_root_cert_der(tbs, bytes(tampered), vk)
+
+
+def test_assemble_root_cert_der_rejects_garbage_tbs():
+    with pytest.raises(CertRequestError):
+        assemble_root_cert_der(b"not a tbs at all", bytes(3309), bytes(1952))
+
+
+def test_assemble_root_cert_der_rejects_a_subject_vk_not_matching_the_tbs():
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import root_path
+
+    chain_kind = ChainKind.TESTNET
+    vk, master_seed = _derive_root_keypair(chain_kind)
+    tbs = build_root_tbs(vk, chain_kind, 1_750_000_000, ROOT_DAYS, generate_serial())
+    _, signature = mldsa.derive_and_sign(master_seed, root_path(chain_kind), tbs)
+    other_vk = bytes([0xEE]) * 1952
+
+    with pytest.raises(CertRequestError):
+        assemble_root_cert_der(tbs, signature, other_vk)
+
+
+def test_root_self_cert_review_fields_includes_subject_chain_dates_and_serial():
+    vk = bytes([0xAB]) * 1952
+    serial = bytes([0x11]) * 16
+    not_before = 1_700_000_000
+    not_after = not_before + ROOT_DAYS * 86_400
+    fields = root_self_cert_review_fields(vk, ChainKind.TESTNET, not_before, not_after, serial)
+    assert [f.label for f in fields] == ["Subject key id", "Chain", "Valid from", "Valid until", "Serial"]
+    by_label = {f.label: f.value for f in fields}
+    assert by_label["Chain"] == "testnet"
+    assert by_label["Serial"] == serial.hex()
+    assert str(not_before) in by_label["Valid from"]
+    assert str(not_after) in by_label["Valid until"]
+
+
+def test_root_self_cert_review_fields_key_id_uses_the_root_id_convention():
+    from seedsigner.models.sevenf.genesis_config import root_id
+    vk = bytes([0xCD]) * 1952
+    fields = root_self_cert_review_fields(vk, ChainKind.MAINNET, 1_700_000_000, 1_900_000_000, bytes([0x22]) * 16)
+    by_label = {f.label: f.value for f in fields}
+    assert by_label["Subject key id"] == root_id(vk.hex())

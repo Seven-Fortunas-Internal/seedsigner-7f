@@ -147,65 +147,26 @@ class SevenFScanGenesisConfigView(ScanView):
 
 
 
-def _parse_root_request_or_error_destination(seed: Seed, data: bytes):
-    """ Parse+validate a role="root" CertRequest naming this device's own
-        derived key. Backs SevenFScanRootCertRequestView (Root self-
-        certification's entry point) -- the only remaining caller since the
-        Deputy cross-certification flow was reworked onto real X.509
-        certificates/PKCS#10 CSRs, which carry no CertRequest JSON to parse
-        here (see cert_request.py's own "PKCS#10 REWORK" docstring note;
-        SevenFScanRootCertificateView now does its own analogous
-        chain/subject_vk checks directly against a parsed certificate).
-        Does the fail-closed subject_vk check here, at the scan boundary,
-        rather than deferring it to review: a request for a DIFFERENT
-        Root's key is not this device's business to even show for review
-        (CRITICAL/HIGH findings, adversarial security review, 2026-09-28).
-        Derives using req.kind, never a separately-configured chain, for
-        the same reason SevenFPlugin.sign() re-derives chain_kind from its
-        payload rather than trusting a separate argument.
+class SevenFSelectChainKindForRootSelfCertView(View):
+    """ Entry point for Root self-certification's PKCS#10-era rework (see
+        cert_request.py's own "ROOT SELF-CERT PKCS#10 REWORK" docstring
+        note, and docs/7f-integration/root-self-cert-pkcs10-rework-plan.md).
+        7fchain's real `sign-root-cert` has no external input at all -- the
+        Root derives its own key, builds its own TBS, signs, and assembles
+        a complete certificate, all locally. This device mirrors that: no
+        scan step exists at all (the retired `SevenFScanRootCertRequestView`
+        and `_parse_root_request_or_error_destination()` are both gone --
+        confirmed via `grep` that neither had any other caller), just an
+        explicit chain_kind selection, mirroring
+        `SevenFSelectChainKindForDeputyCrossCertView`'s already-shipped
+        pattern exactly.
 
-        Returns (req, keys) on success, or a ready-to-return Destination
-        (SevenFUnsupportedArtefactView, with the right headline/reason) on
-        any failure -- callers check `isinstance(result, Destination)`. """
-    try:
-        req = cert_request.parse_cert_request_json(data)
-    except CertRequestError as e:
-        return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-            reason=_("Couldn't parse this as a certificate request: {}").format(e)))
-
-    if req.role != cert_request.ROLE_ROOT:
-        return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-            reason=_("Expected a Root certificate request, got a {} request.").format(req.role)))
-
-    keys = root_ceremony.derive_root_ceremony_keys(seed.seed_bytes, req.kind)
-    if not cert_request.subject_matches(req, keys.root_ca.public_key):
-        return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-            headline=_("Wrong Key"),
-            reason=_("This request is for a different Root's key. This seed's own Root CA key for "
-                     "{} does not match the subject key in the scanned request.").format(req.kind.name.lower()),
-        ))
-
-    return req, keys
-
-
-
-class SevenFScanRootCertRequestView(ScanView):
-    """ Scans the BBQr-encoded CertRequest the coordinator sends a Root for
-        self-certification (enrollment) -- the entry point for
-        7f-signing-support-root-self-certification. Mirrors
-        SevenFScanGenesisConfigView exactly (same guard_active_chain check,
-        same "file_type on the wire is not authoritative, try to parse it"
-        self-validation doctrine): a genesis-config or Deputy CertRequest
-        accidentally scanned here fails to parse as a role="root" request
-        and is refused the same way, not specially detected.
-
-        Parsing/validation itself lives in
-        _parse_root_request_or_error_destination(), shared with the Deputy
-        cross-certification flow's first scan step. """
-    instructions_text = _mft("Scan Root certificate request")
-    invalid_qr_type_message = _mft("Expected a Root certificate request QR (BBQr, from the coordinator)")
-
-
+        Removing the scanned CertRequest also removes the old
+        `subject_matches()` fail-closed cross-check it carried (nothing
+        left to compare the derived key against) -- the plan's §5.1/§8
+        compensating control is the mandatory enrollment-fingerprint check
+        on the review screen this view routes to, not a device-side
+        pin allowlist (deferred, a federation-level question). """
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
@@ -214,38 +175,58 @@ class SevenFScanRootCertRequestView(ScanView):
             return
 
 
-    @property
-    def is_valid_qr_type(self):
-        return self.decoder.is_sevenf_bbqr
+    def run(self):
+        import time
 
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        kinds = list(ChainKind)
+        button_data = [ButtonOption(k.name.lower()) for k in kinds]
 
-    def _handle_complete_scan(self):
-        data = self.decoder.get_sevenf_bbqr_data()
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Root Self-Cert: Chain"),
+            is_button_text_centered=True,
+            button_data=button_data,
+        )
 
-        result = _parse_root_request_or_error_destination(self.seed, data)
-        if isinstance(result, Destination):
-            return result
-        req, _keys = result
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        chain_kind = kinds[selected_menu_num]
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind)
+        subject_vk = keys.root_ca.public_key
+        serial = cert_request.generate_serial()
+        not_before = int(time.time())
+        days = cert_request.ROOT_DAYS
 
         try:
-            tbs_bytes = cert_request.root_tbs_from_request(req)
+            tbs_bytes = cert_request.build_root_tbs(subject_vk, chain_kind, not_before, days, serial)
         except CertRequestError as e:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-                reason=_("Couldn't rebuild the certificate body: {}").format(e)))
+                reason=_("Couldn't build the certificate body: {}").format(e)))
+
+        # DAY = 86_400 seconds, matching cert_request.rs's own constant --
+        # no clamping applies to a self-signed Root certificate (unlike
+        # Deputy's TBS, which clamps to the issuing Root's own window), so
+        # this is the exact value the TBS just built also carries.
+        not_after = not_before + days * 86_400
+        review_fields = cert_request.root_self_cert_review_fields(subject_vk, chain_kind, not_before, not_after, serial)
 
         return Destination(
             SevenFCertRequestReviewFieldView,
             view_args=dict(
-                review_fields=cert_request.review_fields(req),
+                review_fields=review_fields,
                 page_title=_("Review Root Certificate"),
                 confirmed_destination=SevenFConfirmSignRootCertView,
                 confirmed_view_args=dict(
                     seed=self.seed,
-                    chain_kind=req.kind,
+                    chain_kind=chain_kind,
                     tbs_bytes=tbs_bytes,
+                    signed_view_args=dict(
+                        export_destination=SevenFExportRootCertQRView,
+                    ),
                 ),
             ),
-            skip_current_view=True,
         )
 
 
@@ -725,20 +706,23 @@ class SevenFConfirmSignRootCertView(View):
         Reuses root_ceremony.sign_with_root_ca() unmodified -- it already
         signs an arbitrary `message`, so signing a CertRequest's TBS bytes
         needs no new signing primitive, only a new caller. Writes into
-        controller.sevenf_ceremony_data on success so the existing, already-
-        shipped SevenFExportView/SevenFExportPubkeyQRView/
-        SevenFExportSignedConfigQRView can export the result unmodified --
-        those views read only data["public_key"]/data["signature"], and the
-        RootSig{signer_vk, sig} export shape is the same for a root-cert
-        signature as for a genesis-config one (D11: signature-only, no
-        header). No new export view needed.
+        controller.sevenf_ceremony_data on success, now including
+        `tbs_bytes` itself (previously discarded here -- see
+        docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3 for why
+        that was a real, already-shipped bug: a TBS whose serial/not_before
+        are device-chosen can never be reconstructed downstream from a
+        detached signature alone). Harmless for Deputy cross-certification,
+        which doesn't read the extra key until/unless
+        7f-signing-support-detached-sig-export-unreconstructable fixes that
+        flow too.
 
         Shared by Root self-certification AND Deputy cross-certification
         (both sign an arbitrary TBS body with this same Root key) --
         `signed_view_args` is the one thing that differs between them (the
-        success message's wording), passed straight through to
-        SevenFRootCertSignedView; defaults to that view's own Root self-cert
-        wording so the original call site needs no changes. """
+        success message's wording, and now which export view follows),
+        passed straight through to SevenFRootCertSignedView; defaults to
+        that view's own Root self-cert wording/export so the Deputy call
+        site needs no changes. """
     def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, signed_view_args: dict = None):
         super().__init__()
         self.seed = seed
@@ -769,7 +753,7 @@ class SevenFConfirmSignRootCertView(View):
             self.tbs_bytes,
             confirmed=True,
         )
-        self.controller.sevenf_ceremony_data = dict(public_key=public_key, signature=signature)
+        self.controller.sevenf_ceremony_data = dict(public_key=public_key, signature=signature, tbs_bytes=self.tbs_bytes)
         return Destination(SevenFRootCertSignedView, view_args=self.signed_view_args)
 
 
@@ -777,20 +761,33 @@ class SevenFConfirmSignRootCertView(View):
 class SevenFRootCertSignedView(View):
     """ Success confirmation for Root self-certification AND Deputy cross-
         certification (both sign via SevenFConfirmSignRootCertView, which
-        is itself artefact-agnostic -- see that class's own docstring), then
-        on to the same export menu genesis-config signing already uses (see
-        SevenFConfirmSignRootCertView's own docstring for why no new export
-        view is needed). `title`/`text` default to the original Root self-
-        cert wording so that flow's existing call site is unaffected; the
-        Deputy flow supplies its own. Mirrors SevenFGenesisSignedView's
-        shape but kept as its own class rather than parameterizing THAT one
-        too -- genesis-config signing is a separate artefact family with its
-        own hardware-tested call site, and giving it a title/text override
-        it never actually uses would only add unused surface. """
-    def __init__(self, title: str = None, text: str = None):
+        is itself artefact-agnostic -- see that class's own docstring).
+        `title`/`text` default to the original Root self-cert wording so
+        that flow's pre-existing behavior stays unchanged for callers that
+        don't override them; the Deputy flow supplies its own.
+        `export_destination` defaults to SevenFExportView (the original
+        pubkey/signed-config menu -- correct for Deputy only until
+        7f-signing-support-detached-sig-export-unreconstructable fixes that
+        flow too; Deputy's own call site never overrides this). Root
+        self-cert's own call site explicitly overrides it to
+        SevenFExportRootCertQRView, which exports the complete assembled
+        certificate rather than a detached signature (see
+        docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3-§4).
+        Mirrors SevenFGenesisSignedView's shape but kept as its own class
+        rather than parameterizing THAT one too -- genesis-config signing is
+        a separate artefact family with its own hardware-tested call site,
+        and giving it this override it never actually uses would only add
+        unused surface. """
+    def __init__(self, title: str = None, text: str = None, export_destination: type = None):
         super().__init__()
         self.title = title if title is not None else _("Root Certificate Signed")
         self.text = text if text is not None else _("This Root's own certificate has been signed and is ready to export.")
+        # Defaults to the ORIGINAL export menu, not the new certificate
+        # export -- this keeps every existing caller (Deputy's own
+        # signed_view_args, which never sets this) unchanged. Root
+        # self-cert's own call site is the one that explicitly opts into
+        # SevenFExportRootCertQRView.
+        self.export_destination = export_destination if export_destination is not None else SevenFExportView
 
 
     def run(self):
@@ -803,7 +800,7 @@ class SevenFRootCertSignedView(View):
             text=self.text,
             button_data=[ButtonOption("OK")],
         )
-        return Destination(SevenFExportView)
+        return Destination(self.export_destination)
 
 
 
@@ -882,6 +879,36 @@ class SevenFExportSignedConfigQRView(View):
             qr_encoder=BBQrEncoder(data=json_bytes, file_type="J"),  # 'J': BBQr JSON
         )
         return Destination(SevenFExportView, skip_current_view=True)
+
+
+
+class SevenFExportRootCertQRView(View):
+    """ Exports the complete, assembled Root self-certification certificate
+        as BBQr-encoded binary -- the Root self-cert PKCS#10-era rework's
+        fix (docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3-§4)
+        for the detached-signature-export bug: the real ceremony's
+        `sign-root-cert` exports a complete certificate, and this device's
+        prior detached-signature export (D11's RootSig shape) is
+        unreconstructable downstream for an artifact whose TBS carries
+        device-chosen fields (a CSPRNG serial, a wall-clock `not_before`).
+        Does NOT route through SevenFExportView's pubkey/signed-config menu
+        -- those two options are for genesis-config signing's own
+        detached-signature shape, which this artifact doesn't use (single
+        artifact, no menu -- mirrors SevenFExportSignedDevFundConfigQRView's
+        direct-to-MainMenuView routing, not the two-option menu's). """
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import BBQrEncoder
+        data = self.controller.sevenf_ceremony_data
+        cert_der = cert_request.assemble_root_cert_der(
+            data["tbs_bytes"], data["signature"], data["public_key"],
+        )
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=BBQrEncoder(data=cert_der, file_type="B"),  # 'B': BBQr generic binary
+        )
+        return Destination(MainMenuView, skip_current_view=True)
 
 
 

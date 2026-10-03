@@ -56,19 +56,6 @@ def deputy_seed() -> Seed:
     return Seed(mnemonic=ROOT_TEST_MNEMONIC, passphrase=DEPUTY_TEST_PASSPHRASE)
 
 
-def build_root_cert_request(subject_vk: bytes) -> bytes:
-    req = {
-        "version": cert_request.CERT_REQUEST_VERSION,
-        "role": cert_request.ROLE_ROOT,
-        "kind": CHAIN_KIND.name.lower(),
-        "subject_vk": subject_vk.hex(),
-        "not_before": int(time.time()),
-        "days": 3650,
-        "serial": b"\x01".hex(),
-    }
-    return json.dumps(req).encode("utf-8")
-
-
 def build_deputy_cert_request(subject_vk: bytes) -> bytes:
     req = {
         "version": cert_request.CERT_REQUEST_VERSION,
@@ -178,7 +165,20 @@ def main():
     deputy_keys = root_ceremony.derive_root_ceremony_keys(deputy_seed().seed_bytes, CHAIN_KIND)
 
     artifacts = {
-        "root_cert_request": build_root_cert_request(root_keys.root_ca.public_key),
+        # "root_cert_request" is gone (2026-10-03): Root self-certification's
+        # PKCS#10-era rework removed the scanned CertRequest step entirely --
+        # the device now derives its own key and builds its own TBS with no
+        # external input at all. See docs/7f-integration/
+        # root-self-cert-pkcs10-rework-plan.md. Nothing replaces it here; the
+        # manifest's root_ca_address/root_ca_public_key_hex below are already
+        # what an operator needs to cross-check against the device's own
+        # review screen.
+        # "deputy_cert_request" (STALE, same root cause, not yet fixed --
+        # see 7f-signing-support-hardware-test-tooling-pkcs10-staleness in
+        # _delivery/backlog.yaml): Deputy cross-certification's own PKCS#10
+        # rework retired this JSON shape too, replacing it with a real signed
+        # Root certificate + a real PKCS#10 CSR, neither of which this tool
+        # builds yet.
         "deputy_cert_request": build_deputy_cert_request(deputy_keys.root_ca.public_key),
         "genesis_config": build_genesis_config(),
         "devfund_config": build_devfund_config(),

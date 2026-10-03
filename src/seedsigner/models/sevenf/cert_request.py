@@ -9,9 +9,17 @@
        derivation or canonical-bytes logic, so doing it in Python here
        doesn't violate D12 (see genesis_config.py's own docstring for the
        same reasoning already applied to genesis-config's review-line
-       formatting). Still current for Root self-certification -- confirmed
-       unaffected by the Deputy rework (see
-       docs/7f-integration/deputy-cross-cert-pkcs10-rework-plan.md §6).
+       formatting). **STALE as of 2026-10-03, corrected here rather than
+       left to contradict the newer note below**: this was "still current
+       for Root self-certification, confirmed unaffected by the Deputy
+       rework" when written (deputy-cross-cert-pkcs10-rework-plan.md §6),
+       but the Root self-cert PKCS#10 rework below retired that usage too.
+       `parse_cert_request_json`/`CertRequestFields`/`root_tbs_from_request`/
+       `subject_matches`/`review_fields`/`ROLE_ROOT`/`ROLE_DEPUTY`/
+       `CERT_REQUEST_VERSION` now have zero callers anywhere in the view
+       layer (confirmed by grep) -- kept only because removing them is out
+       of this story's reviewed scope (flagged as a follow-up, not silently
+       expanded into), not because anything still calls them for real.
     2. A ctypes bridge to firmware/mldsa7f's TBS-building functions
        (ffi.rs's mldsa7f_cert_root_tbs and the PKCS#10-based entry points
        below, backed by src/cert_request.rs) -- the actual crypto-adjacent,
@@ -56,6 +64,26 @@
     `generate_serial`/`build_deputy_tbs_v2`/`deputy_cross_cert_v2_review_fields`
     below implement this; `ParsedRootCertificate`/`ParsedCsr` are their
     return shapes.
+
+    **ROOT SELF-CERT PKCS#10 REWORK, 2026-10-03** (backs
+    7f-signing-support-root-self-certification-pkcs10-rework): 7fchain
+    commit `3bf7bfe` ("four MVP tasks on the Root ceremony", M-38) removed
+    the JSON `CertRequest{role:"root"}` wire shape the same way `ea91758`
+    removed the Deputy one. The real current flow (`sf-root sign-root-cert`)
+    has no external input at all: the Root derives its own key, self-signs
+    using its own wall-clock time and a fresh CSPRNG serial, and the real
+    `issue()` function assembles a COMPLETE certificate in the same call
+    that signs -- there is no detached-signature export for this artifact in
+    the real ceremony. This device's prior export shape (D11:
+    `{signer_vk, sig}`, no TBS) turns out to be unreconstructable downstream
+    for any artifact whose TBS carries device-chosen fields (the CSPRNG
+    serial, the wall-clock `not_before`) -- see
+    docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3 for the full
+    finding (filed as its own bug, `7f-signing-support-detached-sig-
+    export-unreconstructable`, since it also affects the Deputy flow above).
+    `assemble_root_cert_der`/`root_self_cert_review_fields` below implement
+    the fix for this artifact: assemble a complete X.509 `Certificate`
+    on-device and export THAT, not a detached signature.
 """
 import ctypes
 import json
@@ -64,7 +92,7 @@ from dataclasses import dataclass
 
 from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ChainKind
+from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
 from seedsigner.models.sevenf.genesis_config import _format_timestamp, root_id
 
 # Confirmed against 7fchain's crates/sf-ca/src/x509_ceremony.rs.
@@ -206,6 +234,15 @@ def _lib():
             ctypes.POINTER(ctypes.c_size_t),       # out_written
         ]
         lib.mldsa7f_cert_deputy_tbs_v2.restype = ctypes.c_int32
+
+        lib.mldsa7f_cert_assemble_root.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,      # tbs_der
+            ctypes.c_char_p, ctypes.c_size_t,      # signature
+            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
+            ctypes.c_char_p, ctypes.c_size_t,      # out
+            ctypes.POINTER(ctypes.c_size_t),       # out_written
+        ]
+        lib.mldsa7f_cert_assemble_root.restype = ctypes.c_int32
         lib._sevenf_cert_request_argtypes_registered = True
     return lib
 
@@ -423,3 +460,61 @@ def review_fields(req: CertRequestFields) -> list[ReviewField]:
         Reuses chains.base.ReviewField, same as genesis_config.review_fields()
         and the EVM chain plugin's review screens. """
     return [ReviewField(label=label, value=value) for label, value in _labeled_values(req)]
+
+
+# --- Root self-certification: real-certificate assembly (PKCS#10-era rework) ---
+# (see this module's own "ROOT SELF-CERT PKCS#10 REWORK" docstring note above).
+
+# Must match 7fchain's real crates/sf-ca/src/x509_ceremony.rs::ROOT_DAYS
+# exactly (20 years) -- confirmed directly against that source.
+ROOT_DAYS = 7_300
+
+# Must match firmware/mldsa7f/src/ffi.rs's CERT_FULL_MAX_LEN exactly --
+# display/sizing-only here (the FFI call itself fails loudly with a
+# buffer-too-small error rather than silently truncating either way).
+_CERT_FULL_MAX_LEN = _CERT_TBS_MAX_LEN + ML_DSA_SIG_LEN + 64
+
+
+def assemble_root_cert_der(tbs_der: bytes, signature: bytes, subject_vk: bytes) -> bytes:
+    """ Assemble a complete, DER-encoded X.509 `Certificate` from a Root TBS
+        body this device already built (`build_root_tbs`) and a signature
+        this device already produced over it, via
+        root_ceremony.sign_with_root_ca(). Raises CertRequestError if the
+        signature doesn't verify over the TBS under this key, or if
+        `subject_vk` doesn't match the TBS's own embedded subject key --
+        see cert_request.rs's own assemble_root_cert_der() doc comment for
+        the full safety-property reasoning (verifies against the
+        re-encoded TBS bytes, not the raw input, so a decode/re-encode
+        mismatch fails closed rather than producing a self-inconsistent
+        certificate). """
+    lib = _lib()
+    out_buf = ctypes.create_string_buffer(_CERT_FULL_MAX_LEN)
+    written = ctypes.c_size_t(0)
+    rc = lib.mldsa7f_cert_assemble_root(
+        tbs_der, len(tbs_der),
+        signature, len(signature),
+        subject_vk, len(subject_vk),
+        out_buf, _CERT_FULL_MAX_LEN,
+        ctypes.byref(written),
+    )
+    if rc != 0:
+        raise CertRequestError("couldn't assemble the Root certificate", code=rc)
+    return out_buf.raw[:written.value]
+
+
+def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_before: int, not_after: int, serial: bytes) -> list[ReviewField]:
+    """ The no-blind-signing field list for the Root self-certification
+        review screen (Gate-1 plan §4 item 7). No "Issuing Root" fields --
+        this artifact is self-signed, so there is no separate issuer to
+        show. Per the plan's §8 (revised after adversarial review): the
+        displayed subject key id must be checked by the operator against a
+        previously recorded enrollment value, not merely displayed
+        informationally -- this is the compensating control the plan ships
+        in place of a compiled-in pin allowlist (§5.1). """
+    return [
+        ReviewField(label="Subject key id", value=root_id(subject_vk.hex())),
+        ReviewField(label="Chain", value=chain_kind.name.lower()),
+        ReviewField(label="Valid from", value=_format_timestamp(not_before)),
+        ReviewField(label="Valid until", value=_format_timestamp(not_after)),
+        ReviewField(label="Serial", value=serial.hex()),
+    ]

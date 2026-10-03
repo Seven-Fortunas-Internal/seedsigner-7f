@@ -70,14 +70,6 @@ def test_devfund_config_round_trips_and_parses():
     devfund_config.parse_canonical_bytes(got)
 
 
-def test_root_cert_request_round_trips_and_subject_matches_the_test_seed():
-    root_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.root_seed().seed_bytes, tool.CHAIN_KIND)
-    got = _round_trip(tool.build_root_cert_request(root_keys.root_ca.public_key))
-    req = cert_request.parse_cert_request_json(got)
-    assert req.role == cert_request.ROLE_ROOT
-    assert cert_request.subject_matches(req, root_keys.root_ca.public_key)
-
-
 def test_deputy_cert_request_round_trips_and_parses():
     deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.deputy_seed().seed_bytes, tool.CHAIN_KIND)
     got = _round_trip(tool.build_deputy_cert_request(deputy_keys.root_ca.public_key))
