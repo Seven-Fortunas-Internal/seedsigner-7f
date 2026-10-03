@@ -57,6 +57,9 @@ def test_role_spellings_are_pinned():
     assert Role.WALLET.value == "wallet"
     assert Role.DEPUTY.value == "deputy"
     assert Role.CENTCOM.value == "centcom"
+    assert Role.MINER_REGISTRAR.value == "miner-registrar"
+    assert Role.L2_VERIFIER_REGISTRAR.value == "l2-verifier-registrar"
+    assert Role.L2_SEQUENCER_REGISTRAR.value == "l2-sequencer-registrar"
     assert Role.L2_WALLET.value == "l2-wallet"
     assert Role.SEQUENCER.value == "sequencer"
     assert Role.MASTER_MINTER.value == "master-minter"
@@ -73,7 +76,10 @@ def test_role_spellings_are_pinned():
 # ─── Structure ─────────────────────────────────────────────────────────
 
 def test_no_role_spans_layers_so_the_layer_is_implied():
-    for r in (Role.ROOT, Role.MINER, Role.WALLET, Role.DEPUTY, Role.CENTCOM):
+    for r in (
+        Role.ROOT, Role.MINER, Role.WALLET, Role.DEPUTY, Role.CENTCOM,
+        Role.MINER_REGISTRAR, Role.L2_VERIFIER_REGISTRAR, Role.L2_SEQUENCER_REGISTRAR,
+    ):
         assert not r.is_l2, r
     for r in (
         Role.L2_WALLET, Role.SEQUENCER, Role.MASTER_MINTER,
@@ -85,6 +91,20 @@ def test_no_role_spans_layers_so_the_layer_is_implied():
 def test_chain_bound_roles_are_exactly_the_four():
     bound = [r.value for r in Role if r.is_chain_bound]
     assert bound == ["l2-wallet", "sequencer", "master-minter", "guardian"]
+
+
+def test_the_three_registrar_roles_are_l1_not_chain_bound_no_leaf():
+    """ Pins the three "judgement call" decisions path.rs's own doc comment
+        and docs/sf-wallet-gov-requirements.md's RESOLVED-9 record: all
+        three registrar roles are L1 (same tier as Deputy/CentCom -- the
+        PKI is L1's PKI even when it certifies L2 services), none is
+        chain-bound (an l2-sequencer-registrar's chain scope lives in its
+        certificate's id-sf-l2-chain-id-ranges grant, not its derivation
+        path), and none allows a leaf (unchanged: only miner does). """
+    for r in (Role.MINER_REGISTRAR, Role.L2_VERIFIER_REGISTRAR, Role.L2_SEQUENCER_REGISTRAR):
+        assert not r.is_l2, r
+        assert not r.is_chain_bound, r
+        assert not r.allows_leaf, r
 
 
 def test_only_miner_carries_a_leaf():
@@ -105,6 +125,9 @@ def test_the_settled_shapes_all_validate():
         "deputy/testnet/0/ml-dsa/v1",
         "deputy/mainnet/2/ml-dsa/v1",
         "centcom/testnet/0/ml-dsa/v1",
+        "miner-registrar/testnet/0/ml-dsa/v1",
+        "l2-verifier-registrar/testnet/0/ml-dsa/v1",
+        "l2-sequencer-registrar/mainnet/3/ml-dsa/v1",
         "l2-wallet/testnet/1/0/ml-dsa/v1",
         "l2-wallet/mainnet/999/7/ml-dsa/v1",
         "sequencer/testnet/111/0/ml-dsa/v1",

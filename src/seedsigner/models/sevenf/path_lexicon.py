@@ -44,6 +44,15 @@ class Role(Enum):
     WALLET = "wallet"
     DEPUTY = "deputy"
     CENTCOM = "centcom"
+    # Registrar is three roles, not one -- one registrar cannot serve all
+    # three (Patrick, 2026-10-01). Added 2026-10-03 (7fchain commit
+    # 8c69e23); all L1, none chain-bound (a registrar's chain scope lives
+    # in its certificate's id-sf-l2-chain-id-ranges grant, not its
+    # derivation path), none allows a leaf -- same as Deputy/CentCom, no
+    # change needed to is_l2/is_chain_bound/allows_leaf below.
+    MINER_REGISTRAR = "miner-registrar"
+    L2_VERIFIER_REGISTRAR = "l2-verifier-registrar"
+    L2_SEQUENCER_REGISTRAR = "l2-sequencer-registrar"
     L2_WALLET = "l2-wallet"
     SEQUENCER = "sequencer"
     MASTER_MINTER = "master-minter"
