@@ -12,7 +12,7 @@ import pytest
 
 from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ChainKind
+from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ChainKind, root_path
 from seedsigner.models.sevenf.cert_request import (
     CERT_REQUEST_VERSION,
     DEPUTY_DAYS,
@@ -23,6 +23,7 @@ from seedsigner.models.sevenf.cert_request import (
     CertRequestFields,
     ParsedCsr,
     ParsedRootCertificate,
+    assemble_deputy_cert_der,
     assemble_root_cert_der,
     build_deputy_tbs_v2,
     build_root_tbs,
@@ -854,3 +855,100 @@ def test_root_self_cert_review_fields_key_id_uses_the_root_id_convention():
     fields = root_self_cert_review_fields(vk, ChainKind.MAINNET, 1_700_000_000, 1_900_000_000, bytes([0x22]) * 16)
     by_label = {f.label: f.value for f in fields}
     assert by_label["Subject key id"] == root_id(vk.hex())
+
+
+# --- Deputy cross-certification: real-certificate assembly (closes the
+# Deputy half of 7f-signing-support-detached-sig-export-unreconstructable) ---
+
+def _fresh_root_cert(chain_kind: ChainKind, not_before: int = 1_800_000_000, seed_byte: int = 0x07) -> tuple[bytes, bytes, bytes]:
+    """ A freshly derived Root keypair, assembled into a real, complete,
+        self-signed certificate -- mirrors _derive_root_keypair() above but
+        goes one step further (assemble, not just derive), since
+        build_deputy_tbs_v2 needs a complete `root_cert_der` as its issuer
+        context, not a bare key. No CSR-building capability exists in this
+        codebase (see 7f-signing-support-hardware-test-tooling-pkcs10-staleness),
+        so this is the one Deputy-flow input this test CAN build fresh;
+        the Deputy's own CSR below instead reuses the real reference
+        vector. `seed_byte` varies the derived identity (distinct from
+        _derive_root_keypair's own hardcoded 0x07) so a "different Root"
+        test case gets a genuinely different key, not the same one twice.
+        Returns (root_cert_der, root_vk, root_master_seed). """
+    from seedsigner.models.sevenf.constants import Layer
+    master_seed = bytes([seed_byte]) * 64
+    vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind), int(chain_kind), int(Layer.L1))
+    serial = generate_serial()
+    tbs = build_root_tbs(vk, chain_kind, not_before, ROOT_DAYS, serial)
+    _, signature = mldsa.derive_and_sign(master_seed, root_path(chain_kind), tbs)
+    cert_der = assemble_root_cert_der(tbs, signature, vk)
+    return cert_der, vk, master_seed
+
+
+def test_assemble_deputy_cert_der_full_pipeline_round_trip():
+    """ End to end against the ctypes bridge: a freshly derived+assembled
+        Root certificate (this test's own, since no CSR-builder exists to
+        make a fresh Deputy CSR -- see _fresh_root_cert's own docstring)
+        issuing over the REAL reference Deputy CSR (DEPUTY_CSR_DER,
+        self-signed by the real Deputy's own key, D12) -> build -> sign
+        under the Root's key -> assemble -> parse back, confirming the
+        final certificate's subject is the DEPUTY's key (not the Root's --
+        the Root only ever signs, per cert_request.rs's own doc comment on
+        the self-signed-vs-CA-issued distinction), and that the granted
+        window/chain match what this ceremony run chose. """
+    chain_kind = ChainKind.TESTNET
+    not_before = 1_800_000_000
+    root_cert_der, _root_vk, root_master_seed = _fresh_root_cert(chain_kind, not_before)
+    deputy_csr = verify_and_parse_csr_der(DEPUTY_CSR_DER)
+    serial = generate_serial()
+    now = not_before + 86_400
+
+    tbs = build_deputy_tbs_v2(root_cert_der, DEPUTY_CSR_DER, chain_kind, now, DEPUTY_DAYS, serial)
+    _, signature = mldsa.derive_and_sign(root_master_seed, root_path(chain_kind), tbs)
+
+    cert_der = assemble_deputy_cert_der(tbs, signature, root_cert_der)
+    parsed = parse_root_certificate_der(cert_der)
+    assert parsed.subject_vk == deputy_csr.subject_vk
+    assert parsed.chain_kind == chain_kind
+    assert parsed.not_before == now
+    assert parsed.not_after == now + DEPUTY_DAYS * 86_400
+
+
+def test_assemble_deputy_cert_der_rejects_a_tampered_signature():
+    chain_kind = ChainKind.TESTNET
+    not_before = 1_800_000_000
+    root_cert_der, _root_vk, root_master_seed = _fresh_root_cert(chain_kind, not_before)
+    tbs = build_deputy_tbs_v2(root_cert_der, DEPUTY_CSR_DER, chain_kind, not_before + 86_400, DEPUTY_DAYS, generate_serial())
+    _, signature = mldsa.derive_and_sign(root_master_seed, root_path(chain_kind), tbs)
+    tampered = bytearray(signature)
+    tampered[-1] ^= 0xFF
+
+    with pytest.raises(CertRequestError):
+        assemble_deputy_cert_der(tbs, bytes(tampered), root_cert_der)
+
+
+def test_assemble_deputy_cert_der_rejects_a_wrong_signer():
+    """ A different Root's signature over the same TBS must not verify --
+        confirms assemble_deputy_cert_der checks against THIS
+        `root_cert_der`'s own embedded key, not merely "some valid
+        ML-DSA-65 signature". """
+    chain_kind = ChainKind.TESTNET
+    not_before = 1_800_000_000
+    root_cert_der, _root_vk, _root_master_seed = _fresh_root_cert(chain_kind, not_before)
+    tbs = build_deputy_tbs_v2(root_cert_der, DEPUTY_CSR_DER, chain_kind, not_before + 86_400, DEPUTY_DAYS, generate_serial())
+
+    _other_root_cert_der, _other_vk, other_master_seed = _fresh_root_cert(chain_kind, not_before, seed_byte=0x09)
+    _, wrong_signature = mldsa.derive_and_sign(other_master_seed, root_path(chain_kind), tbs)
+
+    with pytest.raises(CertRequestError):
+        assemble_deputy_cert_der(tbs, wrong_signature, root_cert_der)
+
+
+def test_assemble_deputy_cert_der_rejects_garbage_root_cert_der():
+    with pytest.raises(CertRequestError):
+        assemble_deputy_cert_der(bytes(2_368), bytes(3309), b"not a certificate at all")
+
+
+def test_assemble_deputy_cert_der_rejects_garbage_tbs():
+    chain_kind = ChainKind.TESTNET
+    root_cert_der, _root_vk, _root_master_seed = _fresh_root_cert(chain_kind)
+    with pytest.raises(CertRequestError):
+        assemble_deputy_cert_der(b"not a tbs at all", bytes(3309), root_cert_der)

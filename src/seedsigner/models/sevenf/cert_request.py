@@ -243,6 +243,15 @@ def _lib():
             ctypes.POINTER(ctypes.c_size_t),       # out_written
         ]
         lib.mldsa7f_cert_assemble_root.restype = ctypes.c_int32
+
+        lib.mldsa7f_cert_assemble_deputy.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,      # tbs_der
+            ctypes.c_char_p, ctypes.c_size_t,      # signature
+            ctypes.c_char_p, ctypes.c_size_t,      # root_cert_der
+            ctypes.c_char_p, ctypes.c_size_t,      # out
+            ctypes.POINTER(ctypes.c_size_t),       # out_written
+        ]
+        lib.mldsa7f_cert_assemble_deputy.restype = ctypes.c_int32
         lib._sevenf_cert_request_argtypes_registered = True
     return lib
 
@@ -499,6 +508,35 @@ def assemble_root_cert_der(tbs_der: bytes, signature: bytes, subject_vk: bytes) 
     )
     if rc != 0:
         raise CertRequestError("couldn't assemble the Root certificate", code=rc)
+    return out_buf.raw[:written.value]
+
+
+def assemble_deputy_cert_der(tbs_der: bytes, signature: bytes, root_cert_der: bytes) -> bytes:
+    """ Assemble a complete, DER-encoded X.509 `Certificate` from a Deputy TBS
+        body this device already built (`build_deputy_tbs_v2`) and a signature
+        this device already produced over it under the ISSUING ROOT'S key
+        (never the Deputy's own) -- closes the Deputy half of
+        `7f-signing-support-detached-sig-export-unreconstructable`, the same
+        detached-signature-export gap already fixed for Root self-cert above.
+        Raises CertRequestError if the signature doesn't verify over the TBS
+        under the Root's real key (re-parsed fresh from `root_cert_der`), or
+        if the Deputy TBS's own AuthorityKeyIdentifier doesn't match that same
+        Root certificate's key identifier -- see cert_request.rs's own
+        assemble_deputy_cert_der() doc comment for the full safety-property
+        reasoning (self-signed-vs-CA-issued distinction, and why the AKI
+        binding check is genuine defense-in-depth rather than a no-op). """
+    lib = _lib()
+    out_buf = ctypes.create_string_buffer(_CERT_FULL_MAX_LEN)
+    written = ctypes.c_size_t(0)
+    rc = lib.mldsa7f_cert_assemble_deputy(
+        tbs_der, len(tbs_der),
+        signature, len(signature),
+        root_cert_der, len(root_cert_der),
+        out_buf, _CERT_FULL_MAX_LEN,
+        ctypes.byref(written),
+    )
+    if rc != 0:
+        raise CertRequestError("couldn't assemble the Deputy certificate", code=rc)
     return out_buf.raw[:written.value]
 
 

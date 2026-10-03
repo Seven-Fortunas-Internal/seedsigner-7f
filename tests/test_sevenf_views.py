@@ -750,33 +750,41 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
 
 
     def test_full_flow_with_real_matching_keys_signs_and_exports(self):
-        """ End-to-end over the real reference vectors: select testnet ->
-            scan the real Root certificate (this seed's derived key
-            monkeypatched to match its embedded subject_vk, the one thing
-            no accessible mnemonic can be reverse-engineered to satisfy) ->
-            scan the real Deputy CSR -> review all 8 fields -> confirm+sign
-            -> Deputy-specific signed screen -> export menu. Confirms the
-            real public_key/signature (the Root's, not the Deputy's -- the
-            Root is always the signer) and the Deputy-specific success
-            wording. """
+        """ End-to-end: select testnet -> scan a Root certificate THIS
+            seed's own derived key actually signed (built fresh here, via
+            the same build+sign+assemble pipeline
+            TestSevenFRootSelfCertificationFlow's own full-flow test uses --
+            no mock of the Wrong-Key check is needed, since this cert is
+            genuinely self-consistent for this seed, unlike the earlier
+            version of this test which monkeypatched derive_root_ceremony_keys
+            to paper over the fact that the real reference ROOT_CERT_DER's
+            embedded key belongs to nobody this sandbox can sign for) ->
+            scan the real reference Deputy CSR (self-signed by the real
+            Deputy's own key, independent of which Root issues it) ->
+            review all 8 fields -> confirm+sign -> Deputy-specific signed
+            screen -> export (the complete assembled certificate, not the
+            old pubkey/signed-config menu -- closes the Deputy half of
+            7f-signing-support-detached-sig-export-unreconstructable).
+            Confirms the real public_key/signature (the Root's, not the
+            Deputy's -- the Root is always the signer), the Deputy-specific
+            success wording, and that the final exported bytes assemble
+            into a certificate parsing back to the Deputy's own subject key
+            and chosen chain -- not just "didn't raise". """
         import time as time_module
-        from test_sevenf_cert_request import DEPUTY_CSR_DER, ROOT_CERT_DER, ROOT_CERT_NOT_BEFORE
-        from seedsigner.models.sevenf.constants import DerivedKey
-        from seedsigner.models.sevenf.root_ceremony import RootCeremonyKeys
+        from test_sevenf_cert_request import DEPUTY_CSR_DER
         from seedsigner.models.sevenf import cert_request as cert_request_module
+        from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
 
         seed = self.seed_fixture()
-        root_subject_vk = cert_request_module.parse_root_certificate_der(ROOT_CERT_DER).subject_vk
-        # The real signing path (sign_with_root_ca -> mldsa.derive_and_sign) always
-        # re-derives from this seed's own real seed_bytes, independent of the
-        # fake_derive mock below (which only stands in for the Wrong-Key gate's
-        # own, separate derive_root_ceremony_keys call) -- so the signature's
-        # public_key must match THIS seed's real derived key, not root_subject_vk.
         real_root_ca_public_key = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key
-
-        def fake_derive(seed_bytes, chain_kind):
-            key = DerivedKey(public_key=root_subject_vk, address="sevenf1faketestaddress")
-            return RootCeremonyKeys(chain_kind=chain_kind, root_ca=key, devfund=key)
+        root_not_before = 1_800_000_000
+        root_serial = cert_request_module.generate_serial()
+        root_tbs = cert_request_module.build_root_tbs(
+            real_root_ca_public_key, ChainKind.TESTNET, root_not_before, cert_request_module.ROOT_DAYS, root_serial,
+        )
+        _, root_signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, root_tbs, confirmed=True)
+        root_cert_der = cert_request_module.assemble_root_cert_der(root_tbs, root_signature, real_root_ca_public_key)
+        deputy_csr = cert_request_module.verify_and_parse_csr_der(DEPUTY_CSR_DER)
 
         captured = {}
 
@@ -784,21 +792,24 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             captured["title"] = view.title
             captured["text"] = view.text
 
-        def capture_before_home(view):
-            captured["public_key"] = self.controller.sevenf_ceremony_data["public_key"]
-            captured["signature"] = self.controller.sevenf_ceremony_data["signature"]
+        def capture_before_export(view):
+            data = self.controller.sevenf_ceremony_data
+            captured["public_key"] = data["public_key"]
+            captured["signature"] = data["signature"]
+            captured["tbs_bytes"] = data["tbs_bytes"]
+            captured["root_cert_der"] = data["root_cert_der"]
 
         with pytest.MonkeyPatch().context() as mp:
-            mp.setattr(sevenf_views.root_ceremony, "derive_root_ceremony_keys", fake_derive)
-            # Same wall-clock fix as test_review_fields_are_labeled_and_ordered_root_then_deputy.
-            mp.setattr(time_module, "time", lambda: ROOT_CERT_NOT_BEFORE + 86400)
+            # Same wall-clock fix as test_review_fields_are_labeled_and_ordered_root_then_deputy,
+            # kept within this freshly-built Root cert's own validity window.
+            mp.setattr(time_module, "time", lambda: root_not_before + 86400)
             self.run_sequence(
                 [
                     FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
                     FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
                     FlowStep(
                         sevenf_views.SevenFScanRootCertificateView,
-                        before_run=_load_cert_request_into_decoder(ROOT_CERT_DER),
+                        before_run=_load_cert_request_into_decoder(root_cert_der),
                         screen_return_value=0,
                     ),
                     FlowStep(
@@ -812,10 +823,10 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                     FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
                     FlowStep(
                         sevenf_views.SevenFRootCertSignedView,
-                        before_run=lambda view: (capture_signed_screen_args(view), capture_before_home(view)),
+                        before_run=lambda view: (capture_signed_screen_args(view), capture_before_export(view)),
                         screen_return_value=0,
                     ),  # "OK"
-                    FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
+                    FlowStep(sevenf_views.SevenFExportDeputyCertQRView, screen_return_value=0),
                     FlowStep(MainMenuView),
                 ],
                 initial_destination_view_args=dict(seed=seed),
@@ -827,6 +838,13 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         # signature is attributed to the Root key, never the Deputy's own.
         assert captured["public_key"] == real_root_ca_public_key
         assert len(captured["signature"]) == 3309
+
+        cert_der = cert_request_module.assemble_deputy_cert_der(
+            captured["tbs_bytes"], captured["signature"], captured["root_cert_der"],
+        )
+        parsed = cert_request_module.parse_root_certificate_der(cert_der)
+        assert parsed.subject_vk == deputy_csr.subject_vk
+        assert parsed.chain_kind == ChainKind.TESTNET
 
         assert self.controller.sevenf_ceremony_data is None  # Home always wipes flow-scoped state
 
@@ -966,6 +984,74 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         from seedsigner.views.view import BackStackView
         assert destination.View_cls == BackStackView
         assert self.controller.sevenf_ceremony_data is None
+
+
+    def test_export_deputy_cert_qr_view_encodes_a_real_assembled_certificate(self):
+        """ Unit-level, mirroring TestSevenFRootSelfCertificationFlow's own
+            test_export_root_cert_qr_view_encodes_a_real_assembled_certificate:
+            confirms the exported QR carries a genuine assembled Deputy
+            certificate (BBQr-encoded, file_type 'B'), round-tripped through
+            the real BBQr encoder/decoder pair and re-parsed back to the
+            Deputy's own subject key (not the Root's -- the Root only ever
+            signs) -- not a placeholder and not merely "some bytes got
+            passed to some encoder". Also confirms this routes to
+            MainMenuView directly, NOT through SevenFExportView's old
+            pubkey/signed-config menu. """
+        from test_sevenf_cert_request import DEPUTY_CSR_DER
+        from seedsigner.models.sevenf import cert_request as cert_request_module
+        from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
+
+        # A Root certificate THIS seed's own derived key actually signed --
+        # see test_full_flow_with_real_matching_keys_signs_and_exports's own
+        # docstring for why the real reference ROOT_CERT_DER (nobody this
+        # sandbox can sign for) no longer fits here now that
+        # assemble_deputy_cert_der genuinely verifies against it.
+        seed = self.seed_fixture()
+        root_vk = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key
+        root_not_before = 1_800_000_000
+        root_tbs = cert_request_module.build_root_tbs(
+            root_vk, ChainKind.TESTNET, root_not_before, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial(),
+        )
+        _, root_signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, root_tbs, confirmed=True)
+        root_cert_der = cert_request_module.assemble_root_cert_der(root_tbs, root_signature, root_vk)
+
+        deputy_csr = cert_request_module.verify_and_parse_csr_der(DEPUTY_CSR_DER)
+        serial = cert_request_module.generate_serial()
+        now = root_not_before + 86_400
+        days = cert_request_module.DEPUTY_DAYS
+        tbs_bytes = cert_request_module.build_deputy_tbs_v2(root_cert_der, DEPUTY_CSR_DER, ChainKind.TESTNET, now, days, serial)
+
+        public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, tbs_bytes, confirmed=True)
+
+        self.controller.sevenf_ceremony_data = dict(
+            public_key=public_key, signature=signature, tbs_bytes=tbs_bytes, root_cert_der=root_cert_der,
+        )
+
+        view = sevenf_views.SevenFExportDeputyCertQRView()
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["qr_encoder"] = kwargs["qr_encoder"]
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            destination = view.run()
+
+        encoder = captured["qr_encoder"]
+        assert encoder.file_type == "B"
+
+        d = DecodeQR()
+        while True:
+            status = d.add_data(encoder.next_part())
+            if status == DecodeQRStatus.COMPLETE:
+                break
+        cert_der = d.decoder.get_data()
+        parsed = cert_request_module.parse_root_certificate_der(cert_der)
+        assert parsed.subject_vk == deputy_csr.subject_vk
+        assert parsed.chain_kind == ChainKind.TESTNET
+        assert parsed.not_before == now
+
+        assert destination.View_cls == MainMenuView
 
 
 class TestSevenFScanEntryPoint(FlowTest):

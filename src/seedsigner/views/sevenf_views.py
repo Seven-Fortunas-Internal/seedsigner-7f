@@ -421,9 +421,11 @@ class SevenFScanDeputyCsrView(ScanView):
                     seed=self.seed,
                     chain_kind=self.chain_kind,
                     tbs_bytes=tbs_bytes,
+                    root_cert_der=self.root_cert_der,
                     signed_view_args=dict(
                         title=_("Deputy Certificate Signed"),
                         text=_("This Deputy's certificate has been signed by this Root and is ready to export."),
+                        export_destination=SevenFExportDeputyCertQRView,
                     ),
                 ),
             ),
@@ -711,10 +713,12 @@ class SevenFConfirmSignRootCertView(View):
         docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3 for why
         that was a real, already-shipped bug: a TBS whose serial/not_before
         are device-chosen can never be reconstructed downstream from a
-        detached signature alone). Harmless for Deputy cross-certification,
-        which doesn't read the extra key until/unless
-        7f-signing-support-detached-sig-export-unreconstructable fixes that
-        flow too.
+        detached signature alone). `root_cert_der` is the Deputy flow's own
+        extra piece of context (the issuing Root's real certificate,
+        carried from SevenFScanRootCertificateView) -- None for Root
+        self-cert, which has no separate issuer to carry. Closes the Deputy
+        half of 7f-signing-support-detached-sig-export-unreconstructable
+        (the Root half shipped in the PKCS#10 rework above).
 
         Shared by Root self-certification AND Deputy cross-certification
         (both sign an arbitrary TBS body with this same Root key) --
@@ -723,11 +727,12 @@ class SevenFConfirmSignRootCertView(View):
         passed straight through to SevenFRootCertSignedView; defaults to
         that view's own Root self-cert wording/export so the Deputy call
         site needs no changes. """
-    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, signed_view_args: dict = None):
+    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, root_cert_der: bytes = None, signed_view_args: dict = None):
         super().__init__()
         self.seed = seed
         self.chain_kind = chain_kind
         self.tbs_bytes = tbs_bytes
+        self.root_cert_der = root_cert_der
         self.signed_view_args = signed_view_args or {}
 
         keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
@@ -753,7 +758,9 @@ class SevenFConfirmSignRootCertView(View):
             self.tbs_bytes,
             confirmed=True,
         )
-        self.controller.sevenf_ceremony_data = dict(public_key=public_key, signature=signature, tbs_bytes=self.tbs_bytes)
+        self.controller.sevenf_ceremony_data = dict(
+            public_key=public_key, signature=signature, tbs_bytes=self.tbs_bytes, root_cert_der=self.root_cert_der,
+        )
         return Destination(SevenFRootCertSignedView, view_args=self.signed_view_args)
 
 
@@ -766,13 +773,14 @@ class SevenFRootCertSignedView(View):
         that flow's pre-existing behavior stays unchanged for callers that
         don't override them; the Deputy flow supplies its own.
         `export_destination` defaults to SevenFExportView (the original
-        pubkey/signed-config menu -- correct for Deputy only until
-        7f-signing-support-detached-sig-export-unreconstructable fixes that
-        flow too; Deputy's own call site never overrides this). Root
-        self-cert's own call site explicitly overrides it to
-        SevenFExportRootCertQRView, which exports the complete assembled
-        certificate rather than a detached signature (see
-        docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3-§4).
+        pubkey/signed-config menu, kept only as the fallback for any future
+        caller that doesn't override it). Both existing flows now override
+        it: Root self-cert's call site to SevenFExportRootCertQRView, and
+        Deputy cross-certification's to SevenFExportDeputyCertQRView --
+        each exports the complete assembled certificate rather than a
+        detached signature (see
+        docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3-§4 and
+        docs/7f-integration/deputy-cross-cert-detached-sig-export-fix-plan.md).
         Mirrors SevenFGenesisSignedView's shape but kept as its own class
         rather than parameterizing THAT one too -- genesis-config signing is
         a separate artefact family with its own hardware-tested call site,
@@ -902,6 +910,33 @@ class SevenFExportRootCertQRView(View):
         data = self.controller.sevenf_ceremony_data
         cert_der = cert_request.assemble_root_cert_der(
             data["tbs_bytes"], data["signature"], data["public_key"],
+        )
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=BBQrEncoder(data=cert_der, file_type="B"),  # 'B': BBQr generic binary
+        )
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
+class SevenFExportDeputyCertQRView(View):
+    """ Exports the complete, assembled Deputy cross-certification
+        certificate as BBQr-encoded binary -- the Deputy half of
+        7f-signing-support-detached-sig-export-unreconstructable's fix
+        (docs/7f-integration/deputy-cross-cert-detached-sig-export-fix-plan.md),
+        mirroring SevenFExportRootCertQRView exactly except for the one real
+        design difference: assemble_deputy_cert_der() verifies the signature
+        against the ISSUING ROOT's real key (re-parsed from `root_cert_der`),
+        not the Deputy's own subject key, since this certificate is CA-issued
+        rather than self-signed. Does NOT route through SevenFExportView's
+        pubkey/signed-config menu, same reasoning as the Root export. """
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import BBQrEncoder
+        data = self.controller.sevenf_ceremony_data
+        cert_der = cert_request.assemble_deputy_cert_der(
+            data["tbs_bytes"], data["signature"], data["root_cert_der"],
         )
 
         self.run_screen(
