@@ -22,14 +22,15 @@
         failure two independent reviews found in the alternative
         (warning-only) design.
 
-    Deliberately different plaintext shape from the sibling
-    deputy_ca_export.py: that module stores a derived LEAF seed's raw bytes
-    (seed_hex), which is fine because that value is a ONE-WAY derivation
-    never meant to become words again. This module backs up the operator's
-    own master seed, and Seed.seed_bytes is itself a one-way PBKDF2-HMAC-
-    SHA512 derivation from the mnemonic (models/seed.py) -- there is no
-    bytes -> mnemonic inverse, so the plaintext here MUST be the mnemonic
-    word list, not seed_bytes, or restoring would be permanently impossible.
+    Deliberately a different plaintext shape from a derived-leaf-seed export
+    (e.g. the now-removed deputy_ca_export.py, which stored a derived LEAF
+    seed's raw bytes as seed_hex -- fine there because that value is a
+    ONE-WAY derivation never meant to become words again). This module
+    backs up the operator's own master seed, and Seed.seed_bytes is itself
+    a one-way PBKDF2-HMAC-SHA512 derivation from the mnemonic
+    (models/seed.py) -- there is no bytes -> mnemonic inverse, so the
+    plaintext here MUST be the mnemonic word list, not seed_bytes, or
+    restoring would be permanently impossible.
 
     Security notes carried over from adversarial review, not decided here:
       - R5b (non-negotiable): the device never accepts a password that
@@ -270,10 +271,10 @@ def build_backup_plaintext(seed: Seed) -> bytes:
 
 def parse_backup_plaintext(data: bytes) -> Dict[str, Any]:
     """ Strict validation, refusing rather than guessing (ARCH-005): a
-        sibling feature's own encrypted-blob plaintext (e.g.
-        deputy_ca_export's KeyDatabase shape) must never be silently
-        accepted here just because it happened to decrypt under some
-        password -- the `type`/`version` check is what tells the two
+        different feature's own encrypted-blob plaintext (e.g. the
+        now-removed deputy_ca_export.py's KeyDatabase shape) must never be
+        silently accepted here just because it happened to decrypt under
+        some password -- the `type`/`version` check is what tells the two
         apart. Only checks field TYPES/SHAPE; read_backup() does the
         further step of actually reconstructing a Seed from the mnemonic
         field and validating that succeeds. """

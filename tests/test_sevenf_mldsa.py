@@ -13,6 +13,12 @@
     pinned KAT value below was re-captured against the new single-grammar
     paths, not carried over from the retired grammar.
 
+    ALSO 2026-10-03 (adversarial review): `derive_seed_raw` (the one
+    raw-secret-exporting function on this surface) was removed along with
+    its sole caller, `deputy_ca_export.py` -- see mldsa.py's own module
+    docstring. `derive_pubkey`/`derive_and_sign` now validate `path`
+    against `path_lexicon.validate()` before ever reaching the FFI.
+
     Requires firmware/mldsa7f's compiled library to exist (`cargo build
     --release` in firmware/mldsa7f/, or set SEEDSIGNER_MLDSA7F_LIB). Skips
     cleanly if it's missing, rather than failing the whole suite, since
@@ -25,6 +31,7 @@ import pytest
 
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, MASTER_SEED_LEN
+from seedsigner.models.sevenf.path_lexicon import PathLexiconError
 
 
 def _lib_available() -> bool:
@@ -131,68 +138,20 @@ def test_wrong_master_seed_length_raises_value_error():
         mldsa.derive_pubkey(b"\x00" * 32, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
 
 
-def test_derive_seed_raw_is_deterministic():
-    a = mldsa.derive_seed_raw(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1")
-    b = mldsa.derive_seed_raw(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1")
-    assert a == b
-    assert len(a) == MASTER_SEED_LEN
+def test_derive_pubkey_rejects_an_invalid_path_before_reaching_the_ffi():
+    """ Added 2026-10-03 (adversarial review): derive_pubkey/derive_and_sign
+        are the real boundary every Python caller on this device passes
+        through, so validation belongs here, not only in the unwired
+        path_lexicon module -- see mldsa.py's own docstring and
+        7f-signing-support-path-validation-not-enforced. A retired-grammar
+        path must never reach the FFI (or derive a key) at all. """
+    with pytest.raises(PathLexiconError):
+        mldsa.derive_pubkey(FIXED_SEED, "root-ca/l1/testnet/0", network=1, layer=0)
 
 
-def test_derive_seed_raw_differs_per_path():
-    testnet = mldsa.derive_seed_raw(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1")
-    mainnet = mldsa.derive_seed_raw(FIXED_SEED, "deputy/mainnet/0/ml-dsa/v1")
-    assert testnet != mainnet
-
-
-def test_derive_seed_raw_differs_from_root():
-    deputy = mldsa.derive_seed_raw(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1")
-    root = mldsa.derive_seed_raw(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
-    assert deputy != root
-
-
-def test_derive_seed_raw_wrong_master_seed_length_raises_value_error():
-    with pytest.raises(ValueError):
-        mldsa.derive_seed_raw(b"\x00" * 32, "deputy/testnet/0/ml-dsa/v1")
-
-
-def test_derive_seed_raw_wipes_its_intermediate_ctypes_buffer(monkeypatch):
-    """ Regression test for 7f-signing-support-python-ctypes-secret-zeroing:
-        the ctypes buffer mldsa7f_derive_seed_raw writes the plaintext
-        derived seed into must be zeroed before the Python call returns,
-        not left holding a residual plaintext copy for as long as the
-        buffer object happens to stay alive. Spies on ctypes.create_string_
-        buffer (rather than reaching into mldsa's internals) so this test
-        observes the same buffer object derive_seed_raw() itself uses. """
-    real_create_string_buffer = ctypes.create_string_buffer
-    captured = []
-
-    def spying_create_string_buffer(size):
-        buf = real_create_string_buffer(size)
-        if size == MASTER_SEED_LEN:
-            captured.append(buf)
-        return buf
-
-    monkeypatch.setattr(ctypes, "create_string_buffer", spying_create_string_buffer)
-
-    result = mldsa.derive_seed_raw(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1")
-
-    assert len(captured) == 1
-    assert captured[0].raw == b"\x00" * MASTER_SEED_LEN
-    assert result != b"\x00" * MASTER_SEED_LEN
-
-
-def test_derive_seed_raw_matches_derive_pubkey_for_the_same_path():
-    """ derive_seed_raw() and derive_pubkey()/derive_and_sign() all go
-        through the same single-step derive_seed() on the Rust side --
-        confirms it's the real derivation, not a separate/divergent
-        implementation, by checking the leaf keypair derived from it
-        matches what derive_and_sign() (which performs the full derivation
-        itself) produces for the same path. """
-    seed = mldsa.derive_seed_raw(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
-    assert len(seed) == MASTER_SEED_LEN
-    pk, _sig = mldsa.derive_and_sign(FIXED_SEED, "root/testnet/0/ml-dsa/v1", b"x")
-    pk_direct, _addr = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
-    assert pk == pk_direct
+def test_derive_and_sign_rejects_an_invalid_path_before_reaching_the_ffi():
+    with pytest.raises(PathLexiconError):
+        mldsa.derive_and_sign(FIXED_SEED, "root-ca/l1/testnet/0", b"x")
 
 
 def test_derive_and_sign_wrong_master_seed_length_raises_value_error():

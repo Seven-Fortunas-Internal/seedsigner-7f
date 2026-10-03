@@ -10,17 +10,26 @@
     split retired, and path_lexicon.py for this device's own path-building
     layer under the new grammar.
 
-    derive_seed_raw is ONE deliberate, narrow exception -- renamed from
-    derive_purpose_seed, whose original purpose (the Root-to-Deputy
-    child-seed handoff) is now retired: 7fchain's real ceremony has the
-    Deputy derive its own key on its own holder's own airgap instead (C8),
-    and the `KeyDatabase` format this device's `deputy_ca_export.py`
-    targeted was deleted on 7fchain's side (M-8, 2026-10-02). See that
-    function's own docstring and ffi.rs's matching "One deliberate, narrow
-    exception" doc comment. No other caller should use it for anything
-    new, and its result must be encrypted (see
-    seedsigner.models.sevenf.encrypted_blob) before it ever leaves the
-    device.
+    REMOVED 2026-10-03 (adversarial review of the R27 re-port):
+    `derive_seed_raw`/`mldsa7f_derive_seed_raw`, the one function on this
+    FFI surface that ever returned raw secret seed material. Its sole
+    purpose was the Root-to-Deputy child-seed handoff (the sole caller,
+    `deputy_ca_export.py`), which is retired on 7fchain's side (C8:
+    the Deputy derives its own key on its own holder's own airgap instead;
+    the `KeyDatabase` format that caller targeted was deleted, M-8). With
+    no live purpose and no live caller, the raw-secret-export primitive was
+    removed rather than kept around as dead attack surface -- see
+    7f-signing-support-deputy-seed-export-obsolete in _delivery/backlog.yaml
+    for the decision record. "No raw-secret-key API" is now simply true of
+    this module, not true-with-one-exception.
+
+    Every path this module hands to the FFI is validated against
+    `path_lexicon.validate()` first (added in the same adversarial-review
+    pass that removed the above) -- this is the actual boundary every real
+    and future Python caller on this device passes through, closing the gap
+    flagged against firmware/mldsa7f/src/derive.rs's own `derive_seed`,
+    which deliberately does not validate (see that function's doc comment
+    and 7f-signing-support-path-validation-not-enforced).
 
     The compiled library search order:
       1. SEEDSIGNER_MLDSA7F_LIB env var, an explicit path override (tests/dev).
@@ -37,6 +46,7 @@ import ctypes
 import os
 from pathlib import Path
 
+from seedsigner.models.sevenf import path_lexicon
 from seedsigner.models.sevenf.constants import (
     ADDRESS_LEN,
     ML_DSA_PK_LEN,
@@ -119,22 +129,19 @@ def _lib_handle() -> ctypes.CDLL:
             ctypes.c_char_p, ctypes.c_size_t,   # sig_out
         ]
         lib.mldsa7f_derive_and_sign.restype = ctypes.c_int32
-
-        lib.mldsa7f_derive_seed_raw.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
-            ctypes.c_char_p, ctypes.c_size_t,   # path
-            ctypes.c_char_p, ctypes.c_size_t,   # out
-        ]
-        lib.mldsa7f_derive_seed_raw.restype = ctypes.c_int32
         _lib = lib
     return _lib
 
 
 def derive_pubkey(master_seed: bytes, path: str, network: int, layer: int) -> tuple[bytes, str]:
     """ Derive the ML-DSA-65 public key and 7fchain address for `path` on
-        the given network/layer. Raises MlDsaError on any failure. """
+        the given network/layer. Raises MlDsaError on any failure, or
+        path_lexicon.PathLexiconError if `path` fails lexicon validation
+        (added 2026-10-03, adversarial review -- see this module's own
+        docstring). """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
+    path_lexicon.validate(path)
 
     lib = _lib_handle()
     pk_buf = ctypes.create_string_buffer(ML_DSA_PK_LEN)
@@ -171,9 +178,12 @@ def derive_and_sign(master_seed: bytes, path: str, message: bytes) -> tuple[byte
     """ Derive the ML-DSA-65 keypair for `path` and sign `message` with it
         under the empty FIPS 204 context (the default hedged/randomized
         path -- matches sf-root sign-genesis). Raises MlDsaError on any
-        failure. """
+        failure, or path_lexicon.PathLexiconError if `path` fails lexicon
+        validation (added 2026-10-03, adversarial review -- see this
+        module's own docstring). """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
+    path_lexicon.validate(path)
 
     lib = _lib_handle()
     pk_buf = ctypes.create_string_buffer(ML_DSA_PK_LEN)
@@ -192,50 +202,3 @@ def derive_and_sign(master_seed: bytes, path: str, message: bytes) -> tuple[byte
         raise MlDsaError(rc, "derive_and_sign")
 
     return pk_buf.raw[:ML_DSA_PK_LEN], sig_buf.raw[:ML_DSA_SIG_LEN]
-
-
-def derive_seed_raw(master_seed: bytes, path: str) -> bytes:
-    """ Derive the raw seed for `path` from the master seed.
-
-        THE ONE RAW-SECRET-EXPORTING FUNCTION IN THIS MODULE -- see this
-        module's own docstring and ffi.rs's matching doc comment for why
-        this is a deliberate, narrow, sanctioned exception (D4a: exporting a
-        derived LEAF seed is permitted, the master seed itself never is).
-        Renamed 2026-10-03 from derive_purpose_seed: its original sole
-        purpose, the Root-to-Deputy child-seed handoff, is retired (C8;
-        see this module's own docstring) -- its only known caller,
-        deputy_ca_export.py, is confirmed non-functional against the real
-        ceremony as of this rewrite.
-
-        The caller MUST encrypt the result (see
-        seedsigner.models.sevenf.encrypted_blob.encrypt()) before it leaves
-        the device by any means -- this function returns plaintext secret
-        material and does no encryption itself. Raises MlDsaError on any
-        failure. """
-    if len(master_seed) != MASTER_SEED_LEN:
-        raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
-
-    lib = _lib_handle()
-    out_buf = ctypes.create_string_buffer(MASTER_SEED_LEN)
-    path_bytes = path.encode("utf-8")
-
-    try:
-        rc = lib.mldsa7f_derive_seed_raw(
-            master_seed, len(master_seed),
-            path_bytes, len(path_bytes),
-            out_buf, MASTER_SEED_LEN,
-        )
-        if rc != 0:
-            raise MlDsaError(rc, "derive_seed_raw")
-
-        return out_buf.raw[:MASTER_SEED_LEN]
-    finally:
-        # The Python bytes returned above is a copy taken before this runs
-        # (Python evaluates a `return` expression before a `finally` block
-        # executes) -- this only wipes mldsa7f's own intermediate ctypes
-        # buffer, the residual-plaintext gap 7f-signing-support-python-
-        # ctypes-secret-zeroing tracked. `master_seed` itself is the
-        # caller's own immutable bytes object (not this function's to
-        # mutate) and the returned copy is a Python bytes object, which
-        # CPython cannot zero in place -- both are out of scope here.
-        ctypes.memset(out_buf, 0, MASTER_SEED_LEN)

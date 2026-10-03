@@ -74,10 +74,11 @@ class TestBuildAndParsePlaintext:
 
 
     def test_parse_rejects_a_completely_different_json_shape(self):
-        """ Type-confusion guard (ARCH-005): a sibling feature's own
-            encrypted-blob plaintext (e.g. deputy_ca_export's KeyDatabase
-            shape) must never be silently accepted as a seed backup just
-            because it happens to decrypt under some password. """
+        """ Type-confusion guard (ARCH-005): a different feature's own
+            encrypted-blob plaintext (e.g. the now-removed
+            deputy_ca_export.py's KeyDatabase shape) must never be silently
+            accepted as a seed backup just because it happens to decrypt
+            under some password. """
         import json
         foreign_plaintext = json.dumps({"version": 1, "created_at": 0, "entries": []}).encode("utf-8")
         with pytest.raises(seed_backup.SeedBackupFormatError):
