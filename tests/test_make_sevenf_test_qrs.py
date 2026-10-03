@@ -70,12 +70,41 @@ def test_devfund_config_round_trips_and_parses():
     devfund_config.parse_canonical_bytes(got)
 
 
-def test_deputy_cert_request_round_trips_and_parses():
+def test_root_cert_round_trips_and_parses():
+    root_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.root_seed().seed_bytes, tool.CHAIN_KIND)
+    got = _round_trip(tool.build_root_cert_der(root_keys, tool.root_seed()))
+    parsed = cert_request.parse_root_certificate_der(got)
+    assert parsed.subject_vk == root_keys.root_ca.public_key
+    assert parsed.chain_kind == tool.CHAIN_KIND
+
+
+def test_deputy_csr_round_trips_and_parses():
     deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.deputy_seed().seed_bytes, tool.CHAIN_KIND)
-    got = _round_trip(tool.build_deputy_cert_request(deputy_keys.root_ca.public_key))
-    req = cert_request.parse_cert_request_json(got)
-    assert req.role == cert_request.ROLE_DEPUTY
-    assert req.subject_vk == deputy_keys.root_ca.public_key
+    got = _round_trip(tool.build_deputy_csr_der(deputy_keys, tool.deputy_seed()))
+    parsed = cert_request.verify_and_parse_csr_der(got)
+    assert parsed.subject_vk == deputy_keys.root_ca.public_key
+
+
+def test_root_cert_and_deputy_csr_support_the_real_deputy_cross_cert_flow():
+    """ The actual point of this story: confirm the tool's own two new
+        artifacts are not just individually well-formed, but genuinely
+        usable as the two scanned inputs to the real Deputy cross-
+        certification pipeline (build_deputy_tbs_v2 -> sign -> assemble),
+        the same way a real device run would use them. """
+    import time
+
+    root_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.root_seed().seed_bytes, tool.CHAIN_KIND)
+    deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.deputy_seed().seed_bytes, tool.CHAIN_KIND)
+    root_cert_der = _round_trip(tool.build_root_cert_der(root_keys, tool.root_seed()))
+    deputy_csr_der = _round_trip(tool.build_deputy_csr_der(deputy_keys, tool.deputy_seed()))
+
+    now = int(time.time())
+    tbs = cert_request.build_deputy_tbs_v2(root_cert_der, deputy_csr_der, tool.CHAIN_KIND, now, cert_request.DEPUTY_DAYS, cert_request.generate_serial())
+    _, signature = tool.root_ceremony.sign_with_root_ca(tool.root_seed().seed_bytes, tool.CHAIN_KIND, tbs, confirmed=True)
+    deputy_cert_der = cert_request.assemble_deputy_cert_der(tbs, signature, root_cert_der)
+    parsed = cert_request.parse_root_certificate_der(deputy_cert_der)
+    assert parsed.subject_vk == deputy_keys.root_ca.public_key
+    assert parsed.chain_kind == tool.CHAIN_KIND
 
 
 def test_root_test_seed_qr_round_trips_through_the_real_decode_path(tmp_path):

@@ -56,17 +56,38 @@ def deputy_seed() -> Seed:
     return Seed(mnemonic=ROOT_TEST_MNEMONIC, passphrase=DEPUTY_TEST_PASSPHRASE)
 
 
-def build_deputy_cert_request(subject_vk: bytes) -> bytes:
-    req = {
-        "version": cert_request.CERT_REQUEST_VERSION,
-        "role": cert_request.ROLE_DEPUTY,
-        "kind": CHAIN_KIND.name.lower(),
-        "subject_vk": subject_vk.hex(),
-        "not_before": int(time.time()),
-        "days": 365,
-        "serial": b"\x02".hex(),
-    }
-    return json.dumps(req).encode("utf-8")
+def build_root_cert_der(root_keys, root_seed: Seed) -> bytes:
+    """ A real, complete, self-signed Root certificate DER -- the first of
+        the two artifacts the real (PKCS#10-era) Deputy cross-certification
+        flow scans, built with this app's own production code paths
+        (cert_request.build_root_tbs + root_ceremony.sign_with_root_ca +
+        cert_request.assemble_root_cert_der), not hand-guessed. Closes the
+        Root-certificate half of
+        7f-signing-support-hardware-test-tooling-pkcs10-staleness. """
+    serial = cert_request.generate_serial()
+    not_before = int(time.time())
+    tbs = cert_request.build_root_tbs(root_keys.root_ca.public_key, CHAIN_KIND, not_before, cert_request.ROOT_DAYS, serial)
+    _, signature = root_ceremony.sign_with_root_ca(root_seed.seed_bytes, CHAIN_KIND, tbs, confirmed=True)
+    return cert_request.assemble_root_cert_der(tbs, signature, root_keys.root_ca.public_key)
+
+
+def build_deputy_csr_der(deputy_keys, deputy_seed: Seed) -> bytes:
+    """ A real, self-signed PKCS#10 CSR DER for the Deputy test identity --
+        the second of the two artifacts the real Deputy cross-certification
+        flow scans. Built via cert_request.csr_info_der/assemble_csr_der,
+        the test/tooling-only CSR-building capability added to close
+        7f-signing-support-hardware-test-tooling-pkcs10-staleness (no
+        production device code builds a CSR -- verify_and_parse_csr_der's
+        own docstring confirms the device only ever verifies one; the real
+        one comes from 7fchain's own sf-deputy CLI). Signed with the
+        Deputy's own derived key via root_ceremony.sign_with_root_ca -- a
+        CSR is always self-signed (proof of possession), and this tool
+        already reuses that same function/derivation path to derive the
+        Deputy's test identity above (`deputy_keys`), it just signs a
+        different artifact with it here. """
+    info_der = cert_request.csr_info_der(deputy_keys.root_ca.public_key)
+    _, signature = root_ceremony.sign_with_root_ca(deputy_seed.seed_bytes, CHAIN_KIND, info_der, confirmed=True)
+    return cert_request.assemble_csr_der(info_der, signature)
 
 
 def build_genesis_config() -> bytes:
@@ -173,13 +194,17 @@ def main():
         # manifest's root_ca_address/root_ca_public_key_hex below are already
         # what an operator needs to cross-check against the device's own
         # review screen.
-        # "deputy_cert_request" (STALE, same root cause, not yet fixed --
-        # see 7f-signing-support-hardware-test-tooling-pkcs10-staleness in
-        # _delivery/backlog.yaml): Deputy cross-certification's own PKCS#10
-        # rework retired this JSON shape too, replacing it with a real signed
-        # Root certificate + a real PKCS#10 CSR, neither of which this tool
-        # builds yet.
-        "deputy_cert_request": build_deputy_cert_request(deputy_keys.root_ca.public_key),
+        #
+        # "root_cert"/"deputy_csr" (2026-10-03, closes
+        # 7f-signing-support-hardware-test-tooling-pkcs10-staleness): Deputy
+        # cross-certification's own PKCS#10 rework replaced the old
+        # "deputy_cert_request" JSON shape with a real signed Root
+        # certificate + a real self-signed PKCS#10 CSR -- these are those
+        # two artifacts, both built with this app's own production code
+        # paths (see build_root_cert_der/build_deputy_csr_der's own
+        # docstrings).
+        "root_cert": build_root_cert_der(root_keys, root_seed()),
+        "deputy_csr": build_deputy_csr_der(deputy_keys, deputy_seed()),
         "genesis_config": build_genesis_config(),
         "devfund_config": build_devfund_config(),
     }

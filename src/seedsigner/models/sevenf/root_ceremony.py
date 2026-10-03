@@ -82,14 +82,26 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         notes in _delivery/backlog.yaml): a single callable that builds
         bytes and signs them, with review bolted on as a UI step in front
         of it, is not the same guarantee as this project's "no-blind-signing,
-        non-negotiable" principle requires. views.sevenf_views.SevenFConfirmSignView
-        is the only intended caller allowed to pass confirmed=True, and only
-        after the operator has explicitly approved every displayed field
-        (see genesis_config.review_fields(), paged one field per screen by
-        views.sevenf_views.SevenFGenesisReviewFieldView). Passing
-        confirmed=True from anywhere else defeats the whole point of this
-        parameter existing -- it is not a formality to satisfy a type
-        checker, it is the gate.
+        non-negotiable" principle requires. On the DEVICE, the only intended
+        callers are views.sevenf_views.SevenFConfirmSignView (genesis-config,
+        after the operator has approved every field via
+        genesis_config.review_fields()/SevenFGenesisReviewFieldView) and
+        SevenFConfirmSignRootCertView (Root self-cert and Deputy cross-cert,
+        after the operator has approved every field via
+        root_self_cert_review_fields()/deputy_cross_cert_v2_review_fields()).
+        Passing confirmed=True from anywhere else on the device defeats the
+        whole point of this parameter existing -- it is not a formality to
+        satisfy a type checker, it is the gate.
+
+        The one exception is OFFLINE, host-side test-fixture-generation
+        tooling (tools/make_sevenf_test_qrs.py's build_root_cert_der/
+        build_deputy_csr_der) -- never shipped to the device, never reads a
+        real ceremony seed, and signs only the hardcoded test-only BIP-39
+        fixtures already used throughout that tool. There is no review
+        screen to gate there because there is no operator session at all;
+        the gate this parameter protects is "did a human see the fields
+        before this device signed them," which doesn't apply to a script
+        generating its own test input.
     """
     if not confirmed:
         raise SigningNotConfirmedError(

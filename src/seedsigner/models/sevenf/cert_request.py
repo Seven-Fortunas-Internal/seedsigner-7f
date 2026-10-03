@@ -252,6 +252,21 @@ def _lib():
             ctypes.POINTER(ctypes.c_size_t),       # out_written
         ]
         lib.mldsa7f_cert_assemble_deputy.restype = ctypes.c_int32
+
+        lib.mldsa7f_cert_build_csr_info.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
+            ctypes.c_char_p, ctypes.c_size_t,      # out
+            ctypes.POINTER(ctypes.c_size_t),       # out_written
+        ]
+        lib.mldsa7f_cert_build_csr_info.restype = ctypes.c_int32
+
+        lib.mldsa7f_cert_assemble_csr.argtypes = [
+            ctypes.c_char_p, ctypes.c_size_t,      # info_der
+            ctypes.c_char_p, ctypes.c_size_t,      # signature
+            ctypes.c_char_p, ctypes.c_size_t,      # out
+            ctypes.POINTER(ctypes.c_size_t),       # out_written
+        ]
+        lib.mldsa7f_cert_assemble_csr.restype = ctypes.c_int32
         lib._sevenf_cert_request_argtypes_registered = True
     return lib
 
@@ -556,3 +571,52 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
         ReviewField(label="Valid until", value=_format_timestamp(not_after)),
         ReviewField(label="Serial", value=serial.hex()),
     ]
+
+
+# --- PKCS#10 CSR building: test/tooling-only ---
+#
+# This device never builds a CSR as part of any production signing flow --
+# verify_and_parse_csr_der's own docstring confirms the device only ever
+# VERIFIES one; the real CSR-building happens on 7fchain's own sf-deputy
+# CLI, a different tool entirely. These two functions exist solely so
+# tools/make_sevenf_test_qrs.py can generate a real, self-signed PKCS#10 CSR
+# for hardware testing (closes
+# 7f-signing-support-hardware-test-tooling-pkcs10-staleness) instead of the
+# retired JSON CertRequest{role:"deputy"} shape it used to fake. No view in
+# sevenf_views.py calls either of these.
+
+def csr_info_der(subject_vk: bytes) -> bytes:
+    """ The unsigned body of a PKCS#10 CertificationRequest -- the exact
+        bytes a CSR requester signs. Raises CertRequestError on any
+        failure (e.g. a wrong-length subject_vk). """
+    lib = _lib()
+    out_buf = ctypes.create_string_buffer(_CERT_TBS_MAX_LEN)
+    written = ctypes.c_size_t(0)
+    rc = lib.mldsa7f_cert_build_csr_info(
+        subject_vk, len(subject_vk),
+        out_buf, _CERT_TBS_MAX_LEN,
+        ctypes.byref(written),
+    )
+    if rc != 0:
+        raise CertRequestError("couldn't build the CSR body", code=rc)
+    return out_buf.raw[:written.value]
+
+
+def assemble_csr_der(info_der: bytes, signature: bytes) -> bytes:
+    """ Assemble a complete, DER-encoded PKCS#10 `CertificationRequest` from
+        an unsigned body (`csr_info_der`) and a signature already produced
+        over it under the same key the body embeds (a CSR is always
+        self-signed). Raises CertRequestError if the signature doesn't
+        verify over the info under its own embedded subject key. """
+    lib = _lib()
+    out_buf = ctypes.create_string_buffer(_CERT_FULL_MAX_LEN)
+    written = ctypes.c_size_t(0)
+    rc = lib.mldsa7f_cert_assemble_csr(
+        info_der, len(info_der),
+        signature, len(signature),
+        out_buf, _CERT_FULL_MAX_LEN,
+        ctypes.byref(written),
+    )
+    if rc != 0:
+        raise CertRequestError("couldn't assemble the CSR", code=rc)
+    return out_buf.raw[:written.value]

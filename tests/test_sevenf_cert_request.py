@@ -23,10 +23,12 @@ from seedsigner.models.sevenf.cert_request import (
     CertRequestFields,
     ParsedCsr,
     ParsedRootCertificate,
+    assemble_csr_der,
     assemble_deputy_cert_der,
     assemble_root_cert_der,
     build_deputy_tbs_v2,
     build_root_tbs,
+    csr_info_der,
     deputy_cross_cert_v2_review_fields,
     generate_serial,
     parse_cert_request_json,
@@ -952,3 +954,80 @@ def test_assemble_deputy_cert_der_rejects_garbage_tbs():
     root_cert_der, _root_vk, _root_master_seed = _fresh_root_cert(chain_kind)
     with pytest.raises(CertRequestError):
         assemble_deputy_cert_der(b"not a tbs at all", bytes(3309), root_cert_der)
+
+
+# --- PKCS#10 CSR building: test/tooling-only (closes
+# 7f-signing-support-hardware-test-tooling-pkcs10-staleness) ---
+
+def _derive_csr_keypair(seed_byte: int = 0x52) -> tuple[bytes, bytes]:
+    """ A minimal, test-only key derivation -- mirrors _derive_root_keypair
+        above (same master_seed/derive_pubkey shape), just under a distinct
+        default seed byte so a CSR identity doesn't collide with a Root
+        one in a test that builds both. """
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import Layer, root_path
+    master_seed = bytes([seed_byte]) * 64
+    vk, _address = mldsa.derive_pubkey(master_seed, root_path(ChainKind.TESTNET), int(ChainKind.TESTNET), int(Layer.L1))
+    return vk, master_seed
+
+
+def test_csr_info_der_and_assemble_csr_der_round_trip_through_verify_and_parse_csr():
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import root_path
+
+    vk, master_seed = _derive_csr_keypair()
+    info_der = csr_info_der(vk)
+    _, signature = mldsa.derive_and_sign(master_seed, root_path(ChainKind.TESTNET), info_der)
+    csr_der = assemble_csr_der(info_der, signature)
+    parsed = verify_and_parse_csr_der(csr_der)
+    assert parsed.subject_vk == vk
+
+
+def test_csr_info_der_round_trips_over_several_distinct_keys():
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import root_path
+
+    for seed_byte in (0x61, 0x62, 0x63):
+        vk, master_seed = _derive_csr_keypair(seed_byte)
+        info_der = csr_info_der(vk)
+        _, signature = mldsa.derive_and_sign(master_seed, root_path(ChainKind.TESTNET), info_der)
+        csr_der = assemble_csr_der(info_der, signature)
+        parsed = verify_and_parse_csr_der(csr_der)
+        assert parsed.subject_vk == vk
+
+
+def test_csr_info_der_rejects_a_wrong_length_key():
+    with pytest.raises(CertRequestError):
+        csr_info_der(bytes([0x01]) * 100)
+
+
+def test_assemble_csr_der_rejects_a_tampered_signature():
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import root_path
+
+    vk, master_seed = _derive_csr_keypair()
+    info_der = csr_info_der(vk)
+    _, signature = mldsa.derive_and_sign(master_seed, root_path(ChainKind.TESTNET), info_der)
+    tampered = bytearray(signature)
+    tampered[-1] ^= 0xFF
+
+    with pytest.raises(CertRequestError):
+        assemble_csr_der(info_der, bytes(tampered))
+
+
+def test_assemble_csr_der_rejects_a_wrong_signer():
+    from seedsigner.models.sevenf import mldsa
+    from seedsigner.models.sevenf.constants import root_path
+
+    subject_vk, _subject_seed = _derive_csr_keypair(0x64)
+    _impostor_vk, impostor_seed = _derive_csr_keypair(0x65)
+    info_der = csr_info_der(subject_vk)
+    _, wrong_signature = mldsa.derive_and_sign(impostor_seed, root_path(ChainKind.TESTNET), info_der)
+
+    with pytest.raises(CertRequestError):
+        assemble_csr_der(info_der, wrong_signature)
+
+
+def test_assemble_csr_der_rejects_garbage_info_der():
+    with pytest.raises(CertRequestError):
+        assemble_csr_der(b"not a csr info at all", bytes(3309))
