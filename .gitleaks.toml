@@ -34,6 +34,11 @@ regexes = [
   # ("ml-dsa/0" -> "ml-dsa/v1/0"), which moved these two addresses.
   '''t1jzu0kpu6eqfjq2y3wk6msk95wtuvx2fu4vk4lp3m79xkdec''',
   '''t1wa0dfam0d0xxnxv8tw657wvlr6tcz2c3fxs9w2dr9adyw7t''',
+  # RE-PINNED 2026-10-03 (R27 single-grammar collapse): the two-level
+  # purpose/role-path grammar collapsed into one path, which moved every
+  # pinned KAT address again -- see test_sevenf_mldsa.py/
+  # test_sevenf_root_ceremony.py's own doc comments.
+  '''t136pq48mt9f3ym9dn3k3nh6f8dkpw6uje40rjx9djfnqg28v''',
 ]
 
 # Path-excluded, not regex-allowlisted: these are official NIST ACVP test

@@ -1,10 +1,16 @@
 """
     Tests seedsigner.models.sevenf.deputy_ca_export -- the Root-to-Deputy
-    child-seed export flow (derive_purpose_seed + bootstrap_passphrase +
+    child-seed export flow (derive_seed_raw + bootstrap_passphrase +
     encrypted_blob composed together). Backs
     7f-signing-support-deputy-ca-seed-export.
 
-    Requires firmware/mldsa7f's compiled library (derive_purpose_seed goes
+    RE-PORTED 2026-10-03 (R27): see deputy_ca_export.py's own module
+    docstring -- this module (and these tests) exercise a mechanically
+    updated path/FFI call, not a working ceremony mechanism; the real
+    receiving side (`KeyDatabase`/`sf-deputy init --import`) is confirmed
+    deleted on 7fchain's side (M-8).
+
+    Requires firmware/mldsa7f's compiled library (derive_seed_raw goes
     through the real FFI boundary) -- skips cleanly if it's missing, same
     convention as test_sevenf_mldsa.py.
 """
@@ -15,7 +21,7 @@ import pytest
 from seedsigner.models.sevenf import encrypted_blob, mldsa
 from seedsigner.models.sevenf.bootstrap_passphrase import passphrase_to_bytes
 from seedsigner.models.sevenf.constants import ChainKind, MASTER_SEED_LEN
-from seedsigner.models.sevenf.deputy_ca_export import build_export, deputy_ca_purpose_path
+from seedsigner.models.sevenf.deputy_ca_export import build_export, deputy_path
 
 
 def _lib_available() -> bool:
@@ -34,10 +40,10 @@ pytestmark = pytest.mark.skipif(
 FIXED_SEED = bytes([0x2A] * MASTER_SEED_LEN)
 
 
-def test_deputy_ca_purpose_path_matches_the_real_7fchain_format():
-    assert deputy_ca_purpose_path(ChainKind.TESTNET) == "m/deputy-ca/l1/testnet/0"
-    assert deputy_ca_purpose_path(ChainKind.MAINNET) == "m/deputy-ca/l1/mainnet/0"
-    assert deputy_ca_purpose_path(ChainKind.DEVNET) == "m/deputy-ca/l1/devnet/0"
+def test_deputy_path_matches_the_new_single_grammar():
+    assert deputy_path(ChainKind.TESTNET) == "deputy/testnet/0/ml-dsa/v1"
+    assert deputy_path(ChainKind.MAINNET) == "deputy/mainnet/0/ml-dsa/v1"
+    assert deputy_path(ChainKind.DEVNET) == "deputy/devnet/0/ml-dsa/v1"
 
 
 def test_build_export_returns_8_words_and_a_decryptable_envelope():
@@ -51,18 +57,18 @@ def test_build_export_returns_8_words_and_a_decryptable_envelope():
     assert database["version"] == 1
     assert len(database["entries"]) == 1
     entry = database["entries"][0]
-    assert entry["path"] == "m/deputy-ca/l1/testnet/0"
+    assert entry["path"] == "deputy/testnet/0/ml-dsa/v1"
     assert entry["status"] == "active"
     assert len(bytes.fromhex(entry["seed_hex"])) == MASTER_SEED_LEN
 
 
-def test_build_export_seed_hex_matches_derive_purpose_seed_directly():
+def test_build_export_seed_hex_matches_derive_seed_raw_directly():
     words, envelope = build_export(FIXED_SEED, ChainKind.TESTNET)
     passphrase_bytes = passphrase_to_bytes(words)
     plaintext = encrypted_blob.decrypt(envelope, passphrase_bytes)
     entry = json.loads(plaintext)["entries"][0]
 
-    expected = mldsa.derive_purpose_seed(FIXED_SEED, "m/deputy-ca/l1/testnet/0")
+    expected = mldsa.derive_seed_raw(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1")
     assert bytes.fromhex(entry["seed_hex"]) == expected
 
 

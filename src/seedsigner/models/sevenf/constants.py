@@ -19,7 +19,8 @@ class ChainKind(IntEnum):
     @property
     def path_segment(self) -> str:
         """ The literal string used inside a 7fchain derivation path, e.g.
-            "m/root-ca/l1/testnet/0" -- confirmed against sf-root.rs:368-370. """
+            "root/testnet/0/ml-dsa/v1" -- confirmed against
+            crates/sf-keytree/src/path.rs's `ChainKind::as_str()`. """
         return self.name.lower()
 
 
@@ -43,25 +44,25 @@ ADDRESS_LEN = 49
 MASTER_SEED_LEN = 64
 
 
-def root_ca_purpose_path(chain_kind: ChainKind) -> str:
-    """ e.g. "m/root-ca/l1/testnet/0" -- confirmed against sf-root.rs:368. """
-    return f"m/root-ca/l1/{chain_kind.path_segment}/0"
+def root_path(chain_kind: ChainKind) -> str:
+    """ e.g. "root/testnet/0/ml-dsa/v1" -- confirmed against 7fchain's real
+        `crates/sf-keytree/src/path.rs::path_for(Role::Root, chain_kind, 0)`
+        and `phrase_file.rs::root_path()`.
 
-
-def devfund_purpose_path(chain_kind: ChainKind) -> str:
-    """ e.g. "m/7fchain/l1/testnet/devfund/0" -- confirmed against sf-root.rs:370. """
-    return f"m/7fchain/l1/{chain_kind.path_segment}/devfund/0"
-
-
-# The leaf role under either purpose path -- confirmed against
-# sf-root.rs:860,1273-1276,1800,2003 (`derive_leaf_seed(&root_seed, "ml-dsa/v1/0")`).
-# RE-CONFIRMED 2026-10-01: the version segment became mandatory
-# (docs/derivation-path-lexicon.md, path.rs's validate_role_path) as part of
-# regenerating the nine Root keys for the 6-of-9 testnet relaunch -- this
-# constant was still "ml-dsa/0" (pre-dates that change) until this fix.
-# Always index 0: the Root ceremony derives exactly one Root CA key and one
-# devfund key per chain_kind, never a family of indexed keys.
-ML_DSA_LEAF_ROLE = "ml-dsa/v1/0"
+        RE-PORTED 2026-10-03 (R27): 7fchain collapsed its two-level
+        `purpose_path`/`role_path` grammar into this single combined path
+        -- see firmware/mldsa7f/src/derive.rs's doc comment for why. This
+        single function replaces the old `root_ca_purpose_path()`,
+        `devfund_purpose_path()`, and the separate `ML_DSA_LEAF_ROLE`
+        constant: `sf-root.rs`'s own `cmd_sign_genesis` and
+        `cmd_sign_devfund` both call the byte-identical
+        `root_key_from_file(..., index 0)` -- genesis-config and
+        devfund-config are signed by the SAME Root key, not two. There is
+        no separate "devfund path" any more; root_ceremony.py's devfund
+        key is this same path (see that module's own doc comment for the
+        bug this fixed). Always index 0: the Root ceremony derives exactly
+        one Root key per chain_kind, never a family of indexed keys. """
+    return f"root/{chain_kind.path_segment}/0/ml-dsa/v1"
 
 
 @dataclass(frozen=True)

@@ -4,75 +4,106 @@
     source D9 assigns lexicon ownership to (Patrick's side), not guessed or
     independently invented (D12).
 
+    RE-PORTED 2026-10-03 (R27): 7fchain collapsed its two-level
+    `purpose_path`/`role_path` grammar into one combined path:
+
+        <role>/<chain-kind>/[<chain-id>/]<index>/<algorithm>/v<N>[/<leaf>]
+
+    -- see firmware/mldsa7f/src/derive.rs's doc comment for why the split
+    retired. This file is a line-for-line re-port of the real `path.rs`'s
+    `Role`/`Algorithm`/`Leaf` enums and its `parse()`/`validate()`, not an
+    independent redesign.
+
     Not wired into any live flow today: every 7F path this device ever
     builds is constructed internally by known-good functions
-    (root_ca_purpose_path(), devfund_purpose_path(), etc. in constants.py),
-    never taken as a raw string from scanned/external input. This exists so
-    the validator itself is ready the day something does need it, and so
-    "reject a malformed derivation path even though none reaches the device
-    today" (R8's own framing) has a real implementation instead of a filed
-    gap. See 7f-signing-support-path-lexicon-validator in
-    _delivery/backlog.yaml.
+    (constants.py's `root_path()`), never taken as a raw string from
+    scanned/external input. This exists so the validator itself is ready
+    the day something does need it, and so "reject a malformed derivation
+    path even though none reaches the device today" (R8's own framing) has
+    a real implementation instead of a filed gap. See
+    7f-signing-support-path-lexicon-validator in _delivery/backlog.yaml.
 
     Deliberately kept in sync with path.rs by direct comparison, not by a
     shared source -- re-diff against that file if it changes. Same
     discipline derive.rs's own module docstring already documents for this
     codebase's other 7fchain ports.
 """
-from seedsigner.models.sevenf.constants import ChainKind, Layer
+from enum import Enum
+
+from seedsigner.models.sevenf.constants import ChainKind
 
 MAX_SEGMENT_LEN = 32
 
-RESERVED_CATEGORIES = (
-    "root-ca", "deputy-ca", "centcom-ca", "intermediate-ca",
-    "stablecoin", "giftcard", "utilitytoken", "7fchain",
-)
 
-# Mirrors sf_core::genesis_config::ChainKind lowercase strings -- reuses
-# this codebase's own ChainKind enum as the single source of truth rather
-# than a second hardcoded string list.
-VALID_CHAIN_KINDS = tuple(ck.path_segment for ck in ChainKind)
+class Role(Enum):
+    """ What a key is for -- the first segment of every path. Mirrors
+        `path.rs`'s `Role` enum exactly, including its two feeder
+        properties (`is_chain_bound`, `allows_leaf`) used by the parser. """
+    ROOT = "root"
+    MINER = "miner"
+    WALLET = "wallet"
+    DEPUTY = "deputy"
+    CENTCOM = "centcom"
+    L2_WALLET = "l2-wallet"
+    SEQUENCER = "sequencer"
+    MASTER_MINTER = "master-minter"
+    GUARDIAN = "guardian"
+    VERIFIER = "verifier"
+    RECHECKER = "rechecker"
+    FEDERATION = "federation"
 
-VALID_LAYERS = tuple(layer.name.lower() for layer in Layer)
+    @property
+    def is_l2(self) -> bool:
+        """ `path.rs::Role::layer()` -- no role spans layers, so the path
+            itself carries no layer segment; this is why `wallet` and
+            `l2-wallet` are two roles rather than one role plus a layer. """
+        return self in (
+            Role.L2_WALLET, Role.SEQUENCER, Role.MASTER_MINTER,
+            Role.GUARDIAN, Role.VERIFIER, Role.RECHECKER, Role.FEDERATION,
+        )
 
-RESERVED_ROLES = (
-    "ml-dsa", "falcon", "bip32", "minter", "master-minter",
-    "pauser", "blacklister", "admin", "owner", "deployer",
-)
+    @property
+    def is_chain_bound(self) -> bool:
+        """ `path.rs::Role::is_chain_bound()` -- whether the path carries a
+            `<chain-id>` segment: a chain-bound role names one specific L2;
+            the others serve every chain on the network. """
+        return self in (Role.L2_WALLET, Role.SEQUENCER, Role.MASTER_MINTER, Role.GUARDIAN)
 
-# Leaf names that are not an index. A leaf is normally a numeric index, but
-# two keys are singular per purpose path and are named rather than numbered:
-# the node's hot key and the miner's block-reward key. Consensus pairs those
-# two -- coinbase output 0 must pay the address the certificate authorises --
-# so they are spelled out here rather than admitted by loosening the leaf to
-# any string.
-RESERVED_LEAF_LABELS = ("hot", "block-reward")
+    @property
+    def allows_leaf(self) -> bool:
+        """ `path.rs::Role::allows_leaf()` -- only `miner` has two keys
+            under one path (R-L5: consensus pairs a hot key and a
+            block-reward key, since coinbase output 0 must pay the address
+            the certificate authorises). """
+        return self is Role.MINER
 
-# (name, category, description) -- for validation hints only, not enforced.
-KNOWN_TOKENS = (
-    ("7fusd", "stablecoin", "7F US Dollar stablecoin"),
-    ("gtq", "stablecoin", "Guatemalan Quetzal stablecoin"),
-    ("intercorp", "giftcard", "Intercorp remittance token"),
-    ("interbank", "utilitytoken", "Interbank utility token"),
-)
+
+class Algorithm(Enum):
+    """ Mirrors `path.rs`'s `Algorithm` enum. `FALCON` is never derived any
+        more -- kept only so addresses still decode for tooling/interop. """
+    ML_DSA = "ml-dsa"
+    FALCON = "falcon"
+
+
+class Leaf(Enum):
+    """ Mirrors `path.rs`'s `Leaf` enum -- only valid under `Role.MINER`. """
+    HOT = "hot"
+    BLOCK_REWARD = "block-reward"
 
 
 class PathLexiconError(Exception):
     """ Raised for any derivation path that fails lexicon validation --
-        wrong character set, unknown category/role/chain_kind, wrong
-        segment count for its category, or a non-numeric index. """
-
-
-def is_reserved_category(category: str) -> bool:
-    return category in RESERVED_CATEGORIES
-
-
-def is_reserved_role(role: str) -> bool:
-    return role in RESERVED_ROLES
+        wrong character set, unknown role/algorithm/chain_kind, wrong
+        segment count for its role, or a non-numeric index/chain-id. """
 
 
 _ASCII_LOWERCASE = "abcdefghijklmnopqrstuvwxyz"
 _ASCII_DIGITS = "0123456789"
+
+# Mirrors sf_crypto::address::ChainKind's lowercase strings -- reuses this
+# codebase's own ChainKind enum as the single source of truth rather than a
+# second hardcoded string list.
+_VALID_CHAIN_KINDS = {ck.path_segment: ck for ck in ChainKind}
 
 
 def _validate_segment(segment: str) -> None:
@@ -84,180 +115,129 @@ def _validate_segment(segment: str) -> None:
         cross-checking this port against the actual Rust semantics, not
         just against a passing test suite. """
     if not segment:
-        raise PathLexiconError("path segment cannot be empty")
+        raise PathLexiconError("path segment must not be empty")
     if len(segment) > MAX_SEGMENT_LEN:
         raise PathLexiconError(f"path segment '{segment}' exceeds {MAX_SEGMENT_LEN} characters")
     if not all(c in _ASCII_LOWERCASE or c in _ASCII_DIGITS or c == "-" for c in segment):
-        raise PathLexiconError(f"path segment '{segment}' contains invalid characters (allowed: a-z, 0-9, -)")
+        raise PathLexiconError(f"path segment '{segment}' must be lowercase a-z, 0-9 or '-'")
 
 
-def _validate_chain_kind(seg: str) -> None:
-    if seg not in VALID_CHAIN_KINDS:
-        raise PathLexiconError(f"chain_kind segment must be one of {list(VALID_CHAIN_KINDS)}, got '{seg}'")
-
-
-def _validate_layer(seg: str) -> None:
-    if seg not in VALID_LAYERS:
-        raise PathLexiconError(f"layer segment must be one of {list(VALID_LAYERS)}, got '{seg}'")
-
-
-def _validate_index(seg: str, label: str) -> None:
+def _parse_u32(seg: str, label: str) -> int:
     # ASCII-only for the same reason _validate_segment is (str.isdigit()
     # accepts non-ASCII digit characters, e.g. Arabic-Indic '٣').
     if not seg or not all(c in _ASCII_DIGITS for c in seg):
-        raise PathLexiconError(f"{label} index must be numeric, got '{seg}'")
+        raise PathLexiconError(f"{label} must be a u32, got '{seg}'")
+    value = int(seg)
+    if value > 0xFFFFFFFF:
+        raise PathLexiconError(f"{label} must be a u32, got '{seg}'")
+    return value
 
 
-def _layered_simple(category: str, segments: list[str]) -> None:
-    """ L1-only categories that still carry the layer marker for path-shape
-        symmetry: m/<cat>/l1/<chain_kind>/<index> (4 segments). """
-    if len(segments) != 4:
-        raise PathLexiconError(f"{category} path must be m/{category}/l1/<chain_kind>/<index>")
-    _validate_layer(segments[1])
-    if segments[1] != "l1":
-        raise PathLexiconError(f"{category} is L1-only; got layer '{segments[1]}'")
-    _validate_chain_kind(segments[2])
-    _validate_index(segments[3], category)
+def _parse_version(seg: str) -> int:
+    """ The version is mandatory -- `path.rs::parse_version()`: an
+        algorithm migration changes the keys a role derives, so the
+        version belongs in the path that names them. An optional segment
+        would mean two spellings of one key, which is exactly how three
+        spellings diverged before this rule existed. """
+    if not (len(seg) >= 2 and seg[0] == "v" and all(c in _ASCII_DIGITS for c in seg[1:])):
+        raise PathLexiconError(f"version segment must be v<N>, got '{seg}'")
+    return int(seg[1:])
 
 
-def _layered_l1_or_l2(category: str, segments: list[str]) -> None:
-    """ Categories that live in both layers (deputy-ca, centcom-ca,
-        intermediate-ca):
-          L1: m/<cat>/l1/<chain_kind>/<index>               -- 4 segments
-          L2: m/<cat>/l2/<chain_kind>/<l2_chain_id>/<index> -- 5 segments
-    """
-    if len(segments) < 4:
+def parse(path: str) -> dict:
+    """ Parse and validate a derivation path, 1:1 with `path.rs::parse()`.
+        Raises PathLexiconError on any violation. Returns a dict with keys
+        role, chain_kind, chain_id, index, algorithm, version, leaf --
+        mirroring `DerivationPath`'s fields (a dict rather than a dataclass
+        since this validator has no building counterpart to round-trip
+        against; `constants.root_path()` is this device's only builder and
+        covers it with a pinned-output test instead). """
+    if not path:
+        raise PathLexiconError("derivation path must not be empty")
+    if path.startswith("m/"):
         raise PathLexiconError(
-            f"{category} path must be m/{category}/l1/<chain_kind>/<index> "
-            f"or m/{category}/l2/<chain_kind>/<l2_chain_id>/<index>"
+            "derivation path must not start with 'm/' -- there is one grammar now, "
+            f"and every path is absolute from the master seed (got '{path}')"
         )
-    _validate_layer(segments[1])
-    _validate_chain_kind(segments[2])
-    if segments[1] == "l1":
-        if len(segments) != 4:
-            raise PathLexiconError(f"{category} L1 path must be m/{category}/l1/<chain_kind>/<index>")
-        _validate_index(segments[3], category)
-    else:  # "l2", the only other value _validate_layer allows
-        if len(segments) != 5:
-            raise PathLexiconError(
-                f"{category} L2 path must be m/{category}/l2/<chain_kind>/<l2_chain_id>/<index>"
-            )
-        _validate_index(segments[3], "l2_chain_id")
-        _validate_index(segments[4], category)
 
-
-def validate_purpose_path(path: str) -> None:
-    """ Validate a purpose path (Level 1). Raises PathLexiconError on any
-        violation; returns None on success.
-
-        Examples: "m/root-ca/l1/testnet/0", "m/deputy-ca/l2/testnet/42/0",
-        "m/stablecoin/7fusd/0", "m/7fchain/l1/testnet/devfund/0",
-        "m/7fchain/wallet/0", "m/7fchain/l2/testnet/value/1/0". """
-    if not path.startswith("m/"):
-        raise PathLexiconError("purpose path must start with 'm/'")
-
-    segments = path[2:].split("/")
-    if not segments or segments == [""]:
-        raise PathLexiconError("purpose path must have at least one segment after 'm/'")
-
+    segments = path.split("/")
     for seg in segments:
         _validate_segment(seg)
 
-    category = segments[0]
+    role_seg = segments[0]
+    try:
+        role = Role(role_seg)
+    except ValueError:
+        names = [r.value for r in Role]
+        raise PathLexiconError(f"'{role_seg}' is not a known role (one of {names})")
 
-    if category == "root-ca":
-        _layered_simple(category, segments)
-    elif category in ("deputy-ca", "centcom-ca", "intermediate-ca"):
-        _layered_l1_or_l2(category, segments)
-    elif category in ("stablecoin", "giftcard", "utilitytoken"):
-        if len(segments) != 3:
-            raise PathLexiconError(f"{category} path must be m/{category}/<name>/<index>")
-        _validate_index(segments[2], category)
-    elif category == "7fchain":
-        # A wallet account is deliberately outside the per-network symmetry:
-        # m/7fchain/wallet/<account> -- no layer and no chain kind, because an
-        # account holds value rather than a network role and is the same
-        # account on every network. Every wallet address derives from this
-        # shape (refused by path.rs until 2026-09-30, while being derived in
-        # anger -- see docs/derivation-path-lexicon.md), so rejecting it would
-        # reject every address the wallet has ever handed out.
-        if len(segments) >= 2 and segments[1] == "wallet":
-            if len(segments) != 3:
-                raise PathLexiconError("7fchain wallet path must be m/7fchain/wallet/<account>")
-            _validate_index(segments[2], "wallet account")
-            return
-        if len(segments) < 4:
-            raise PathLexiconError(
-                "7fchain path must be m/7fchain/<l1|l2>/<chain_kind>/... or m/7fchain/wallet/<account>"
-            )
-        _validate_layer(segments[1])
-        _validate_chain_kind(segments[2])
-        if segments[1] == "l1":
-            if len(segments) != 5:
-                raise PathLexiconError("7fchain L1 path must be m/7fchain/l1/<chain_kind>/<purpose>/<index>")
-            _validate_index(segments[4], "7fchain")
-        else:  # "l2"
-            role = segments[3]
-            if role in ("sequencer", "value"):
-                # Chain-bound: a sequencer serves one chain, and a value key
-                # is an address on one chain -- both carry the l2_chain_id.
-                if len(segments) != 6:
-                    raise PathLexiconError(
-                        f"7fchain L2 {role} path must be "
-                        f"m/7fchain/l2/<chain_kind>/{role}/<l2_chain_id>/<index>"
-                    )
-                _validate_index(segments[4], "l2_chain_id")
-                _validate_index(segments[5], "7fchain")
-            elif role in ("verifier", "rechecker", "federation"):
-                if len(segments) != 5:
-                    raise PathLexiconError(
-                        "7fchain L2 verifier/rechecker/federation path must be "
-                        "m/7fchain/l2/<chain_kind>/<role>/<index>"
-                    )
-                _validate_index(segments[4], "7fchain")
-            else:
-                raise PathLexiconError(
-                    f"7fchain L2 role must be sequencer|value|verifier|rechecker|federation, got '{role}'"
-                )
-    else:
-        raise PathLexiconError(f"unknown category '{category}'. Reserved categories: {list(RESERVED_CATEGORIES)}")
-
-
-def _validate_version(seg: str) -> None:
-    """ The version is mandatory: an algorithm migration changes the keys a
-        role derives, so the version belongs in the path that names them --
-        an optional segment would mean two spellings of one key, which is
-        how three of them diverged before this rule existed (see
-        docs/derivation-path-lexicon.md in the 7fchain repo). """
-    if not (
-        len(seg) >= 2
-        and seg[0] == "v"
-        and seg[1:] and all(c in _ASCII_DIGITS for c in seg[1:])
-    ):
-        raise PathLexiconError(f"version segment must be v<N>, got '{seg}'")
-
-
-def validate_role_path(path: str) -> None:
-    """ Validate a role path (Level 2). Raises PathLexiconError on any
-        violation; returns None on success.
-
-        Examples: "ml-dsa/v1/0", "falcon/v1/0", "minter/v1/0", "admin/v1/0",
-        "ml-dsa/v1/hot", "ml-dsa/v1/block-reward". The unversioned
-        two-segment spelling ("ml-dsa/0") was retired 2026-09-30 -- it
-        derived real keys before this rule existed, but is no longer legal. """
-    segments = path.split("/")
-    if len(segments) != 3:
-        raise PathLexiconError(f"role path must be <role>/v<N>/<leaf>, got '{path}'")
-    role, version, leaf = segments
-
-    _validate_segment(role)
-    if not is_reserved_role(role):
-        raise PathLexiconError(f"'{role}' is not a known role (one of {list(RESERVED_ROLES)})")
-
-    _validate_version(version)
-
-    _validate_segment(leaf)
-    if not (all(c in _ASCII_DIGITS for c in leaf) and leaf) and leaf not in RESERVED_LEAF_LABELS:
+    min_len, max_len = (6, 7) if role.is_chain_bound else (5, 6)
+    if not (min_len <= len(segments) <= max_len):
+        chain_id_part = "<chain-id>/" if role.is_chain_bound else ""
+        leaf_part = "/<leaf>" if role.allows_leaf else ""
         raise PathLexiconError(
-            f"leaf must be a numeric index or one of {list(RESERVED_LEAF_LABELS)}, got '{leaf}'"
+            f"{role.value} path must be {role.value}/<chain-kind>/{chain_id_part}<index>/"
+            f"<algorithm>/v<N>{leaf_part}, got '{path}' "
+            f"({len(segments)} segments, expected {min_len} or {max_len})"
         )
+
+    chain_kind_seg = segments[1]
+    if chain_kind_seg not in _VALID_CHAIN_KINDS:
+        raise PathLexiconError(
+            f"chain_kind segment must be one of {list(_VALID_CHAIN_KINDS)}, got '{chain_kind_seg}'"
+        )
+    chain_kind = _VALID_CHAIN_KINDS[chain_kind_seg]
+
+    # L2 has no devnet -- the one check that cannot be bypassed, because
+    # every derivation comes through here.
+    if role.is_l2 and chain_kind == ChainKind.DEVNET:
+        raise PathLexiconError(f"L2 has no devnet -- '{role.value}' cannot be derived on devnet")
+
+    i = 2
+    chain_id = None
+    if role.is_chain_bound:
+        chain_id = _parse_u32(segments[i], "chain-id")
+        i += 1
+
+    index = _parse_u32(segments[i], "index")
+    i += 1
+
+    algorithm_seg = segments[i]
+    try:
+        algorithm = Algorithm(algorithm_seg)
+    except ValueError:
+        names = [a.value for a in Algorithm]
+        raise PathLexiconError(f"'{algorithm_seg}' is not a known algorithm (one of {names})")
+    i += 1
+
+    version = _parse_version(segments[i])
+    i += 1
+
+    leaf = None
+    if i < len(segments):
+        leaf_seg = segments[i]
+        try:
+            leaf = Leaf(leaf_seg)
+        except ValueError:
+            names = [l.value for l in Leaf]
+            raise PathLexiconError(f"'{leaf_seg}' is not a known leaf label (one of {names})")
+        if not role.allows_leaf:
+            raise PathLexiconError(
+                f"'{leaf.value}' is a leaf label, which only 'miner' may carry -- "
+                f"'{role.value}' has one key, so a label there would name nothing"
+            )
+
+    return {
+        "role": role,
+        "chain_kind": chain_kind,
+        "chain_id": chain_id,
+        "index": index,
+        "algorithm": algorithm,
+        "version": version,
+        "leaf": leaf,
+    }
+
+
+def validate(path: str) -> None:
+    """ Validate a path without keeping the parse. """
+    parse(path)

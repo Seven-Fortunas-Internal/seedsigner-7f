@@ -12,7 +12,7 @@ import pytest
 from seedsigner.chains import ChainRegistry
 from seedsigner.chains.base import Address, ParsedRequest, Signature
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ChainKind, root_ca_purpose_path
+from seedsigner.models.sevenf.constants import ChainKind, root_path
 from seedsigner.models.sevenf.genesis_config import ConsensusParams, build_canonical_bytes
 from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys, sign_with_root_ca
 
@@ -53,7 +53,7 @@ def test_parse_sign_request_matches_real_genesis_config_fields():
     assert isinstance(parsed, ParsedRequest)
     assert parsed.operation == "Genesis Config"
     assert parsed.network_name == "testnet"
-    assert parsed.derivation_path == root_ca_purpose_path(ChainKind.TESTNET)
+    assert parsed.derivation_path == root_path(ChainKind.TESTNET)
     labels = [f.label for f in parsed.review_fields]
     assert "Chain" in labels
     assert "Message" in labels
@@ -99,7 +99,7 @@ def test_sign_ignores_a_mismatched_path_argument_and_uses_the_payloads_own_chain
     plugin = SevenFPlugin()
     testnet_bytes = _sample_canonical_bytes(ChainKind.TESTNET)
 
-    signature = plugin.sign(FIXED_SEED, root_ca_purpose_path(ChainKind.MAINNET), testnet_bytes)
+    signature = plugin.sign(FIXED_SEED, root_path(ChainKind.MAINNET), testnet_bytes)
     keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
     assert signature.public_key == keys.root_ca.public_key
     mainnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.MAINNET)
@@ -109,7 +109,7 @@ def test_sign_ignores_a_mismatched_path_argument_and_uses_the_payloads_own_chain
 def test_derive_address_matches_root_ceremony_derivation():
     from seedsigner.chains.sevenf.plugin import SevenFPlugin
     plugin = SevenFPlugin()
-    path = root_ca_purpose_path(ChainKind.TESTNET)
+    path = root_path(ChainKind.TESTNET)
 
     address = plugin.derive_address(FIXED_SEED, path)
     assert isinstance(address, Address)

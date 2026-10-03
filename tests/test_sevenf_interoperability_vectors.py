@@ -31,13 +31,15 @@
     7f-signing-support-no-cross-verification-tooling -- blocked on
     7fchain's own sf-wallet-side design, not attempted here.
 
-    Vector 2 covers every reserved category (root-ca, deputy-ca including
-    both its L1/L2 forms and a second index, centcom-ca, intermediate-ca,
-    stablecoin, giftcard, utilitytoken, 7fchain/devfund) with a real
-    Rust-cross-checked KAT, captured via `cargo test --release
-    ffi_kat_capture_for_python -- --nocapture --ignored` (see
-    test_sevenf_mldsa.py) -- closed 2026-09-29,
-    7f-signing-support-interop-vector-2-category-coverage.
+    Vector 2 covers every role that still exists in the real single-grammar
+    Role enum (crates/sf-keytree/src/path.rs) -- root, deputy (a second
+    index too), centcom, wallet -- with a real Rust-cross-checked KAT,
+    captured via `cargo test --release ffi_kat_capture_for_python
+    -- --nocapture --ignored` (see test_sevenf_mldsa.py). Closed
+    2026-09-29, re-captured 2026-10-03 for the R27 single-grammar
+    collapse (which retired root-ca/intermediate-ca/stablecoin/giftcard/
+    utilitytoken/7fchain-devfund as categories -- see that rewrite's own
+    doc comments for why), 7f-signing-support-interop-vector-2-category-coverage.
 
     Requires firmware/mldsa7f's compiled library (most of these vectors
     depend on it); skips cleanly if it's missing.
@@ -70,28 +72,37 @@ from test_sevenf_genesis_config import test_build_matches_the_real_reference_vec
 from test_sevenf_mldsa import (
     REMAINING_CATEGORY_KATS as _vector_2_remaining_category_kats,
     _assert_derive_pubkey_matches_kat as _vector_2_assert_kat,
-    test_derive_pubkey_devfund_matches_rust_kat as _vector_2_devfund_category,
-    test_derive_pubkey_root_ca_matches_rust_kat as _vector_2_root_ca_category,
+    test_derive_pubkey_root_matches_rust_kat as _vector_2_root_category,
 )
-from test_sevenf_path_lexicon import test_invalid_purpose_paths as _vector_6_rejects_bad_paths
-from test_sevenf_root_ceremony import test_end_to_end_from_a_real_mnemonic as _vector_1_phrase_to_master_seed
+from test_sevenf_path_lexicon import (
+    test_a_retired_role_is_not_a_role as _vector_6_rejects_unknown_role,
+    test_segments_are_lowercase_and_bounded as _vector_6_rejects_uppercase,
+)
+from test_sevenf_root_ceremony import (
+    test_end_to_end_from_a_real_mnemonic as _vector_1_phrase_to_master_seed,
+    test_root_ca_and_devfund_are_the_same_key as _vector_2_devfund_is_the_root_key,
+)
 
 
 def test_vector_1_phrase_to_master_seed():
     _vector_1_phrase_to_master_seed()
 
 
-def test_vector_2_master_seed_to_derived_key_root_ca():
-    _vector_2_root_ca_category()
+def test_vector_2_master_seed_to_derived_key_root():
+    _vector_2_root_category()
 
 
-def test_vector_2_master_seed_to_derived_key_devfund():
-    _vector_2_devfund_category()
+def test_vector_2_devfund_signs_with_the_same_key_as_root():
+    """ devfund stopped being a separately-derived category in the R27
+        single-grammar collapse (see root_ceremony.py's own BUG FIX note)
+        -- this is vector 2's devfund coverage now: not a distinct
+        derived-key KAT, but confirmation the devfund key IS the Root key. """
+    _vector_2_devfund_is_the_root_key()
 
 
-@pytest.mark.parametrize("purpose_path,expected_pk_sha256,expected_address", _vector_2_remaining_category_kats)
-def test_vector_2_master_seed_to_derived_key_every_remaining_category(purpose_path, expected_pk_sha256, expected_address):
-    _vector_2_assert_kat(purpose_path, expected_pk_sha256, expected_address)
+@pytest.mark.parametrize("path,expected_pk_sha256,expected_address", _vector_2_remaining_category_kats)
+def test_vector_2_master_seed_to_derived_key_every_remaining_category(path, expected_pk_sha256, expected_address):
+    _vector_2_assert_kat(path, expected_pk_sha256, expected_address)
 
 
 def test_vector_3_canonical_bytes_genesis_config():
@@ -115,4 +126,5 @@ def test_vector_5_multipart_dropped_frames_never_silently_complete():
 
 
 def test_vector_6_path_validation_rejects_uppercase_and_unknown_word():
-    _vector_6_rejects_bad_paths()
+    _vector_6_rejects_uppercase()
+    _vector_6_rejects_unknown_role()

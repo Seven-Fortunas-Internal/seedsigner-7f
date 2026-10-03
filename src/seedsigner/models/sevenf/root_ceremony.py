@@ -1,7 +1,6 @@
 """
-    Derive the two Root-ceremony keys -- Root CA and devfund -- from a
-    24-word BIP-39 mnemonic's seed bytes. Backs
-    7f-signing-support-root-ceremony-key-derivation
+    Derive the Root-ceremony key from a 24-word BIP-39 mnemonic's seed
+    bytes. Backs 7f-signing-support-root-ceremony-key-derivation
     (docs/7f-integration/root-key-ceremony-plan.md).
 
     Deliberately narrow: no treasury key (dropped, see that plan doc's
@@ -10,58 +9,56 @@
     -- that's stock SeedSigner's existing Seed/mnemonic UI, reused as-is
     per docs/7f-integration/README.md's "What's reusable from stock
     SeedSigner" section.
+
+    BUG FIX, 2026-10-03 (R27 re-port): this module used to derive
+    `devfund` from a *separate* path from `root_ca`
+    (`m/7fchain/l1/<chain_kind>/devfund/0` vs. `m/root-ca/l1/<chain_kind>/0`)
+    -- two different keys. Direct reading of 7fchain's real `sf-root.rs`
+    confirmed `cmd_sign_genesis` and `cmd_sign_devfund` both call the
+    byte-for-byte identical `root_key_from_file(chain_kind, 0, ...)`:
+    genesis-config and devfund-config are signed by the SAME Root key,
+    not two. `RootCeremonyKeys.devfund` is now the same `DerivedKey` as
+    `root_ca`, and `sign_with_devfund()` signs with that same key --
+    see that function's own doc comment.
 """
 from dataclasses import dataclass
 
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import (
-    ChainKind,
-    DerivedKey,
-    Layer,
-    ML_DSA_LEAF_ROLE,
-    devfund_purpose_path,
-    root_ca_purpose_path,
-)
+from seedsigner.models.sevenf.constants import ChainKind, DerivedKey, Layer, root_path
 
 
 @dataclass(frozen=True)
 class RootCeremonyKeys:
-    """ The two keys `sf-root init` derives for one chain_kind (no treasury
-        -- see this module's own docstring). """
+    """ The Root-ceremony key for one chain_kind (no treasury -- see this
+        module's own docstring). `devfund` is the SAME key as `root_ca`
+        (see the BUG FIX note above), kept as its own field so callers that
+        read `.devfund` don't need to know that -- not a second derivation. """
     chain_kind: ChainKind
     root_ca: DerivedKey
     devfund: DerivedKey
 
 
 def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind) -> RootCeremonyKeys:
-    """ Derive the Root CA and devfund ML-DSA-65 keys for `chain_kind` from
-        `seed_bytes` (SeedSigner's Seed.seed_bytes -- standard BIP-39,
-        empty passphrase, 64 bytes).
-
-        Both keys use layer=L1 and leaf role "ml-dsa/v1/0" -- confirmed
-        against sf-root.rs:368-370,860,1273-1276,1800,2003. Raises
+    """ Derive the Root ML-DSA-65 key for `chain_kind` from `seed_bytes`
+        (SeedSigner's Seed.seed_bytes -- standard BIP-39, empty passphrase,
+        64 bytes). `root_ca` and `devfund` are the same derived key (see
+        this module's own BUG FIX note) -- confirmed against 7fchain's real
+        `sf-root.rs`'s `root_key_from_file()`. Raises
         seedsigner.models.sevenf.mldsa.MlDsaError on any derivation
         failure, ValueError if seed_bytes is the wrong length.
     """
-    root_ca_pk, root_ca_address = mldsa.derive_pubkey(
+    root_pk, root_address = mldsa.derive_pubkey(
         seed_bytes,
-        root_ca_purpose_path(chain_kind),
-        ML_DSA_LEAF_ROLE,
+        root_path(chain_kind),
         int(chain_kind),
         int(Layer.L1),
     )
-    devfund_pk, devfund_address = mldsa.derive_pubkey(
-        seed_bytes,
-        devfund_purpose_path(chain_kind),
-        ML_DSA_LEAF_ROLE,
-        int(chain_kind),
-        int(Layer.L1),
-    )
+    root_key = DerivedKey(public_key=root_pk, address=root_address)
 
     return RootCeremonyKeys(
         chain_kind=chain_kind,
-        root_ca=DerivedKey(public_key=root_ca_pk, address=root_ca_address),
-        devfund=DerivedKey(public_key=devfund_pk, address=devfund_address),
+        root_ca=root_key,
+        devfund=root_key,
     )
 
 
@@ -102,24 +99,27 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         )
     return mldsa.derive_and_sign(
         seed_bytes,
-        root_ca_purpose_path(chain_kind),
-        ML_DSA_LEAF_ROLE,
+        root_path(chain_kind),
         message,
     )
 
 
 def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool) -> tuple[bytes, bytes]:
-    """ Sign `message` with the devfund key for `chain_kind` -- the
+    """ Sign `message` with the Root key for `chain_kind` -- the
         devfund-config twin of sign_with_root_ca() above, same enforced
         review-before-sign gate and same rationale (see that function's own
-        docstring; not repeated here). The ONLY difference is which
-        derived key signs: devfund_purpose_path, not root_ca_purpose_path --
-        the two keys are derived from different paths off the same seed
-        (root_ceremony.derive_root_ceremony_keys() already derives both),
-        so using the wrong one here would silently produce a signature
-        under the wrong identity with no error at signing time. Callers
-        must be as careful about which of these two functions they call as
-        they are about the `confirmed` gate itself.
+        docstring; not repeated here).
+
+        BUG FIX, 2026-10-03 (R27 re-port): this used to sign with a
+        separately-derived "devfund" key. Direct reading of 7fchain's real
+        `sf-root.rs` confirmed `cmd_sign_genesis` and `cmd_sign_devfund`
+        call the byte-for-byte identical `root_key_from_file(chain_kind, 0,
+        ...)` -- genesis-config and devfund-config are signed by the SAME
+        Root key. This function now derives and signs with `root_path()`,
+        exactly like sign_with_root_ca() -- kept as a separate function
+        (rather than deleted in favor of calling sign_with_root_ca()
+        directly) only so devfund-config's own confirmed-sign call site
+        reads as what it is, not as a disguised genesis-config signature.
 
         `confirmed` is REQUIRED (keyword-only, no default) and must be
         `True`. views.sevenf_views.SevenFConfirmSignDevFundView is the only
@@ -135,7 +135,6 @@ def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         )
     return mldsa.derive_and_sign(
         seed_bytes,
-        devfund_purpose_path(chain_kind),
-        ML_DSA_LEAF_ROLE,
+        root_path(chain_kind),
         message,
     )

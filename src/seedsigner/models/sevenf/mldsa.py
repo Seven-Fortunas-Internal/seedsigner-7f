@@ -3,12 +3,22 @@
     derive_pubkey/derive_and_sign match docs/7f-integration/README.md's
     original "no raw-secret-key API" design.
 
-    derive_purpose_seed is ONE deliberate, narrow exception, added for the
-    Root-to-Deputy child-seed handoff (`m/deputy-ca/l1/<chain_kind>/0`,
-    confirmed against 7fchain's real `sf-root export`/`sf-deputy init`) --
-    see that function's own docstring and ffi.rs's matching "One deliberate,
-    narrow exception" doc comment. No other caller should use it for
-    anything else, and its result must be encrypted (see
+    RE-PORTED 2026-10-03 (R27): collapsed from the old `(purpose_path,
+    role_path)` two-path signature to a single combined `path`, matching
+    7fchain's own single-grammar derivation rewrite -- see
+    firmware/mldsa7f/src/derive.rs's doc comment for why the two-level
+    split retired, and path_lexicon.py for this device's own path-building
+    layer under the new grammar.
+
+    derive_seed_raw is ONE deliberate, narrow exception -- renamed from
+    derive_purpose_seed, whose original purpose (the Root-to-Deputy
+    child-seed handoff) is now retired: 7fchain's real ceremony has the
+    Deputy derive its own key on its own holder's own airgap instead (C8),
+    and the `KeyDatabase` format this device's `deputy_ca_export.py`
+    targeted was deleted on 7fchain's side (M-8, 2026-10-02). See that
+    function's own docstring and ffi.rs's matching "One deliberate, narrow
+    exception" doc comment. No other caller should use it for anything
+    new, and its result must be encrypted (see
     seedsigner.models.sevenf.encrypted_blob) before it ever leaves the
     device.
 
@@ -93,8 +103,7 @@ def _lib_handle() -> ctypes.CDLL:
         lib = _load_library()
         lib.mldsa7f_derive_pubkey.argtypes = [
             ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
-            ctypes.c_char_p, ctypes.c_size_t,   # purpose_path
-            ctypes.c_char_p, ctypes.c_size_t,   # role_path
+            ctypes.c_char_p, ctypes.c_size_t,   # path
             ctypes.c_uint8, ctypes.c_uint8,      # network, layer
             ctypes.c_char_p, ctypes.c_size_t,   # pk_out
             ctypes.c_char_p, ctypes.c_size_t,   # address_out
@@ -104,28 +113,26 @@ def _lib_handle() -> ctypes.CDLL:
 
         lib.mldsa7f_derive_and_sign.argtypes = [
             ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
-            ctypes.c_char_p, ctypes.c_size_t,   # purpose_path
-            ctypes.c_char_p, ctypes.c_size_t,   # role_path
+            ctypes.c_char_p, ctypes.c_size_t,   # path
             ctypes.c_char_p, ctypes.c_size_t,   # msg
             ctypes.c_char_p, ctypes.c_size_t,   # pk_out
             ctypes.c_char_p, ctypes.c_size_t,   # sig_out
         ]
         lib.mldsa7f_derive_and_sign.restype = ctypes.c_int32
 
-        lib.mldsa7f_derive_purpose_seed.argtypes = [
+        lib.mldsa7f_derive_seed_raw.argtypes = [
             ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
-            ctypes.c_char_p, ctypes.c_size_t,   # purpose_path
+            ctypes.c_char_p, ctypes.c_size_t,   # path
             ctypes.c_char_p, ctypes.c_size_t,   # out
         ]
-        lib.mldsa7f_derive_purpose_seed.restype = ctypes.c_int32
+        lib.mldsa7f_derive_seed_raw.restype = ctypes.c_int32
         _lib = lib
     return _lib
 
 
-def derive_pubkey(master_seed: bytes, purpose_path: str, role_path: str, network: int, layer: int) -> tuple[bytes, str]:
-    """ Derive the ML-DSA-65 public key and 7fchain address for
-        (purpose_path, role_path) on the given network/layer. Raises
-        MlDsaError on any failure. """
+def derive_pubkey(master_seed: bytes, path: str, network: int, layer: int) -> tuple[bytes, str]:
+    """ Derive the ML-DSA-65 public key and 7fchain address for `path` on
+        the given network/layer. Raises MlDsaError on any failure. """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
 
@@ -134,13 +141,11 @@ def derive_pubkey(master_seed: bytes, purpose_path: str, role_path: str, network
     addr_buf = ctypes.create_string_buffer(ADDRESS_LEN)
     written = ctypes.c_size_t(0)
 
-    purpose_bytes = purpose_path.encode("utf-8")
-    role_bytes = role_path.encode("utf-8")
+    path_bytes = path.encode("utf-8")
 
     rc = lib.mldsa7f_derive_pubkey(
         master_seed, len(master_seed),
-        purpose_bytes, len(purpose_bytes),
-        role_bytes, len(role_bytes),
+        path_bytes, len(path_bytes),
         network, layer,
         pk_buf, ML_DSA_PK_LEN,
         addr_buf, ADDRESS_LEN,
@@ -162,11 +167,11 @@ def derive_pubkey(master_seed: bytes, purpose_path: str, role_path: str, network
     return pk_buf.raw[:ML_DSA_PK_LEN], address
 
 
-def derive_and_sign(master_seed: bytes, purpose_path: str, role_path: str, message: bytes) -> tuple[bytes, bytes]:
-    """ Derive the ML-DSA-65 keypair for (purpose_path, role_path) and sign
-        `message` with it under the empty FIPS 204 context (the default
-        hedged/randomized path -- matches sf-root sign-genesis). Raises
-        MlDsaError on any failure. """
+def derive_and_sign(master_seed: bytes, path: str, message: bytes) -> tuple[bytes, bytes]:
+    """ Derive the ML-DSA-65 keypair for `path` and sign `message` with it
+        under the empty FIPS 204 context (the default hedged/randomized
+        path -- matches sf-root sign-genesis). Raises MlDsaError on any
+        failure. """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
 
@@ -174,13 +179,11 @@ def derive_and_sign(master_seed: bytes, purpose_path: str, role_path: str, messa
     pk_buf = ctypes.create_string_buffer(ML_DSA_PK_LEN)
     sig_buf = ctypes.create_string_buffer(ML_DSA_SIG_LEN)
 
-    purpose_bytes = purpose_path.encode("utf-8")
-    role_bytes = role_path.encode("utf-8")
+    path_bytes = path.encode("utf-8")
 
     rc = lib.mldsa7f_derive_and_sign(
         master_seed, len(master_seed),
-        purpose_bytes, len(purpose_bytes),
-        role_bytes, len(role_bytes),
+        path_bytes, len(path_bytes),
         message, len(message),
         pk_buf, ML_DSA_PK_LEN,
         sig_buf, ML_DSA_SIG_LEN,
@@ -191,14 +194,18 @@ def derive_and_sign(master_seed: bytes, purpose_path: str, role_path: str, messa
     return pk_buf.raw[:ML_DSA_PK_LEN], sig_buf.raw[:ML_DSA_SIG_LEN]
 
 
-def derive_purpose_seed(master_seed: bytes, purpose_path: str) -> bytes:
-    """ Derive the raw purpose seed for `purpose_path` from the master seed.
+def derive_seed_raw(master_seed: bytes, path: str) -> bytes:
+    """ Derive the raw seed for `path` from the master seed.
 
         THE ONE RAW-SECRET-EXPORTING FUNCTION IN THIS MODULE -- see this
         module's own docstring and ffi.rs's matching doc comment for why
         this is a deliberate, narrow, sanctioned exception (D4a: exporting a
-        derived LEAF seed is permitted, the master seed itself never is),
-        scoped specifically to the Root-to-Deputy child-seed handoff.
+        derived LEAF seed is permitted, the master seed itself never is).
+        Renamed 2026-10-03 from derive_purpose_seed: its original sole
+        purpose, the Root-to-Deputy child-seed handoff, is retired (C8;
+        see this module's own docstring) -- its only known caller,
+        deputy_ca_export.py, is confirmed non-functional against the real
+        ceremony as of this rewrite.
 
         The caller MUST encrypt the result (see
         seedsigner.models.sevenf.encrypted_blob.encrypt()) before it leaves
@@ -210,16 +217,16 @@ def derive_purpose_seed(master_seed: bytes, purpose_path: str) -> bytes:
 
     lib = _lib_handle()
     out_buf = ctypes.create_string_buffer(MASTER_SEED_LEN)
-    purpose_bytes = purpose_path.encode("utf-8")
+    path_bytes = path.encode("utf-8")
 
     try:
-        rc = lib.mldsa7f_derive_purpose_seed(
+        rc = lib.mldsa7f_derive_seed_raw(
             master_seed, len(master_seed),
-            purpose_bytes, len(purpose_bytes),
+            path_bytes, len(path_bytes),
             out_buf, MASTER_SEED_LEN,
         )
         if rc != 0:
-            raise MlDsaError(rc, "derive_purpose_seed")
+            raise MlDsaError(rc, "derive_seed_raw")
 
         return out_buf.raw[:MASTER_SEED_LEN]
     finally:

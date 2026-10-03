@@ -1025,13 +1025,13 @@ class SevenFConfirmDeputySeedExportView(View):
         from seedsigner.gui.screens.screen import DireWarningScreen, LoadingScreenThread
         from seedsigner.models.sevenf import deputy_ca_export
 
-        path = deputy_ca_export.deputy_ca_purpose_path(self.chain_kind)
+        path = deputy_ca_export.deputy_path(self.chain_kind)
         selected_menu_num = self.run_screen(
             DireWarningScreen,
             title=_("Export Deputy Seed"),
             status_headline=_("Exporting Secret Material"),
             text=_(
-                "This will derive and export the {} deputy-ca child seed ({}) from this "
+                "This will derive and export the {} deputy child seed ({}) from this "
                 "Root seed. Anyone who obtains it can act as this network's Deputy."
             ).format(self.chain_kind.name.lower(), path),
         )

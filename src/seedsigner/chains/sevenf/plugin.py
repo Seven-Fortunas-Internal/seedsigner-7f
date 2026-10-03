@@ -29,17 +29,12 @@
 """
 from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signature
 from seedsigner.models.sevenf import genesis_config, mldsa, root_ceremony
-from seedsigner.models.sevenf.constants import (
-    ML_DSA_LEAF_ROLE,
-    ChainKind,
-    Layer,
-    root_ca_purpose_path,
-)
+from seedsigner.models.sevenf.constants import ChainKind, Layer, root_path
 
 
 def _chain_kind_from_path(path: str) -> ChainKind:
     """ 7F derivation paths embed chain_kind literally as one path segment
-        (e.g. "m/root-ca/l1/testnet/0" -- constants.py's own
+        (e.g. "root/testnet/0/ml-dsa/v1" -- constants.py's own
         ChainKind.path_segment), so this recovers it without a second,
         separately-supplied argument that could drift from the path
         string's own content. """
@@ -54,16 +49,16 @@ class SevenFPlugin:
     display_name = "7F Chain"
 
     def derive_address(self, seed_bytes: bytes, path: str) -> Address:
-        """ `path` must be one of root_ca_purpose_path()/devfund_purpose_path()'s
-            own output for some ChainKind -- not yet exercised by any current
-            UI (the ceremony flow itself never browses an address; it only
-            derives the Root CA key at sign time, from the chain_kind
-            embedded in a scanned genesis-config). Implemented for real
-            rather than stubbed so a future "view Root CA address" screen
-            has a working, already-correct entry point. """
+        """ `path` must be one of root_path()'s own output for some
+            ChainKind -- not yet exercised by any current UI (the ceremony
+            flow itself never browses an address; it only derives the Root
+            key at sign time, from the chain_kind embedded in a scanned
+            genesis-config). Implemented for real rather than stubbed so a
+            future "view Root address" screen has a working,
+            already-correct entry point. """
         chain_kind = _chain_kind_from_path(path)
         public_key, address = mldsa.derive_pubkey(
-            seed_bytes, path, ML_DSA_LEAF_ROLE, int(chain_kind), int(Layer.L1),
+            seed_bytes, path, int(chain_kind), int(Layer.L1),
         )
         return Address(path=path, address=address, network_name=chain_kind.name.lower())
 
@@ -76,7 +71,7 @@ class SevenFPlugin:
         return ParsedRequest(
             operation="Genesis Config",
             network_name=fields.chain_kind.name.lower(),
-            derivation_path=root_ca_purpose_path(fields.chain_kind),
+            derivation_path=root_path(fields.chain_kind),
             review_fields=genesis_config.review_fields(fields),
         )
 

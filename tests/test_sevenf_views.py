@@ -1258,7 +1258,7 @@ class TestSevenFDeputySeedExportFlow(FlowTest):
             warning -> real derive+encrypt call runs -> bootstrap words
             shown -> QR export -> Home. Confirms the exported envelope
             actually decrypts under the displayed passphrase to the real
-            derived seed at the real m/deputy-ca/l1/mainnet/0 path -- not a
+            derived seed at the real deputy/mainnet/0/ml-dsa/v1 path -- not a
             placeholder. """
         from seedsigner.models.sevenf import encrypted_blob, mldsa
         from seedsigner.models.sevenf.bootstrap_passphrase import passphrase_to_bytes
@@ -1291,9 +1291,9 @@ class TestSevenFDeputySeedExportFlow(FlowTest):
         passphrase_bytes = passphrase_to_bytes(captured["words"])
         plaintext = encrypted_blob.decrypt(captured["envelope"], passphrase_bytes)
         entry = json.loads(plaintext)["entries"][0]
-        assert entry["path"] == "m/deputy-ca/l1/mainnet/0"
+        assert entry["path"] == "deputy/mainnet/0/ml-dsa/v1"
 
-        expected_seed = mldsa.derive_purpose_seed(seed.seed_bytes, "m/deputy-ca/l1/mainnet/0")
+        expected_seed = mldsa.derive_seed_raw(seed.seed_bytes, "deputy/mainnet/0/ml-dsa/v1")
         assert bytes.fromhex(entry["seed_hex"]) == expected_seed
 
         # Home always wipes flow-scoped state.
@@ -1346,7 +1346,7 @@ class TestSevenFDeputySeedExportFlow(FlowTest):
             mp.setattr(view, "run_screen", fake_run_screen)
             view.run()
 
-        assert "m/deputy-ca/l1/devnet/0" in captured["text"]
+        assert "deputy/devnet/0/ml-dsa/v1" in captured["text"]
 
 
     def test_bootstrap_words_view_back_button_returns_to_back_stack(self):
@@ -1418,9 +1418,11 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             scan -> review (5 fields, v2 schema) -> confirm+sign -> signed -> export
             -> Home. Confirms the real public_key/signature match a direct
             derive_root_ceremony_keys()/sign_with_devfund() call -- not a
-            placeholder, and specifically the DEVFUND key, not the Root CA
-            key (the exact confusion risk this flow's own view docstrings
-            flag). """
+            placeholder. BUG FIX, 2026-10-03 (R27): this used to also assert
+            the devfund key differs from the Root key -- that was the bug
+            (see root_ceremony.py's own BUG FIX note); devfund now signs
+            with the SAME key as Root, confirmed against 7fchain's real
+            sf-root.rs. """
         seed = self.seed_fixture()
         canonical_bytes = _sample_devfund_canonical_bytes()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
@@ -1453,7 +1455,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         )
 
         assert captured["public_key"] == keys.devfund.public_key
-        assert captured["public_key"] != keys.root_ca.public_key
+        assert captured["public_key"] == keys.root_ca.public_key
         assert len(captured["signature"]) == 3309
 
         # Home always wipes flow-scoped state.
@@ -1518,7 +1520,11 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         assert self.controller.sevenf_ceremony_data is None
 
 
-    def test_confirm_sign_view_shows_the_real_devfund_address_not_root_ca(self):
+    def test_confirm_sign_view_shows_the_real_devfund_address(self):
+        """ BUG FIX, 2026-10-03 (R27): this used to also assert the shown
+            address differs from the Root CA address -- that was the bug
+            (see root_ceremony.py's own BUG FIX note); devfund is now the
+            same key/address as Root CA. """
         from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
 
         seed = self.seed_fixture()
@@ -1528,4 +1534,4 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         assert view.devfund_address == keys.devfund.address
-        assert view.devfund_address != keys.root_ca.address
+        assert view.devfund_address == keys.root_ca.address
