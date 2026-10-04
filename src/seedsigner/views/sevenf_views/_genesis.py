@@ -20,7 +20,15 @@
     generation/entropy injection is just SeedSigner's existing seed-creation
     flow, already reachable before ever reaching SeedOptionsView -- nothing
     7F-specific to add there.
+
+    State is threaded entirely through view_args as a SevenFGenesisCeremonyState
+    (7f-review-ceremony-data-untyped-shared-dict, 2026-10-04): the former
+    controller.sevenf_ceremony_data untyped dict is gone from this flow
+    entirely, mirroring _common.SevenFCertRequestReviewFieldView's own
+    long-standing view_args-only pattern. See this module's own
+    SevenFGenesisCeremonyState docstring for the full rationale.
 """
+from dataclasses import dataclass, replace
 from gettext import gettext as _
 
 from seedsigner.helpers.l10n import mark_for_translation as _mft
@@ -35,6 +43,32 @@ from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
 from ._common import SevenFUnsupportedArtefactView, _paginate_value
+
+
+@dataclass(frozen=True)
+class SevenFGenesisCeremonyState:
+    """ Genesis-config signing's own ceremony state, threaded through
+        view_args from SevenFGenesisReviewStartView all the way to the two
+        export views -- replaces this flow's former use of
+        controller.sevenf_ceremony_data (7f-review-ceremony-data-untyped-
+        shared-dict). Frozen: once signed, SevenFConfirmSignView.run()
+        produces a NEW instance via dataclasses.replace(), never mutates
+        public_key/signature onto an existing instance in place -- fixing
+        the specific inconsistency that story's own finding flagged (the
+        old code mutated two keys of the controller dict in place while
+        every other write site in this file replaced it wholesale).
+
+        public_key/signature are None until SevenFConfirmSignView signs;
+        every view downstream of that point requires them to be set, so
+        there is no separate "signed" subtype -- the pre-sign and
+        post-sign views already differ by which views the Destination
+        graph routes through. """
+    seed: Seed
+    chain_kind: ChainKind
+    canonical_bytes: bytes
+    review_fields: list[ReviewField]
+    public_key: bytes = None
+    signature: bytes = None
 
 
 class SevenFScanGenesisConfigView(ScanView):
@@ -106,7 +140,8 @@ class SevenFGenesisReviewStartView(View):
     """ Entry point: parses the received canonical bytes (never trusts a
         separately-supplied "friendly" description of what they contain --
         same self-validation principle as chains/base.py's ChainPlugin
-        contract) and stashes the resulting review fields for paging.
+        contract) and builds the ceremony state that every later view in
+        this flow threads forward via view_args.
 
         chain_kind is deliberately NOT a constructor parameter: it comes
         only from the parsed bytes (fields.chain_kind), never from a
@@ -118,20 +153,21 @@ class SevenFGenesisReviewStartView(View):
         shipped a caller that could have supplied a mismatched value. """
     def __init__(self, seed: Seed, canonical_bytes: bytes):
         super().__init__()
-        self.seed = seed
-
         fields = genesis_config.parse_canonical_bytes(canonical_bytes)
-        self.controller.sevenf_ceremony_data = dict(
+        self.state = SevenFGenesisCeremonyState(
             seed=seed,
             chain_kind=fields.chain_kind,
             canonical_bytes=canonical_bytes,
-            fields=fields,
             review_fields=genesis_config.review_fields(fields),
         )
 
 
     def run(self):
-        return Destination(SevenFGenesisReviewFieldView, view_args=dict(page_num=0), skip_current_view=True)
+        return Destination(
+            SevenFGenesisReviewFieldView,
+            view_args=dict(state=self.state, page_num=0),
+            skip_current_view=True,
+        )
 
 
 
@@ -147,14 +183,13 @@ class SevenFGenesisReviewFieldView(View):
         found live 2026-09-27 (7F hardware walkthrough) as a real
         no-blind-signing gap on the message field specifically, but applied
         generically here since any field could in principle grow long. """
-    def __init__(self, page_num: int = 0):
+    def __init__(self, state: SevenFGenesisCeremonyState, page_num: int = 0):
         super().__init__()
+        self.state = state
         self.page_num = page_num
-        data = self.controller.sevenf_ceremony_data
-        fields: list[ReviewField] = data["review_fields"]
         self.chunks: list[ReviewField] = [
             ReviewField(label=field.label, value=chunk_value)
-            for field in fields
+            for field in state.review_fields
             for chunk_value in _paginate_value(field.value)
         ]
 
@@ -178,14 +213,15 @@ class SevenFGenesisReviewFieldView(View):
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
-            if self.page_num == 0:
-                self.controller.sevenf_ceremony_data = None
             return Destination(BackStackView)
 
         if is_final_page:
-            return Destination(SevenFConfirmSignView)
+            return Destination(SevenFConfirmSignView, view_args=dict(state=self.state))
         else:
-            return Destination(SevenFGenesisReviewFieldView, view_args=dict(page_num=self.page_num + 1))
+            return Destination(
+                SevenFGenesisReviewFieldView,
+                view_args=dict(state=self.state, page_num=self.page_num + 1),
+            )
 
 
 
@@ -196,14 +232,11 @@ class SevenFConfirmSignView(View):
         into root_ceremony.sign_with_root_ca() -- see that function's own
         docstring for why this is an enforced precondition, not a UI step
         that merely happens to run first. """
-    def __init__(self):
+    def __init__(self, state: SevenFGenesisCeremonyState):
         super().__init__()
-        data = self.controller.sevenf_ceremony_data
-        self.seed: Seed = data["seed"]
-        self.chain_kind: ChainKind = data["chain_kind"]
-        self.canonical_bytes: bytes = data["canonical_bytes"]
+        self.state = state
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
+        keys = root_ceremony.derive_root_ceremony_keys(state.seed.seed_bytes, state.chain_kind)
         self.root_ca_address = keys.root_ca.address
 
 
@@ -211,7 +244,7 @@ class SevenFConfirmSignView(View):
         from seedsigner.gui.screens.sevenf_screens import SevenFConfirmSignScreen
         selected_menu_num = self.run_screen(
             SevenFConfirmSignScreen,
-            chain_kind_name=self.chain_kind.name.lower(),
+            chain_kind_name=self.state.chain_kind.name.lower(),
             address=self.root_ca_address,
         )
 
@@ -221,14 +254,13 @@ class SevenFConfirmSignView(View):
         # Operator clicked "Sign" -- the one and only call site allowed to pass
         # confirmed=True (root_ceremony.sign_with_root_ca's own docstring).
         public_key, signature = root_ceremony.sign_with_root_ca(
-            self.seed.seed_bytes,
-            self.chain_kind,
-            self.canonical_bytes,
+            self.state.seed.seed_bytes,
+            self.state.chain_kind,
+            self.state.canonical_bytes,
             confirmed=True,
         )
-        self.controller.sevenf_ceremony_data["public_key"] = public_key
-        self.controller.sevenf_ceremony_data["signature"] = signature
-        return Destination(SevenFGenesisSignedView)
+        signed_state = replace(self.state, public_key=public_key, signature=signature)
+        return Destination(SevenFGenesisSignedView, view_args=dict(state=signed_state))
 
 
 
@@ -236,6 +268,11 @@ class SevenFGenesisSignedView(View):
     """ Success confirmation, then on to exporting the signed result --
         matches how SeedWordsBackupTestSuccessView plays the same
         success-then-continue role for the backup-verification flow. """
+    def __init__(self, state: SevenFGenesisCeremonyState):
+        super().__init__()
+        self.state = state
+
+
     def run(self):
         from seedsigner.gui.screens.screen import ButtonOption, LargeIconStatusScreen
         self.run_screen(
@@ -246,7 +283,7 @@ class SevenFGenesisSignedView(View):
             text=_("The genesis-config has been signed with the Root CA key."),
             button_data=[ButtonOption("OK")],
         )
-        return Destination(SevenFExportView)
+        return Destination(SevenFExportView, view_args=dict(state=self.state))
 
 
 
@@ -261,6 +298,11 @@ class SevenFExportView(View):
         here) so an operator can export both artifacts in one sitting. """
     EXPORT_PUBKEY = ButtonOption("Export Root CA Pubkey")
     EXPORT_SIGNED_CONFIG = ButtonOption("Export Signed Config")
+
+    def __init__(self, state: SevenFGenesisCeremonyState):
+        super().__init__()
+        self.state = state
+
 
     def run(self):
         from seedsigner.gui.screens.screen import ButtonListScreen
@@ -277,9 +319,9 @@ class SevenFExportView(View):
             return Destination(MainMenuView, skip_current_view=True)
 
         if button_data[selected_menu_num] == self.EXPORT_PUBKEY:
-            return Destination(SevenFExportPubkeyQRView)
+            return Destination(SevenFExportPubkeyQRView, view_args=dict(state=self.state))
         else:
-            return Destination(SevenFExportSignedConfigQRView)
+            return Destination(SevenFExportSignedConfigQRView, view_args=dict(state=self.state))
 
 
 
@@ -287,17 +329,21 @@ class SevenFExportPubkeyQRView(View):
     """ Exports the Root CA public key as hex, BBQr-encoded -- the first of
         the two export artifacts, for cross-checking against sf-wallet-side
         output (per sf-root.rs's own root_vk_hex = hex::encode(pubkey)). """
+    def __init__(self, state: SevenFGenesisCeremonyState):
+        super().__init__()
+        self.state = state
+
+
     def run(self):
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        data = self.controller.sevenf_ceremony_data
-        pubkey_hex = data["public_key"].hex().encode("utf-8")
+        pubkey_hex = self.state.public_key.hex().encode("utf-8")
 
         self.run_screen(
             QRDisplayScreen,
             qr_encoder=BBQrEncoder(data=pubkey_hex, file_type="U"),  # 'U': BBQr unicode/plain-text
         )
-        return Destination(SevenFExportView, skip_current_view=True)
+        return Destination(SevenFExportView, view_args=dict(state=self.state), skip_current_view=True)
 
 
 
@@ -309,14 +355,18 @@ class SevenFExportSignedConfigQRView(View):
         signature leaves the device per ceremony (D11), not the config
         again -- the coordinator that produced the unsigned config already
         has every other field. """
+    def __init__(self, state: SevenFGenesisCeremonyState):
+        super().__init__()
+        self.state = state
+
+
     def run(self):
         import json
 
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        data = self.controller.sevenf_ceremony_data
         signed_json = genesis_config.build_root_sig_json(
-            data["public_key"], data["signature"],
+            self.state.public_key, self.state.signature,
         )
         json_bytes = json.dumps(signed_json).encode("utf-8")
 
@@ -324,4 +374,4 @@ class SevenFExportSignedConfigQRView(View):
             QRDisplayScreen,
             qr_encoder=BBQrEncoder(data=json_bytes, file_type="J"),  # 'J': BBQr JSON
         )
-        return Destination(SevenFExportView, skip_current_view=True)
+        return Destination(SevenFExportView, view_args=dict(state=self.state), skip_current_view=True)

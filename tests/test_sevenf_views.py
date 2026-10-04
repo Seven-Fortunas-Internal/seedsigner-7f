@@ -76,7 +76,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         return seed
 
 
-    def _enter_review_flow(self, seed: Seed, canonical_bytes: bytes) -> None:
+    def _enter_review_flow(self, seed: Seed, canonical_bytes: bytes) -> "sevenf_views.SevenFGenesisCeremonyState":
         """ SevenFGenesisReviewStartView is a skip_current_view=True redirect
             (same convention as evm_views.EvmSignStartView) -- run_sequence's
             underlying Controller loop pops the current view off back_stack
@@ -88,13 +88,19 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             same way EvmSignStartView is never the first FlowStep in
             test_flows_evm.py's own sequences either (always preceded by
             ENTER_SEED_OPTIONS_STEPS). Run it directly, outside the
-            run_sequence harness, to sidestep that test-harness-only gap. """
+            run_sequence harness, to sidestep that test-harness-only gap.
+
+            Returns the SevenFGenesisCeremonyState the start view built, for
+            callers to pass along as initial_destination_view_args
+            (7f-review-ceremony-data-untyped-shared-dict: this flow's state
+            is threaded through view_args now, not a controller global). """
         start_view = sevenf_views.SevenFGenesisReviewStartView(
             seed=seed, canonical_bytes=canonical_bytes,
         )
         destination = start_view.run()
         assert destination.View_cls == sevenf_views.SevenFGenesisReviewFieldView
-        assert destination.view_args == dict(page_num=0)
+        assert destination.view_args["page_num"] == 0
+        return destination.view_args["state"]
 
 
     def test_genesis_review_and_sign_flow(self):
@@ -107,7 +113,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             each) -> back button -> MainMenuView. """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        self._enter_review_flow(seed, canonical_bytes)
+        state = self._enter_review_flow(seed, canonical_bytes)
 
         self.run_sequence(
             [
@@ -127,27 +133,25 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
                 FlowStep(MainMenuView),
             ],
-            initial_destination_view_args=dict(page_num=0),
+            initial_destination_view_args=dict(state=state, page_num=0),
         )
-
-        # Home always wipes flow-scoped state.
-        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_signed_result_matches_direct_sign_with_root_ca_call(self):
         """ The flow's actual output must be the real Root CA signature over
             the real canonical bytes -- not a placeholder -- confirmed by
-            reaching into controller.sevenf_ceremony_data right before Home
-            wipes it and comparing against an independent direct call. """
+            reaching into the signed SevenFGenesisCeremonyState threaded
+            through to SevenFGenesisSignedView and comparing against an
+            independent direct call. """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        self._enter_review_flow(seed, canonical_bytes)
+        state = self._enter_review_flow(seed, canonical_bytes)
 
         captured = {}
 
         def capture_before_home(view):
-            captured["public_key"] = self.controller.sevenf_ceremony_data["public_key"]
-            captured["signature"] = self.controller.sevenf_ceremony_data["signature"]
+            captured["public_key"] = view.state.public_key
+            captured["signature"] = view.state.signature
 
         self.run_sequence(
             [
@@ -163,7 +167,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
                 FlowStep(MainMenuView),
             ],
-            initial_destination_view_args=dict(page_num=0),
+            initial_destination_view_args=dict(state=state, page_num=0),
         )
 
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
@@ -171,45 +175,46 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         assert len(captured["signature"]) == 3309
 
 
-    def test_back_button_on_first_review_page_abandons_flow_and_clears_state(self):
+    def test_back_button_on_first_review_page_abandons_flow(self):
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        self._enter_review_flow(seed, canonical_bytes)
+        state = self._enter_review_flow(seed, canonical_bytes)
 
         self.run_sequence(
             [
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=RET_CODE__BACK_BUTTON),
             ],
-            initial_destination_view_args=dict(page_num=0),
+            initial_destination_view_args=dict(state=state, page_num=0),
         )
-
-        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_back_button_on_a_later_review_page_does_not_clear_state(self):
         """ Only page 0's back button abandons the whole flow -- backing up
             from a later page must return to the previous page's content,
-            not wipe the ceremony data the operator has already been
-            reviewing (see SevenFGenesisReviewFieldView.run()'s
-            page_num == 0 guard). Direct unit-level check, not a full
-            run_sequence: the Controller's back_stack semantics require a
-            "current view" already pushed before a FlowStep sequence starts
-            (true in real usage -- MainMenuView et al. precede this flow --
-            but not reproducible by starting run_sequence fresh at page 1
-            without the not-yet-built wizard/menu chain in front of it). """
+            not disturb the state the operator has already been reviewing
+            (see SevenFGenesisReviewFieldView.run()'s page_num == 0 guard).
+            State is threaded through view_args, not a controller global
+            (7f-review-ceremony-data-untyped-shared-dict), so there is
+            nothing to "clear" any more -- this confirms the same state
+            object survives a non-zero-page back button untouched. Direct
+            unit-level check, not a full run_sequence: the Controller's
+            back_stack semantics require a "current view" already pushed
+            before a FlowStep sequence starts (true in real usage --
+            MainMenuView et al. precede this flow -- but not reproducible by
+            starting run_sequence fresh at page 1 without the not-yet-built
+            wizard/menu chain in front of it). """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        self._enter_review_flow(seed, canonical_bytes)
-        stashed_data = self.controller.sevenf_ceremony_data
+        state = self._enter_review_flow(seed, canonical_bytes)
 
-        view = sevenf_views.SevenFGenesisReviewFieldView(page_num=1)
+        view = sevenf_views.SevenFGenesisReviewFieldView(state=state, page_num=1)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
 
         from seedsigner.views.view import BackStackView
         assert destination.View_cls == BackStackView
-        assert self.controller.sevenf_ceremony_data is stashed_data
+        assert view.state is state
 
 
     def test_back_button_on_confirm_sign_screen_returns_to_back_stack_without_signing(self):
@@ -219,19 +224,19 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             expected one. """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        self.controller.sevenf_ceremony_data = dict(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+        state = sevenf_views.SevenFGenesisCeremonyState(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
         )
 
-        view = sevenf_views.SevenFConfirmSignView()
+        view = sevenf_views.SevenFConfirmSignView(state=state)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
 
         from seedsigner.views.view import BackStackView
         assert destination.View_cls == BackStackView
-        assert "public_key" not in self.controller.sevenf_ceremony_data
-        assert "signature" not in self.controller.sevenf_ceremony_data
+        assert view.state.public_key is None
+        assert view.state.signature is None
 
 
     def test_confirm_sign_view_shows_the_real_root_ca_address_for_the_chain_kind(self):
@@ -241,11 +246,11 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             confirms it isn't a placeholder or a different derivation. """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        self.controller.sevenf_ceremony_data = dict(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+        state = sevenf_views.SevenFGenesisCeremonyState(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
         )
 
-        view = sevenf_views.SevenFConfirmSignView()
+        view = sevenf_views.SevenFConfirmSignView(state=state)
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         assert view.root_ca_address == keys.root_ca.address
 
@@ -267,8 +272,8 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             :sevenf_views.SevenFGenesisReviewStartView.__init__.__code__.co_argcount
         ]
 
-        sevenf_views.SevenFGenesisReviewStartView(seed=seed, canonical_bytes=canonical_bytes)
-        assert self.controller.sevenf_ceremony_data["chain_kind"] == ChainKind.TESTNET
+        view = sevenf_views.SevenFGenesisReviewStartView(seed=seed, canonical_bytes=canonical_bytes)
+        assert view.state.chain_kind == ChainKind.TESTNET
 
 
     def test_export_pubkey_qr_view_encodes_the_real_root_ca_pubkey(self):
@@ -279,13 +284,12 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        self.controller.sevenf_ceremony_data = dict(
+        state = sevenf_views.SevenFGenesisCeremonyState(
             seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
-            fields=parse_canonical_bytes(canonical_bytes),
-            public_key=keys.root_ca.public_key, signature=b"\x00" * 3309,
+            review_fields=[], public_key=keys.root_ca.public_key, signature=b"\x00" * 3309,
         )
 
-        view = sevenf_views.SevenFExportPubkeyQRView()
+        view = sevenf_views.SevenFExportPubkeyQRView(state=state)
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
@@ -325,14 +329,13 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        fields = parse_canonical_bytes(canonical_bytes)
         signature = bytes(range(256)) * 12 + bytes(3309 - 256 * 12)  # 3309 varied bytes, not all-zero
-        self.controller.sevenf_ceremony_data = dict(
+        state = sevenf_views.SevenFGenesisCeremonyState(
             seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
-            fields=fields, public_key=keys.root_ca.public_key, signature=signature,
+            review_fields=[], public_key=keys.root_ca.public_key, signature=signature,
         )
 
-        view = sevenf_views.SevenFExportSignedConfigQRView()
+        view = sevenf_views.SevenFExportSignedConfigQRView(state=state)
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
@@ -361,11 +364,11 @@ class TestSevenFGenesisReviewFlow(FlowTest):
     def test_export_view_back_button_returns_home(self):
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        self.controller.sevenf_ceremony_data = dict(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+        state = sevenf_views.SevenFGenesisCeremonyState(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
         )
 
-        view = sevenf_views.SevenFExportView()
+        view = sevenf_views.SevenFExportView(state=state)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
@@ -516,10 +519,10 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         captured = {}
 
         def capture_before_export(view):
-            data = self.controller.sevenf_ceremony_data
-            captured["public_key"] = data["public_key"]
-            captured["signature"] = data["signature"]
-            captured["tbs_bytes"] = data["tbs_bytes"]
+            certificate = view.certificate
+            captured["public_key"] = certificate.public_key
+            captured["signature"] = certificate.signature
+            captured["tbs_bytes"] = certificate.tbs_bytes
 
         self.run_sequence(
             [
@@ -527,8 +530,8 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, button_data_selection=ButtonOption("testnet")),
                 *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(5)],
                 FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
-                FlowStep(sevenf_views.SevenFRootCertSignedView, screen_return_value=0),  # "OK"
-                FlowStep(sevenf_views.SevenFExportRootCertQRView, before_run=capture_before_export, screen_return_value=0),
+                FlowStep(sevenf_views.SevenFRootCertSignedView, before_run=capture_before_export, screen_return_value=0),  # "OK"
+                FlowStep(sevenf_views.SevenFExportRootCertQRView, screen_return_value=0),
                 FlowStep(MainMenuView),
             ],
             initial_destination_view_args=dict(seed=seed),
@@ -542,9 +545,6 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         parsed = cert_request_module.parse_root_certificate_der(cert_der)
         assert parsed.subject_vk == keys.root_ca.public_key
         assert parsed.chain_kind == ChainKind.TESTNET
-
-        # Home always wipes flow-scoped state.
-        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_export_root_cert_qr_view_encodes_a_real_assembled_certificate(self):
@@ -565,9 +565,9 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         not_before = 1_750_000_000
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.MAINNET, not_before, cert_request_module.ROOT_DAYS, serial)
         public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.MAINNET, tbs_bytes, confirmed=True)
-        self.controller.sevenf_ceremony_data = dict(public_key=public_key, signature=signature, tbs_bytes=tbs_bytes)
+        certificate = sevenf_views.SevenFSignedCertificate(public_key=public_key, signature=signature, tbs_bytes=tbs_bytes)
 
-        view = sevenf_views.SevenFExportRootCertQRView()
+        view = sevenf_views.SevenFExportRootCertQRView(certificate=certificate)
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
@@ -630,7 +630,6 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
 
         from seedsigner.views.view import BackStackView
         assert destination.View_cls == BackStackView
-        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_confirm_sign_view_shows_the_real_root_ca_address(self):
@@ -644,21 +643,25 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         assert view.root_ca_address == keys.root_ca.address
 
 
-    def test_confirm_sign_view_stores_tbs_bytes_into_ceremony_data(self):
+    def test_confirm_sign_view_stores_tbs_bytes_into_the_signed_certificate(self):
         """ The actual bug fix this story ships (plan's §3): tbs_bytes must
-            survive into ceremony_data, not be discarded after signing. """
+            survive into the SevenFSignedCertificate, not be discarded after
+            signing. """
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
-        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
+        view = sevenf_views.SevenFConfirmSignRootCertView(
+            seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes,
+            signed_view_args=dict(export_destination=sevenf_views.SevenFExportRootCertQRView),
+        )
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 0)
-            view.run()
+            destination = view.run()
 
-        assert self.controller.sevenf_ceremony_data["tbs_bytes"] == tbs_bytes
+        assert destination.view_args["certificate"].tbs_bytes == tbs_bytes
 
 
 class TestSevenFUnsupportedArtefactViewHeadline:
@@ -793,11 +796,11 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             captured["text"] = view.text
 
         def capture_before_export(view):
-            data = self.controller.sevenf_ceremony_data
-            captured["public_key"] = data["public_key"]
-            captured["signature"] = data["signature"]
-            captured["tbs_bytes"] = data["tbs_bytes"]
-            captured["root_cert_der"] = data["root_cert_der"]
+            certificate = view.certificate
+            captured["public_key"] = certificate.public_key
+            captured["signature"] = certificate.signature
+            captured["tbs_bytes"] = certificate.tbs_bytes
+            captured["root_cert_der"] = certificate.root_cert_der
 
         with pytest.MonkeyPatch().context() as mp:
             # Same wall-clock fix as test_review_fields_are_labeled_and_ordered_root_then_deputy,
@@ -845,8 +848,6 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         parsed = cert_request_module.parse_root_certificate_der(cert_der)
         assert parsed.subject_vk == deputy_csr.subject_vk
         assert parsed.chain_kind == ChainKind.TESTNET
-
-        assert self.controller.sevenf_ceremony_data is None  # Home always wipes flow-scoped state
 
 
     def test_review_fields_are_labeled_and_ordered_root_then_deputy(self):
@@ -984,7 +985,6 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
 
         from seedsigner.views.view import BackStackView
         assert destination.View_cls == BackStackView
-        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_export_deputy_cert_qr_view_encodes_a_real_assembled_certificate(self):
@@ -1024,11 +1024,11 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
 
         public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, tbs_bytes, confirmed=True)
 
-        self.controller.sevenf_ceremony_data = dict(
+        certificate = sevenf_views.SevenFSignedCertificate(
             public_key=public_key, signature=signature, tbs_bytes=tbs_bytes, root_cert_der=root_cert_der,
         )
 
-        view = sevenf_views.SevenFExportDeputyCertQRView()
+        view = sevenf_views.SevenFExportDeputyCertQRView(certificate=certificate)
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
@@ -1121,6 +1121,11 @@ class TestSevenFScanEntryPoint(FlowTest):
         genesis_json = _sample_genesis_config_json()
         expected_canonical_bytes = _sample_canonical_bytes()
 
+        captured = {}
+
+        def capture_state(view):
+            captured["state"] = view.state
+
         self.run_sequence(
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG),
@@ -1130,15 +1135,15 @@ class TestSevenFScanEntryPoint(FlowTest):
                     screen_return_value=0,
                 ),
                 FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True),
-                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, before_run=capture_state, screen_return_value=0),
             ],
             initial_destination_view_args=dict(seed=seed),
         )
 
-        data = self.controller.sevenf_ceremony_data
-        assert data["seed"] is seed
-        assert data["canonical_bytes"] == expected_canonical_bytes
-        assert data["chain_kind"] == ChainKind.TESTNET
+        state = captured["state"]
+        assert state.seed is seed
+        assert state.canonical_bytes == expected_canonical_bytes
+        assert state.chain_kind == ChainKind.TESTNET
 
 
     def test_scan_genesis_config_view_rejects_raw_canonical_bytes_no_longer_accepted(self):
@@ -1164,8 +1169,6 @@ class TestSevenFScanEntryPoint(FlowTest):
             initial_destination_view_args=dict(seed=seed),
         )
 
-        assert self.controller.sevenf_ceremony_data is None
-
 
     def test_scan_genesis_config_view_rejects_a_payload_that_doesnt_parse(self):
         """ A BBQr payload that decodes fine at the transport layer but isn't
@@ -1189,8 +1192,6 @@ class TestSevenFScanEntryPoint(FlowTest):
             ],
             initial_destination_view_args=dict(seed=seed),
         )
-
-        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_scan_genesis_config_view_refuses_to_run_in_the_wrong_chain_mode(self):
@@ -1289,8 +1290,9 @@ class TestSevenFCertRequestReviewFieldView(FlowTest):
         independent adversarial reviews both found this screen missing
         entirely from the original story. Tested in isolation from any real
         Root self-cert / Deputy cross-cert flow (neither exists yet): this
-        view takes its fields via view_args, not controller.sevenf_ceremony_data,
-        specifically so it doesn't need one to be tested or reused. """
+        view takes its fields via view_args, not a controller-global flow
+        state, specifically so it doesn't need one to be tested or
+        reused. """
     def _fields(self):
         from seedsigner.chains.base import ReviewField
         return [
@@ -1479,8 +1481,8 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         captured = {}
 
         def capture_before_home(view):
-            captured["public_key"] = self.controller.sevenf_ceremony_data["public_key"]
-            captured["signature"] = self.controller.sevenf_ceremony_data["signature"]
+            captured["public_key"] = view.artifact.public_key
+            captured["signature"] = view.artifact.signature
 
         self.run_sequence(
             [
@@ -1507,9 +1509,6 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         assert captured["public_key"] == keys.root_ca.public_key
         assert len(captured["signature"]) == 3309
 
-        # Home always wipes flow-scoped state.
-        assert self.controller.sevenf_ceremony_data is None
-
 
     def test_signed_result_matches_direct_sign_with_devfund_call(self):
         """ Unit-level cross-check: SevenFConfirmSignDevFundView's output
@@ -1528,11 +1527,11 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             destination = view.run()
 
         assert destination.View_cls == sevenf_views.SevenFDevFundConfigSignedView
-        data = self.controller.sevenf_ceremony_data
+        artifact = destination.view_args["artifact"]
         keys = derive_root_ceremony_keys(seed.seed_bytes, fields.network)
         expected_pk, expected_sig = sign_with_devfund(seed.seed_bytes, fields.network, canonical_bytes, confirmed=True)
-        assert data["public_key"] == keys.devfund.public_key == expected_pk
-        assert len(data["signature"]) == len(expected_sig) == 3309
+        assert artifact.public_key == keys.devfund.public_key == expected_pk
+        assert len(artifact.signature) == len(expected_sig) == 3309
 
 
     def test_confirm_sign_screen_labels_the_devfund_key_not_root_ca(self):
@@ -1594,7 +1593,6 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
 
         from seedsigner.views.view import BackStackView
         assert destination.View_cls == BackStackView
-        assert self.controller.sevenf_ceremony_data is None
 
 
     def test_confirm_sign_view_shows_the_real_devfund_address(self):

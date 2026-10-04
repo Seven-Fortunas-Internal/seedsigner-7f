@@ -23,7 +23,12 @@ from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
-from ._common import SevenFCertRequestReviewFieldView, SevenFConfirmSignRootCertView, SevenFUnsupportedArtefactView
+from ._common import (
+    SevenFCertRequestReviewFieldView,
+    SevenFConfirmSignRootCertView,
+    SevenFSignedCertificate,
+    SevenFUnsupportedArtefactView,
+)
 
 
 class SevenFSelectChainKindForDeputyCrossCertView(View):
@@ -240,13 +245,21 @@ class SevenFExportDeputyCertQRView(View):
         `root_cert_der`), not the Deputy's own subject key, since this
         certificate is CA-issued rather than self-signed. Does NOT route
         through _genesis.SevenFExportView's pubkey/signed-config menu, same
-        reasoning as the Root export. """
+        reasoning as the Root export.
+
+        `certificate` (added 2026-10-04, 7f-review-ceremony-data-untyped-
+        shared-dict) replaces the former read of
+        controller.sevenf_ceremony_data. """
+    def __init__(self, certificate: SevenFSignedCertificate):
+        super().__init__()
+        self.certificate = certificate
+
+
     def run(self):
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        data = self.controller.sevenf_ceremony_data
         cert_der = cert_request.assemble_deputy_cert_der(
-            data["tbs_bytes"], data["signature"], data["root_cert_der"],
+            self.certificate.tbs_bytes, self.certificate.signature, self.certificate.root_cert_der,
         )
 
         self.run_screen(

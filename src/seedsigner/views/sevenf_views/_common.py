@@ -14,6 +14,7 @@
     800-line soft ceiling. See the package's own __init__.py docstring for
     the full split rationale and the module map.
 """
+from dataclasses import dataclass
 from gettext import gettext as _
 
 from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
@@ -23,6 +24,23 @@ from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
+
+
+@dataclass(frozen=True)
+class SevenFSignedCertificate:
+    """ Shared by Root self-certification and Deputy cross-certification --
+        both sign an arbitrary TBS body with the same Root key and export a
+        complete assembled certificate. Threaded through view_args from
+        SevenFConfirmSignRootCertView to SevenFRootCertSignedView to each
+        flow's own export view, replacing this pair's former write/read of
+        controller.sevenf_ceremony_data (7f-review-ceremony-data-untyped-
+        shared-dict). root_cert_der is Deputy's own extra piece of context
+        (the issuing Root's real certificate) -- None for Root self-cert,
+        which has no separate issuer to carry. """
+    public_key: bytes
+    signature: bytes
+    tbs_bytes: bytes
+    root_cert_der: bytes = None
 
 # Conservative, character-count-based page budget for a single review field's
 # value -- found live 2026-09-27 (7F hardware walkthrough): the genesis-
@@ -191,9 +209,9 @@ class SevenFConfirmSignRootCertView(View):
 
         Reuses root_ceremony.sign_with_root_ca() unmodified -- it already
         signs an arbitrary `message`, so signing a CertRequest's TBS bytes
-        needs no new signing primitive, only a new caller. Writes into
-        controller.sevenf_ceremony_data on success, now including
-        `tbs_bytes` itself (previously discarded here -- see
+        needs no new signing primitive, only a new caller. Builds a
+        SevenFSignedCertificate on success, now including `tbs_bytes`
+        itself (previously discarded here -- see
         docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3 for why
         that was a real, already-shipped bug: a TBS whose serial/not_before
         are device-chosen can never be reconstructed downstream from a
@@ -240,10 +258,13 @@ class SevenFConfirmSignRootCertView(View):
             self.tbs_bytes,
             confirmed=True,
         )
-        self.controller.sevenf_ceremony_data = dict(
+        certificate = SevenFSignedCertificate(
             public_key=public_key, signature=signature, tbs_bytes=self.tbs_bytes, root_cert_der=self.root_cert_der,
         )
-        return Destination(SevenFRootCertSignedView, view_args=self.signed_view_args)
+        return Destination(
+            SevenFRootCertSignedView,
+            view_args=dict(self.signed_view_args, certificate=certificate),
+        )
 
 
 
@@ -267,12 +288,19 @@ class SevenFRootCertSignedView(View):
         a certificate-flow TBS/signature as a genesis-shaped RootSig JSON
         export); making it required removes that hazard outright, and
         avoids this shared module needing to import the genesis-specific
-        _genesis.SevenFExportView just for a default nothing used. """
-    def __init__(self, export_destination: type, title: str = None, text: str = None):
+        _genesis.SevenFExportView just for a default nothing used.
+
+        `certificate` (added 2026-10-04, 7f-review-ceremony-data-untyped-
+        shared-dict) carries the just-signed SevenFSignedCertificate through
+        to `export_destination`, replacing the former read of
+        controller.sevenf_ceremony_data that each export view used to do
+        itself. """
+    def __init__(self, export_destination: type, certificate: SevenFSignedCertificate, title: str = None, text: str = None):
         super().__init__()
         self.title = title if title is not None else _("Root Certificate Signed")
         self.text = text if text is not None else _("This Root's own certificate has been signed and is ready to export.")
         self.export_destination = export_destination
+        self.certificate = certificate
 
 
     def run(self):
@@ -285,4 +313,4 @@ class SevenFRootCertSignedView(View):
             text=self.text,
             button_data=[ButtonOption("OK")],
         )
-        return Destination(self.export_destination)
+        return Destination(self.export_destination, view_args=dict(certificate=self.certificate))

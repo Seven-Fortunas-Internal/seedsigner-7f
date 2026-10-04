@@ -20,7 +20,12 @@ from seedsigner.models.sevenf.cert_request import CertRequestError
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
-from ._common import SevenFCertRequestReviewFieldView, SevenFConfirmSignRootCertView, SevenFUnsupportedArtefactView
+from ._common import (
+    SevenFCertRequestReviewFieldView,
+    SevenFConfirmSignRootCertView,
+    SevenFSignedCertificate,
+    SevenFUnsupportedArtefactView,
+)
 
 
 class SevenFSelectChainKindForRootSelfCertView(View):
@@ -121,13 +126,21 @@ class SevenFExportRootCertQRView(View):
         own detached-signature shape, which this artifact doesn't use
         (single artifact, no menu -- mirrors
         _devfund.SevenFExportSignedDevFundConfigQRView's direct-to-
-        MainMenuView routing, not the two-option menu's). """
+        MainMenuView routing, not the two-option menu's).
+
+        `certificate` (added 2026-10-04, 7f-review-ceremony-data-untyped-
+        shared-dict) replaces the former read of
+        controller.sevenf_ceremony_data. """
+    def __init__(self, certificate: SevenFSignedCertificate):
+        super().__init__()
+        self.certificate = certificate
+
+
     def run(self):
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        data = self.controller.sevenf_ceremony_data
         cert_der = cert_request.assemble_root_cert_der(
-            data["tbs_bytes"], data["signature"], data["public_key"],
+            self.certificate.tbs_bytes, self.certificate.signature, self.certificate.public_key,
         )
 
         self.run_screen(

@@ -4,6 +4,7 @@
     SevenFCertRequestReviewFieldView), the gated sign call, and export of
     the signed result. R11's "development-fund configuration" artefact.
 """
+from dataclasses import dataclass
 from gettext import gettext as _
 
 from seedsigner.helpers.l10n import mark_for_translation as _mft
@@ -16,6 +17,18 @@ from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
 from ._common import SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView
+
+
+@dataclass(frozen=True)
+class SevenFSignedArtifact:
+    """ Devfund-config signing's own signed result -- threaded through
+        view_args from SevenFConfirmSignDevFundView to
+        SevenFDevFundConfigSignedView to SevenFExportSignedDevFundConfigQRView,
+        replacing this flow's former write/read of
+        controller.sevenf_ceremony_data (7f-review-ceremony-data-untyped-
+        shared-dict). """
+    public_key: bytes
+    signature: bytes
 
 
 class SevenFScanDevFundConfigView(ScanView):
@@ -127,8 +140,8 @@ class SevenFConfirmSignDevFundView(View):
             self.tbs_bytes,
             confirmed=True,
         )
-        self.controller.sevenf_ceremony_data = dict(public_key=public_key, signature=signature)
-        return Destination(SevenFDevFundConfigSignedView)
+        artifact = SevenFSignedArtifact(public_key=public_key, signature=signature)
+        return Destination(SevenFDevFundConfigSignedView, view_args=dict(artifact=artifact))
 
 
 
@@ -136,7 +149,16 @@ class SevenFDevFundConfigSignedView(View):
     """ Success confirmation, then straight to export -- unlike genesis's
         two-artifact _genesis.SevenFExportView menu, devfund signing only
         ever produces one exportable artifact (the signature), so there's
-        no menu to show. """
+        no menu to show.
+
+        `artifact` (added 2026-10-04, 7f-review-ceremony-data-untyped-
+        shared-dict) replaces the former write/read of
+        controller.sevenf_ceremony_data. """
+    def __init__(self, artifact: SevenFSignedArtifact):
+        super().__init__()
+        self.artifact = artifact
+
+
     def run(self):
         from seedsigner.gui.screens.screen import ButtonOption, LargeIconStatusScreen
         self.run_screen(
@@ -147,7 +169,7 @@ class SevenFDevFundConfigSignedView(View):
             text=_("The devfund config has been signed with the devfund key."),
             button_data=[ButtonOption("OK")],
         )
-        return Destination(SevenFExportSignedDevFundConfigQRView)
+        return Destination(SevenFExportSignedDevFundConfigQRView, view_args=dict(artifact=self.artifact))
 
 
 
@@ -160,14 +182,18 @@ class SevenFExportSignedDevFundConfigQRView(View):
         per sf-core's own DevFundConfig.signatures doc comment). Only the
         signature leaves the device per ceremony (D11), matching every
         other export in this package. """
+    def __init__(self, artifact: SevenFSignedArtifact):
+        super().__init__()
+        self.artifact = artifact
+
+
     def run(self):
         import json
 
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        data = self.controller.sevenf_ceremony_data
         signed_json = devfund_config.build_root_sig_json(
-            data["public_key"], data["signature"],
+            self.artifact.public_key, self.artifact.signature,
         )
         json_bytes = json.dumps(signed_json).encode("utf-8")
 
