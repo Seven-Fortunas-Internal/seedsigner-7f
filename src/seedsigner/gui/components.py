@@ -371,11 +371,31 @@ class TextArea(BaseComponent):
     horizontal_scroll_begin_hold_secs: float = 2.0
     horizontal_scroll_end_hold_secs: float = 1.0
     height_ignores_below_baseline: bool = False  # If True, characters that render below the baseline (e.g. "pqgy") will not affect the final height calculation
+    # Vertical counterpart to the horizontal scrolling above -- added
+    # 2026-10-04 (multi-chain-evm-address-screen-truncates /
+    # multi-chain-evm-review-warning-detail-truncates): opt-in only (default
+    # False), so every existing caller that doesn't pass this is completely
+    # unaffected. When enabled with an explicit `height` smaller than the
+    # text's natural total height, auto-scrolls vertically through the full
+    # content instead of silently overflowing past `height` (the previous
+    # behavior for that case -- see the "Let it render past the bottom edge"
+    # warning below, still the behavior when this flag is off). Mirrors
+    # is_horizontal_scrolling_enabled's own mechanics exactly, just the other
+    # axis: continuous auto-scroll with a pause at each end, not something
+    # the operator has to drive with button presses.
+    is_vertical_scrolling_enabled: bool = False
+    vertical_scroll_speed: int = 40  # px per sec
+    vertical_scroll_begin_hold_secs: float = 2.0
+    vertical_scroll_end_hold_secs: float = 1.0
 
 
     def __post_init__(self):
         if self.is_horizontal_scrolling_enabled and self.auto_line_break:
             raise Exception("TextArea: Cannot have auto_line_break and horizontal scrolling enabled at the same time")
+        if self.is_vertical_scrolling_enabled and self.is_horizontal_scrolling_enabled:
+            raise Exception("TextArea: Cannot have vertical and horizontal scrolling enabled at the same time")
+        if self.is_vertical_scrolling_enabled and self.height is None:
+            raise Exception("TextArea: is_vertical_scrolling_enabled requires an explicit height (the visible viewport)")
 
         if not self.font_name:
             self.font_name = GUIConstants.get_body_font_name()
@@ -461,11 +481,22 @@ class TextArea(BaseComponent):
 
         else:
             if total_text_height > self.height:
-                # Let it render past the bottom edge. Will be up to the dev or translator
-                # to review the screenshot and revise the text as needed.
-                logger.warning(f"Text cannot fit in target rect with this font/size\n\ttotal_text_height: {total_text_height} | self.height: {self.height}")
+                if self.is_vertical_scrolling_enabled:
+                    # Keep self.height as the fixed viewport; the scroll thread
+                    # set up below handles revealing the rest of the content.
+                    # text_offset_y stays 0 -- no centering, the viewport always
+                    # starts showing the top of the content.
+                    pass
+                else:
+                    # Let it render past the bottom edge. Will be up to the dev or translator
+                    # to review the screenshot and revise the text as needed.
+                    logger.warning(f"Text cannot fit in target rect with this font/size\n\ttotal_text_height: {total_text_height} | self.height: {self.height}")
 
             else:
+                # Content fits within the given height after all -- no scrolling needed,
+                # even if the caller asked for it.
+                self.is_vertical_scrolling_enabled = False
+
                 # Vertically center the text's starting point
                 self.text_offset_y = int((self.height - total_text_height)/2)
                 self.text_y += self.text_offset_y  # (relative to text rendering baseline)
@@ -569,6 +600,18 @@ class TextArea(BaseComponent):
                 horizontal_scroll_speed=self.horizontal_scroll_speed,
                 begin_hold_secs=self.horizontal_scroll_begin_hold_secs,
                 end_hold_secs=self.horizontal_scroll_end_hold_secs
+            )
+
+        self.vertical_text_scroll_thread: TextArea.VerticalTextScrollThread = None
+        if self.is_vertical_scrolling_enabled:
+            self.vertical_text_scroll_thread = TextArea.VerticalTextScrollThread(
+                rendered_text_img=self.rendered_text_img,
+                screen_x=self.screen_x,
+                screen_y=self.screen_y,
+                visible_height=self.height,
+                vertical_scroll_speed=self.vertical_scroll_speed,
+                begin_hold_secs=self.vertical_scroll_begin_hold_secs,
+                end_hold_secs=self.vertical_scroll_end_hold_secs
             )
 
 
@@ -705,7 +748,138 @@ class TextArea(BaseComponent):
                 # Free up the processor for a bit each loop
                 time.sleep(0.02)
 
- 
+
+    class VerticalTextScrollThread(BaseThread):
+        """
+        Vertical counterpart to HorizontalTextScrollThread -- same mechanics (continuous
+        auto-scroll, pause at each end, reverse direction), just the other axis: crops a
+        `visible_height`-tall window out of a taller pre-rendered image and pastes it at
+        a FIXED on-screen position (screen_x/screen_y never move; only which slice of the
+        source image is currently visible changes), instead of panning a wide image
+        through a fixed-width lane.
+        """
+        def __init__(self, rendered_text_img: Image, screen_x: int, screen_y: int, visible_height: int, vertical_scroll_speed: int, begin_hold_secs: float, end_hold_secs: float):
+            super().__init__()
+            self.rendered_text_img = rendered_text_img
+            self.screen_x = screen_x
+            self.screen_y = screen_y
+            self.visible_height = visible_height
+            self.vertical_scroll_speed = vertical_scroll_speed
+            self.begin_hold_secs = begin_hold_secs
+            self.end_hold_secs = end_hold_secs
+
+            self.scroll_y = 0
+            self.scrolling_active = True
+            self.vertical_scroll_position = 0
+            self.scroll_increment_sign = 1  # flip to negative to scroll back up
+
+            self.renderer = Renderer.get_instance()
+
+
+        def stop_scrolling(self):
+            self.scrolling_active = False
+
+
+        def start_scrolling(self):
+            # Reset scroll position to the top
+            self.vertical_scroll_position = 0
+            self.scroll_increment_sign = 1
+            self.scrolling_active = True
+
+
+        def run(self):
+            max_scroll = self.rendered_text_img.height - self.visible_height
+            last_render_time = None
+
+            # The scrolling pauses at the top and bottom of the text. These vars track
+            # when we started holding and how long we should hold for.
+            hold_started_at = None
+            cur_hold_duration = None
+
+            while self.keep_running:
+                if not self.scrolling_active:
+                    time.sleep(0.1)
+                    continue
+
+                if cur_hold_duration is not None:
+                    # We're currently holding; see if we've held long enough
+                    hold_time_elapsed = time.time() - hold_started_at
+                    if hold_time_elapsed < cur_hold_duration:
+                        # Still have to hold longer; skip scrolling logic
+                        time.sleep(0.1)
+                        continue
+                    else:
+                        # We've held long enough; reset the vars and resume scrolling
+                        hold_started_at = None
+                        cur_hold_duration = None
+
+                else:
+                    # We're not holding, but if we've reached either end, we need to start
+                    # holding.
+                    if self.vertical_scroll_position == 0:
+                        # Pause at the top...
+                        hold_started_at = time.time()
+                        cur_hold_duration = self.begin_hold_secs
+
+                        # Next scroll direction will be down
+                        self.scroll_increment_sign = 1
+
+                        # Don't count those pause seconds
+                        last_render_time = None
+                        continue
+
+                    elif self.vertical_scroll_position == max_scroll:
+                        # ...and a slight pause at the bottom
+                        hold_started_at = time.time()
+                        cur_hold_duration = self.end_hold_secs
+
+                        # Don't count those pause seconds
+                        last_render_time = None
+
+                        # Scroll will be back up
+                        self.scroll_increment_sign = -1
+                        continue
+
+                next_render_time = time.time()
+
+                if not last_render_time:
+                    # First frame when pulling off either end will move 1 pixel; have to
+                    # "get off zero" for the real increment calc logic to kick in.
+                    scroll_position_increment = 1 * self.scroll_increment_sign
+                else:
+                    # Calculate how far to scroll based on time elapsed since last render
+                    scroll_position_increment = int(self.vertical_scroll_speed * (next_render_time - last_render_time) * self.scroll_increment_sign)
+
+                # Only render an update if we're going to move at least 1px
+                if abs(scroll_position_increment) > 0:
+                    # max: Don't over-scroll when returning to the top (0)
+                    # min: Don't over-scroll when revealing the bottom (max_scroll)
+                    self.vertical_scroll_position = max(
+                        0,
+                        min(self.vertical_scroll_position + scroll_position_increment, max_scroll)
+                    )
+
+                    # Render the scroll update
+                    with self.renderer.lock:
+                        if not self.scrolling_active:
+                            # We were stopped while waiting for the lock
+                            continue
+
+                        # The pre-rendered text img slides within a cropping window
+                        img = self.rendered_text_img.crop((0, self.vertical_scroll_position, self.rendered_text_img.width, self.vertical_scroll_position + self.visible_height))
+                        self.renderer.canvas.paste(img, (self.screen_x, self.screen_y - self.scroll_y))
+                        self.renderer.show_image()
+
+                    last_render_time = next_render_time
+
+                else:
+                    # Wait to accumulate more time so we can scroll at least 1px
+                    pass
+
+                # Free up the processor for a bit each loop
+                time.sleep(0.02)
+
+
     def render(self):
         """
             Even if we need to animate for scrolling, all instances should explicitly render
@@ -722,8 +896,18 @@ class TextArea(BaseComponent):
 
             # Must also account for the right edge running off our visible width
             text_img = text_img.crop((0, 0, self.visible_width, text_img.height))
+            self.canvas.paste(text_img, (text_x, self.screen_y + self.text_y - self.text_height_above_baseline - self.scroll_y))
 
-        self.canvas.paste(text_img, (text_x, self.screen_y + self.text_y - self.text_height_above_baseline - self.scroll_y))
+        elif self.is_vertical_scrolling_enabled:
+            # Initial static frame: top of the content, matching the scroll thread's own
+            # starting position (vertical_scroll_position == 0). Pasted at a fixed
+            # screen_y, not offset by text_y/text_height_above_baseline -- those are
+            # single-line baseline concerns that don't apply to a multi-line viewport.
+            text_img = text_img.crop((0, 0, text_img.width, self.height))
+            self.canvas.paste(text_img, (self.screen_x, self.screen_y - self.scroll_y))
+
+        else:
+            self.canvas.paste(text_img, (text_x, self.screen_y + self.text_y - self.text_height_above_baseline - self.scroll_y))
 
 
     def set_scroll_y(self, scroll_y: int):
@@ -731,6 +915,8 @@ class TextArea(BaseComponent):
         self.scroll_y = scroll_y
         if self.horizontal_text_scroll_thread:
             self.horizontal_text_scroll_thread.scroll_y = scroll_y
+        if self.vertical_text_scroll_thread:
+            self.vertical_text_scroll_thread.scroll_y = scroll_y
 
 
 
@@ -808,6 +994,13 @@ class IconTextLine(BaseComponent):
     auto_line_break: bool = False
     screen_x: int = 0
     screen_y: int = 0
+    # Passed straight through to the value TextArea -- see TextArea's own
+    # is_vertical_scrolling_enabled docstring (2026-10-04,
+    # multi-chain-evm-review-warning-detail-truncates). Opt-in only.
+    is_vertical_scrolling_enabled: bool = False
+    vertical_scroll_speed: int = 40
+    vertical_scroll_begin_hold_secs: float = 2.0
+    vertical_scroll_end_hold_secs: float = 1.0
 
     def __post_init__(self):
         if not self.font_name:
@@ -869,6 +1062,10 @@ class IconTextLine(BaseComponent):
             auto_line_break=self.auto_line_break,
             screen_x=text_screen_x,
             screen_y=value_textarea_screen_y,
+            is_vertical_scrolling_enabled=self.is_vertical_scrolling_enabled,
+            vertical_scroll_speed=self.vertical_scroll_speed,
+            vertical_scroll_begin_hold_secs=self.vertical_scroll_begin_hold_secs,
+            vertical_scroll_end_hold_secs=self.vertical_scroll_end_hold_secs,
         )
 
         if self.label_text:
@@ -895,6 +1092,17 @@ class IconTextLine(BaseComponent):
             self.value_textarea.screen_x = self.icon.screen_x + self.icon.width + self.icon_horizontal_spacer
 
         self.width = self.canvas_width
+
+        if self.value_textarea.vertical_text_scroll_thread:
+            # Propagate up so BaseScreen.get_threads() (one level deep into
+            # self.components) picks it up automatically -- mirrors TopNav's
+            # own `self.threads.append(self.title.scroll_thread)` pattern.
+            self.threads.append(self.value_textarea.vertical_text_scroll_thread)
+
+
+    @property
+    def needs_vertical_scroll(self) -> bool:
+        return self.value_textarea.vertical_text_scroll_thread is not None
 
 
     def render(self):
@@ -935,6 +1143,17 @@ class FormattedAddress(BaseComponent):
     font_size: int = 24
     font_accent_color: str = GUIConstants.ACCENT_COLOR
     font_base_color: str = GUIConstants.LABEL_FONT_COLOR
+    # Opt-in only (default None = current behavior, draws directly onto the
+    # shared canvas via image_draw.text(), exactly as before). Added
+    # 2026-10-04 (multi-chain-evm-address-screen-truncates): when given and
+    # the address needs more lines than fit in visible_height, auto-scrolls
+    # vertically through the full address instead of silently overflowing
+    # past the given viewport -- see TextArea.VerticalTextScrollThread
+    # (reused directly here, not duplicated) for the scroll mechanics.
+    visible_height: int = None
+    vertical_scroll_speed: int = 40
+    vertical_scroll_begin_hold_secs: float = 2.0
+    vertical_scroll_end_hold_secs: float = 1.0
 
     def __post_init__(self):
         super().__post_init__()
@@ -1070,11 +1289,54 @@ class FormattedAddress(BaseComponent):
 
                 remaining_display_str = remaining_display_str[max_chars_per_line:]
                 cur_y += char_height + GUIConstants.BODY_LINE_SPACING
-        
+
         self.height = cur_y
-    
+
+        self.vertical_text_scroll_thread: TextArea.VerticalTextScrollThread = None
+        if self.visible_height is not None and self.height > self.visible_height:
+            # Render onto an off-canvas image tall enough for the FULL address
+            # (text_params' y-coords are already relative to 0, not self.screen_y --
+            # see the direct-draw branch in render() below for the normal case,
+            # which adds self.screen_y itself at draw time instead). Opaque
+            # background (matching TextArea's own convention, GUIConstants.
+            # BACKGROUND_COLOR) rather than transparent, so
+            # VerticalTextScrollThread's plain paste() (no mask, same as its
+            # other caller in TextArea) fully covers whatever was there
+            # before on every scroll frame.
+            full_img = Image.new("RGBA", (self.width, self.height), GUIConstants.BACKGROUND_COLOR)
+            full_draw = ImageDraw.Draw(full_img)
+            for p in self.text_params:
+                full_draw.text((p[0][0], p[0][1]), text=p[1], fill=p[2], font=p[3])
+            self.rendered_text_img = full_img
+
+            self.vertical_text_scroll_thread = TextArea.VerticalTextScrollThread(
+                rendered_text_img=self.rendered_text_img,
+                screen_x=self.screen_x,
+                screen_y=self.screen_y,
+                visible_height=self.visible_height,
+                vertical_scroll_speed=self.vertical_scroll_speed,
+                begin_hold_secs=self.vertical_scroll_begin_hold_secs,
+                end_hold_secs=self.vertical_scroll_end_hold_secs,
+            )
+            # Propagate up so BaseScreen.get_threads() (one level deep into
+            # self.components) picks it up automatically -- same convention as
+            # IconTextLine's own pass-through, TopNav's self.title.scroll_thread.
+            self.threads.append(self.vertical_text_scroll_thread)
+
+
+    @property
+    def needs_vertical_scroll(self) -> bool:
+        return self.vertical_text_scroll_thread is not None
+
 
     def render(self):
+        if self.vertical_text_scroll_thread:
+            # Initial static frame: top of the address, matching the scroll thread's
+            # own starting position.
+            initial_crop = self.rendered_text_img.crop((0, 0, self.rendered_text_img.width, self.visible_height))
+            self.canvas.paste(initial_crop, (self.screen_x, self.screen_y))
+            return
+
         for p in self.text_params:
             self.image_draw.text((p[0][0], p[0][1] + self.screen_y), text=p[1], fill=p[2], font=p[3])
 

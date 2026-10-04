@@ -84,6 +84,20 @@ class EvmAddressScreen(ButtonListScreen):
         max_lines at all (component default: None, auto-sized) rather than bumping it
         to 4 -- a hardcoded line count that happens to work for one address length is
         the same class of bug, just with the truncation point moved.
+
+        FIXED 2026-10-04 (multi-chain-evm-address-screen-truncates): that first fix
+        stopped the component's OWN max_lines truncation, but on real 240px hardware
+        the address still only rendered 2 of its 4 needed lines -- FormattedAddress's
+        line-count math has no concept of this screen's actual limited vertical space
+        (title + derivation path + address + two buttons all competing for 240px), so
+        it picked a line count that overflowed off-screen instead of one that never
+        gets cut off cleanly. Jorge's explicit preference, matching his own wording:
+        "make sure to take note to fix the seedsigner so it shows the full address -
+        perhaps a scrolling vertically and/or horizontally. I'd prefer scrolling over
+        smaller font." -- so this passes the real available height (computed from
+        where the button row actually starts, not guessed) as `visible_height`, and
+        FormattedAddress auto-scrolls through the full address when it doesn't fit,
+        rather than shrinking the font or re-truncating.
     """
     derivation_path: str = None
     address: str = None
@@ -117,11 +131,89 @@ class EvmAddressScreen(ButtonListScreen):
         )
         self.components.append(derivation_path_display)
 
+        address_display_y = derivation_path_display.screen_y + derivation_path_display.height + 2*GUIConstants.COMPONENT_PADDING
+        # self.buttons[0].screen_y is ButtonListScreen's own already-computed start of
+        # the button row (is_bottom_list=True anchors it to the bottom) -- the real,
+        # measured boundary of available space, not a guessed constant.
+        available_height = self.buttons[0].screen_y - GUIConstants.COMPONENT_PADDING - address_display_y
+
         address_display = FormattedAddress(
             address=self.address,
-            screen_y=derivation_path_display.screen_y + derivation_path_display.height + 2*GUIConstants.COMPONENT_PADDING,
+            screen_y=address_display_y,
+            visible_height=available_height,
         )
+        # No explicit thread wiring needed: FormattedAddress propagates its own
+        # scroll thread into self.threads, which BaseScreen.get_threads() picks up
+        # automatically from every component in self.components.
         self.components.append(address_display)
+
+
+
+@dataclass
+class EvmAddressVerifyPromptScreen(ButtonListScreen):
+    """ Shown after an address or Connect QR export, right before returning Home --
+        closes multi-chain-ux-verify-after-address-export (filed 2026-09-26, Jorge,
+        reviewing docs/multi-chain/user-journeys.md #2/#3): "On exporting address via
+        QR - I think it needs a verification step after successful QR scan."
+
+        Unlike the sign flow (a full device-scans-request / wallet-scans-signature
+        round trip, verified by the review-field screens along the way), a plain
+        address or Connect QR export has no round-trip at all -- the device has no
+        way to know whether or when a remote wallet actually scanned it. This forces
+        a deliberate final check (re-displaying the address, requiring an explicit
+        acknowledgment button) rather than relying on memory or informal habit before
+        the operator backs out.
+
+        `address` is None for the Connect QR case: that export is an account-level
+        extended public key (crypto-hdkey), not a single address, so there is no one
+        address to re-display -- the prompt text is generic instead. Applies to
+        Export Address QR and Export Connect QR only (per the story's own scope);
+        does NOT apply to the sign flow, which already has real round-trip
+        verification, or to any Bitcoin address-export flow (that would be a bigger,
+        separate decision -- Bitcoin's own address-export UX is stock SeedSigner
+        behavior, not something this EVM-scoped story should change unasked). """
+    address: str = None
+
+    def __post_init__(self):
+        # Short deliberately -- "Verify Before Continuing" clipped at the right edge
+        # of TopNav's title area on real rendering (confirmed via a screenshot).
+        self.title = _("Please Confirm")
+        self.is_bottom_list = True
+        self.is_button_text_centered = True
+        # Mirrors SevenFUnsupportedArtefactView's own "single acknowledgment, no
+        # meaningful alternative path" convention -- the export already happened;
+        # "back" would only return to a QR screen that's no longer useful to re-show.
+        self.show_back_button = False
+        self.button_data = [ButtonOption("I've Verified This")]
+        super().__post_init__()
+
+        if self.address:
+            instruction_text = _("Confirm this matches what your wallet shows:")
+        else:
+            # Connect QR is account-level (crypto-hdkey), not tied to one network --
+            # UrEvmConnectQrEncoder itself takes no network param -- so no network
+            # name to reference here.
+            instruction_text = _("Confirm your wallet successfully imported this account before continuing.")
+
+        instruction_display = IconTextLine(
+            icon_name=SeedSignerIconConstants.WARNING,
+            icon_color=GUIConstants.WARNING_COLOR,
+            value_text=instruction_text,
+            is_text_centered=True,
+            auto_line_break=True,
+            screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,
+        )
+        self.components.append(instruction_display)
+
+        if self.address:
+            address_display_y = instruction_display.screen_y + instruction_display.height + GUIConstants.COMPONENT_PADDING
+            available_height = self.buttons[0].screen_y - GUIConstants.COMPONENT_PADDING - address_display_y
+            address_display = FormattedAddress(
+                address=self.address,
+                screen_y=address_display_y,
+                visible_height=available_height,
+            )
+            self.components.append(address_display)
 
 
 
@@ -171,13 +263,31 @@ class EvmReviewFieldScreen(ButtonListScreen):
         self.components.append(value_display)
 
         if self.is_warning and self.warning_detail:
+            # FIXED 2026-10-04 (multi-chain-evm-review-warning-detail-truncates):
+            # same root cause as EvmAddressScreen's address truncation --
+            # warning_detail used to have no height constraint at all, so a long
+            # anti-scam warning silently ran off the bottom of the screen instead
+            # of being fully readable. Jorge's own instruction, matching his
+            # address-screen preference: "I suggest to have scroll down to show
+            # the rest of the message." This is the exact security-relevant copy
+            # the no-blind-signing design depends on the operator reading in
+            # full, so the fix matters more here than on the address screen.
+            detail_display_y = value_display.screen_y + value_display.height + GUIConstants.COMPONENT_PADDING
+            available_height = self.buttons[0].screen_y - GUIConstants.COMPONENT_PADDING - detail_display_y
+
             detail_display = IconTextLine(
                 icon_color=GUIConstants.DIRE_WARNING_COLOR,
                 value_text=self.warning_detail,
                 is_text_centered=True,
                 auto_line_break=True,
-                screen_y=value_display.screen_y + value_display.height + GUIConstants.COMPONENT_PADDING,
+                screen_y=detail_display_y,
+                height=available_height,
+                is_vertical_scrolling_enabled=True,
             )
+            # No explicit thread wiring needed here: IconTextLine already propagates
+            # its value_textarea's scroll thread into its own self.threads (mirrors
+            # TopNav's self.title.scroll_thread pattern), and BaseScreen.get_threads()
+            # picks up every component's threads automatically.
             self.components.append(detail_display)
 
 

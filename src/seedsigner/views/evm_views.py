@@ -219,10 +219,10 @@ class EvmAddressQRView(View):
             qr_encoder=qr_encoder,
         )
 
-        # Exiting/Canceling the QR display screen always returns Home, same
-        # convention used throughout the codebase (ToolsAddressExplorerAddressView,
-        # SeedSignMessageSignedMessageQRView, the 7F work's SevenFAddressQRView).
-        return Destination(MainMenuView, skip_current_view=True)
+        # multi-chain-ux-verify-after-address-export (2026-10-04): unlike the sign
+        # flow, this export has no round-trip at all -- route through an explicit
+        # verification prompt instead of straight back to Home.
+        return Destination(EvmAddressVerifyPromptView, view_args=dict(address=self.address), skip_current_view=True)
 
 
 
@@ -254,8 +254,30 @@ class EvmConnectQRView(View):
             qr_encoder=qr_encoder,
         )
 
-        # Exiting/Canceling the QR display screen always returns Home, same
-        # convention as EvmAddressQRView/EvmSignedUrQRView above.
+        # multi-chain-ux-verify-after-address-export (2026-10-04): same reasoning as
+        # EvmAddressQRView above -- no address to re-display here (Connect QR is
+        # account-level, not tied to one address), so no `address` kwarg.
+        return Destination(EvmAddressVerifyPromptView, skip_current_view=True)
+
+
+
+class EvmAddressVerifyPromptView(View):
+    """ See EvmAddressVerifyPromptScreen's own docstring (gui/screens/evm_screens.py)
+        for the full rationale. `address` is None for the Connect QR case. """
+    def __init__(self, address: str = None):
+        super().__init__()
+        self.address = address
+
+
+    def run(self):
+        from seedsigner.gui.screens.evm_screens import EvmAddressVerifyPromptScreen
+        self.run_screen(
+            EvmAddressVerifyPromptScreen,
+            address=self.address,
+        )
+
+        # Single button, no meaningful back-path (see the Screen's own docstring) --
+        # every exit from this screen goes Home.
         return Destination(MainMenuView, skip_current_view=True)
 
 

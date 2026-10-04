@@ -64,11 +64,13 @@ class TestEvmFlows(FlowTest):
     def test_evm_address_flow(self):
         """
             SeedOptionsView -> EvmNetworkView -> EvmSelectAddressIndexView ->
-            EvmAddressView -> EvmAddressQRView -> MainMenuView. Non-zero index (1)
-            deliberately, to prove the picker's value actually flows through to
-            derivation, not just that the screen appears. EvmOptionsView/
-            MultiChainOptionsView are retired -- SeedOptionsView routes directly
-            (see docs/multi-chain/boot-chain-selection-plan.md).
+            EvmAddressView -> EvmAddressQRView -> EvmAddressVerifyPromptView ->
+            MainMenuView. Non-zero index (1) deliberately, to prove the picker's
+            value actually flows through to derivation, not just that the screen
+            appears. EvmOptionsView/MultiChainOptionsView are retired --
+            SeedOptionsView routes directly (see
+            docs/multi-chain/boot-chain-selection-plan.md). The verify-prompt step
+            was added 2026-10-04 (multi-chain-ux-verify-after-address-export).
         """
         self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
             FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.EVM_ADDRESS),
@@ -76,6 +78,7 @@ class TestEvmFlows(FlowTest):
             FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="1"),
             FlowStep(evm_views.EvmAddressView, screen_return_value=0),  # "Export Address QR"
             FlowStep(evm_views.EvmAddressQRView, screen_return_value=0),
+            FlowStep(evm_views.EvmAddressVerifyPromptView, screen_return_value=0),  # "I've Verified This"
             FlowStep(MainMenuView),
         ])
 
@@ -161,6 +164,7 @@ class TestEvmFlows(FlowTest):
             FlowStep(evm_views.EvmSelectAddressIndexView, screen_return_value="0"),
             FlowStep(evm_views.EvmAddressView, screen_return_value=1),  # "Export Connect QR"
             FlowStep(evm_views.EvmConnectQRView, screen_return_value=0),
+            FlowStep(evm_views.EvmAddressVerifyPromptView, screen_return_value=0),  # "I've Verified This"
             FlowStep(MainMenuView),
         ])
 
@@ -190,6 +194,33 @@ class TestEvmFlows(FlowTest):
         # keeping the raw seed alive as a live attribute for the whole QR-display
         # session (see encode_qr.py's UrEvmConnectQrEncoder.__post_init__).
         assert encoder.seed_bytes is None
+
+
+    def test_evm_address_verify_prompt_view_passes_the_real_address_through(self):
+        """ multi-chain-ux-verify-after-address-export: the Export Address QR path
+            must re-display the REAL address on the verify prompt, not a placeholder
+            or nothing. """
+        address = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+        view = evm_views.EvmAddressVerifyPromptView(address=address)
+        with patch.object(view, "run_screen", return_value=0) as mock_run_screen:
+            destination = view.run()
+
+        assert mock_run_screen.call_args.kwargs["address"] == address
+        assert destination.View_cls == MainMenuView
+        assert destination.skip_current_view is True
+
+
+    def test_evm_address_verify_prompt_view_has_no_address_for_connect_qr(self):
+        """ The Connect QR path has no single address to re-display (it's an
+            account-level crypto-hdkey) -- confirms the prompt still works with
+            address=None, matching EvmConnectQRView's own Destination call (no
+            `address` kwarg at all, so the View's own default applies). """
+        view = evm_views.EvmAddressVerifyPromptView()
+        with patch.object(view, "run_screen", return_value=0) as mock_run_screen:
+            destination = view.run()
+
+        assert mock_run_screen.call_args.kwargs["address"] is None
+        assert destination.View_cls == MainMenuView
 
 
     def test_evm_address_is_deterministic_per_derivation_path(self):
