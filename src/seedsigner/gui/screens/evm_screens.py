@@ -321,8 +321,18 @@ class EvmConfirmSignScreen(ButtonListScreen):
         )
         self.components.append(derivation_path_display)
 
+        # FIXED 2026-10-04 (adversarial review of multi-chain-evm-screens-layout-
+        # untested): this screen had no visible_height/auto-scroll fallback at all,
+        # unlike EvmAddressScreen and EvmAddressVerifyPromptScreen -- it only avoided
+        # the same truncation bug those two were fixed for by a ~12px margin on
+        # today's font/content, not by design. Same available-height computation as
+        # those two screens.
+        address_display_y = derivation_path_display.screen_y + derivation_path_display.height + 2*GUIConstants.COMPONENT_PADDING
+        available_height = self.buttons[0].screen_y - GUIConstants.COMPONENT_PADDING - address_display_y
+
         address_display = FormattedAddress(
             address=self.address,
-            screen_y=derivation_path_display.screen_y + derivation_path_display.height + 2*GUIConstants.COMPONENT_PADDING,
+            screen_y=address_display_y,
+            visible_height=available_height,
         )
         self.components.append(address_display)

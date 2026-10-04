@@ -83,6 +83,19 @@ jobs:
             --cov-report html:./artifacts/cov_html \
             -vv
           cp -r ./seedsigner-screenshots ./artifacts/
+      - name: EVM screens layout regression check
+        # Real-rendering layout assertions for gui/screens/evm_screens.py (see that
+        # file's own docstring) -- deliberately a separate invocation, same reason
+        # as the screenshot generator above: it needs the real Renderer, not the
+        # MagicMock the main "Test with pytest" step's suite installs over
+        # seedsigner.gui.renderer.
+        run: |
+          python -m pytest tests/evm_screens_layout_regression_check.py \
+            --color=yes \
+            --cov=seedsigner \
+            --cov-append \
+            --cov-branch \
+            -vv
       - name: Coverage report
         # Coverage was computed and printed every run but never enforced --
         # floor set just below the real current total (72.07% as of

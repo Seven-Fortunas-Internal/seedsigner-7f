@@ -60,6 +60,19 @@ it is actually implemented to be run by `pytest`.
 
 see: [Screenshot generator README](screenshot_generator/README.md)
 
+## EVM screens layout regression check
+`evm_screens_layout_regression_check.py` instantiates and renders every
+`gui/screens/evm_screens.py` screen with the project's own `ScreenshotRenderer`
+(real, non-mocked PIL rendering, same utility the screenshot generator uses), then
+asserts on layout properties (scroll-engagement flags, computed available-height,
+component structure). Its filename deliberately does not match `pytest`'s default
+`test_*.py` discovery pattern, same reason as the screenshot generator above: it
+needs the real renderer, not the `MagicMock` the rest of the suite installs over
+`seedsigner.gui.renderer`, so it must be run on its own:
+```bash
+pytest tests/evm_screens_layout_regression_check.py
+```
+
 
 ## Generate coverage manually
 Run tests and generate test coverage
