@@ -19,6 +19,7 @@ import ctypes
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp
 
 
 class DevFundConfigError(Exception):
@@ -156,17 +157,6 @@ def parse_canonical_bytes(data: bytes, max_payload_len: int = 4096) -> DevFundCo
         effective_block=effective_block_out.value,
         timestamp=timestamp_out.value,
     )
-
-
-def _format_timestamp(timestamp: int) -> str:
-    """ Same "refuse rather than guess" doctrine as genesis_config.py's
-        own _format_timestamp() -- see that function's docstring. """
-    from datetime import datetime, timezone
-    try:
-        utc_str = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    except (OSError, OverflowError, ValueError):
-        return f"{timestamp} (not a valid calendar date)"
-    return f"{timestamp}\n({utc_str})"
 
 
 def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:

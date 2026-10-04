@@ -93,7 +93,7 @@ from dataclasses import dataclass
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
-from seedsigner.models.sevenf.genesis_config import _format_timestamp, root_id
+from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, root_id
 
 # Confirmed against 7fchain's crates/sf-ca/src/x509_ceremony.rs.
 CERT_REQUEST_VERSION = 1
