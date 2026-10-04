@@ -90,7 +90,7 @@ import json
 import secrets
 from dataclasses import dataclass
 
-from seedsigner.chains.base import ReviewField
+from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
 from seedsigner.models.sevenf.genesis_config import _format_timestamp, root_id
@@ -443,7 +443,21 @@ def deputy_cross_cert_v2_review_fields(
         must be just as catchable as a wrong fingerprint -- the Deputy
         CSR's proven-possession fingerprint, the operator-confirmed
         chain_kind, and the new certificate's own granted validity window
-        and serial. """
+        and serial.
+
+        "Deputy: Valid until" (added 2026-10-03,
+        7f-review-deputy-cert-relative-validity-display, found by the
+        full-project adversarial review's UI/UX dimension): every other
+        validity window on this screen set shows an absolute date;
+        "Valid for: N days" alone made the operator mentally compute the
+        actual expiry under ceremony pressure. Computed with the SAME
+        clamp cert_request.rs's own deputy_tbs_der_from_root_cert() applies
+        when it builds the real TBS body this device signs
+        (`min(now + days*DAY, root.not_after)`) -- a Deputy's requested
+        window can never outlive its issuing Root's own certificate, so the
+        displayed date must reflect that clamp, not a naive day-count
+        projection that could overstate what's actually being signed. """
+    not_after = min(now + days * 86_400, root_cert.not_after)
     return [
         ReviewField(label="Issuing Root: Subject key id", value=root_id(root_cert.subject_vk.hex())),
         ReviewField(label="Issuing Root: Valid from", value=_format_timestamp(root_cert.not_before)),
@@ -452,6 +466,7 @@ def deputy_cross_cert_v2_review_fields(
         ReviewField(label="Deputy: Subject key id", value=root_id(csr.subject_vk.hex())),
         ReviewField(label="Deputy: Valid from", value=_format_timestamp(now)),
         ReviewField(label="Deputy: Valid for", value=f"{days} days"),
+        ReviewField(label="Deputy: Valid until", value=_format_timestamp(not_after)),
         ReviewField(label="Deputy: Serial", value=serial.hex()),
     ]
 
@@ -481,7 +496,7 @@ def _labeled_values(req: CertRequestFields) -> list[tuple[str, str]]:
 
 def review_fields(req: CertRequestFields) -> list[ReviewField]:
     """ The no-blind-signing field list for the on-device review screen.
-        Reuses chains.base.ReviewField, same as genesis_config.review_fields()
+        Reuses models.review.ReviewField, same as genesis_config.review_fields()
         and the EVM chain plugin's review screens. """
     return [ReviewField(label=label, value=value) for label, value in _labeled_values(req)]
 

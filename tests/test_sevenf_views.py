@@ -817,9 +817,9 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                         before_run=_load_cert_request_into_decoder(DEPUTY_CSR_DER),
                         screen_return_value=0,
                     ),
-                    # 8 review pages (deputy_cross_cert_v2_review_fields): 3 "Issuing
-                    # Root: ..." fields, "Chain", then 4 "Deputy: ..." fields.
-                    *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(8)],
+                    # 9 review pages (deputy_cross_cert_v2_review_fields): 3 "Issuing
+                    # Root: ..." fields, "Chain", then 5 "Deputy: ..." fields.
+                    *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(9)],
                     FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
                     FlowStep(
                         sevenf_views.SevenFRootCertSignedView,
@@ -879,7 +879,8 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         fields = destination.view_args["review_fields"]
         assert [f.label for f in fields] == [
             "Issuing Root: Subject key id", "Issuing Root: Valid from", "Issuing Root: Valid until",
-            "Chain", "Deputy: Subject key id", "Deputy: Valid from", "Deputy: Valid for", "Deputy: Serial",
+            "Chain", "Deputy: Subject key id", "Deputy: Valid from", "Deputy: Valid for",
+            "Deputy: Valid until", "Deputy: Serial",
         ]
         assert fields[3].value == "testnet"
 

@@ -733,13 +733,33 @@ def test_deputy_cross_cert_v2_review_fields_includes_root_and_deputy_context():
     labels = [f.label for f in fields]
     assert labels == [
         "Issuing Root: Subject key id", "Issuing Root: Valid from", "Issuing Root: Valid until",
-        "Chain", "Deputy: Subject key id", "Deputy: Valid from", "Deputy: Valid for", "Deputy: Serial",
+        "Chain", "Deputy: Subject key id", "Deputy: Valid from", "Deputy: Valid for",
+        "Deputy: Valid until", "Deputy: Serial",
     ]
     by_label = {f.label: f.value for f in fields}
     assert by_label["Chain"] == "testnet"
     assert by_label["Deputy: Valid for"] == f"{DEPUTY_DAYS} days"
+    assert str(ROOT_CERT_NOT_BEFORE + DEPUTY_DAYS * 86_400) in by_label["Deputy: Valid until"]
     assert by_label["Deputy: Serial"] == serial.hex()
     assert str(ROOT_CERT_NOT_BEFORE) in by_label["Issuing Root: Valid from"]
+
+
+def test_deputy_cross_cert_v2_review_fields_valid_until_is_clamped_to_the_roots_own_window():
+    """ Regression test for the clamp the display must mirror
+        (cert_request.rs's own deputy_tbs_der_from_root_cert() clamps
+        not_after to the issuing Root's own window) -- a naive
+        now + days*DAY projection would overstate the real signed
+        validity whenever the requested Deputy window outlives the Root's
+        remaining one. """
+    root_cert = parse_root_certificate_der(ROOT_CERT_DER)
+    csr = verify_and_parse_csr_der(DEPUTY_CSR_DER)
+    serial = bytes([0x77]) * 16
+    # A deputy window of ROOT_DAYS*10 from the Root's own not_before
+    # unclamped would run far past the Root's own ROOT_CERT_NOT_AFTER.
+    fields = deputy_cross_cert_v2_review_fields(root_cert, csr, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, ROOT_DAYS * 10, serial)
+    by_label = {f.label: f.value for f in fields}
+    assert str(ROOT_CERT_NOT_AFTER) in by_label["Deputy: Valid until"]
+    assert by_label["Deputy: Valid until"] == by_label["Issuing Root: Valid until"]
 
 
 def test_deputy_cross_cert_v2_review_fields_key_ids_use_the_root_id_convention():

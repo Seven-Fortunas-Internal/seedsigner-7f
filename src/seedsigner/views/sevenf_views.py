@@ -28,7 +28,7 @@
 from gettext import gettext as _
 
 from seedsigner.helpers.l10n import mark_for_translation as _mft
-from seedsigner.chains.base import ReviewField
+from seedsigner.models.review import ReviewField
 from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed

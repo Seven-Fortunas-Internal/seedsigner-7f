@@ -37,7 +37,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-from seedsigner.chains.base import ReviewField
+from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind
 
@@ -377,9 +377,10 @@ def review_fields(fields: GenesisConfigFields) -> list[ReviewField]:
         have made parse_canonical_bytes() raise, so it can never reach here
         with a different value -- because no-blind-signing means every
         signed field is shown to the operator, not only the ones that could
-        vary. Reuses chains.base.ReviewField (the same generic no-blind-
-        signing field type the EVM chain plugin's review screens consume)
-        rather than inventing a parallel type for this one flow. """
+        vary. Reuses models.review.ReviewField (the same generic no-blind-
+        signing field type the EVM chain plugin's review screens consume,
+        via chains.base's re-export) rather than inventing a parallel type
+        for this one flow. """
     return [ReviewField(label=label, value=value) for label, value in _labeled_values(fields)]
 
 

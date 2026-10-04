@@ -21,6 +21,14 @@
 from dataclasses import dataclass, field
 from typing import Protocol
 
+# Re-exported, not defined here, as of 2026-10-03
+# (7f-signing-support-models-chains-import-cycle fix) -- see
+# models/review.py's own docstring for why: models/sevenf/* needs
+# ReviewField without pulling in this package's __init__-time plugin
+# registration. Every existing `from seedsigner.chains.base import
+# ReviewField` call site (this re-export included) is unaffected.
+from seedsigner.models.review import ReviewField
+
 
 @dataclass
 class Address:
@@ -28,19 +36,6 @@ class Address:
     path: str
     address: str
     network_name: str
-
-
-@dataclass
-class ReviewField:
-    """
-        One field on a paged no-blind-signing review screen. `is_warning` marks a
-        hard-stop item (e.g. an unlimited approval) that review UI should render
-        distinctly from an ordinary informational field, not just another line item.
-    """
-    label: str
-    value: str
-    is_warning: bool = False
-    warning_detail: str = ""
 
 
 @dataclass

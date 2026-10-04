@@ -553,3 +553,42 @@ def test_review_fields_timestamp_includes_utc():
     timestamp_field = next(f for f in review_field_list if f.label == "Timestamp")
     assert "1790555198" in timestamp_field.value
     assert "UTC" in timestamp_field.value
+
+
+def test_genesis_config_imports_cleanly_before_chains_is_ever_imported():
+    """ Regression test for 7f-review-models-chains-import-cycle (found by
+        the full-project adversarial review's modularity dimension,
+        2026-10-03): importing seedsigner.models.sevenf.genesis_config
+        used to require Python to first run seedsigner.chains.__init__
+        (since ReviewField came from seedsigner.chains.base, and importing
+        any submodule of a package always runs that package's __init__
+        first) -- which eagerly imports EVERY registered chain plugin,
+        including chains.evm.plugin, which imports chains.evm.crypto,
+        which requires the `Cryptodome` package. CONFIRMED LIVE, not just
+        theoretical: in a venv missing that optional EVM-only dependency,
+        `import seedsigner.models.sevenf.genesis_config` alone raised
+        `ModuleNotFoundError: No module named 'Cryptodome'` under the
+        pre-fix code (verified directly via `git stash` during this
+        story's own implementation) -- a 7F-only module failing to import
+        because of an unrelated chain's missing dependency. (The
+        "partially-initialized module" hazard the backlog note describes
+        is a second, narrower failure mode the same fix closes; this
+        missing-dependency one is the one a real environment actually
+        hits.) A genuinely clean interpreter is needed to reproduce either
+        one, which an in-process pytest run can't provide once anything
+        else has already imported seedsigner.chains -- hence the
+        subprocess. This is exactly the import order
+        tools/verify_sevenf_signature.py uses for real. """
+    import subprocess
+    import sys
+
+    script = (
+        "import sys; sys.path.insert(0, 'src'); "
+        "import seedsigner.models.sevenf.genesis_config as gc; "
+        "import seedsigner.chains as chains; "
+        "assert gc.ReviewField is chains.base.ReviewField, 'ReviewField identity mismatch'; "
+        "print('OK')"
+    )
+    result = subprocess.run([sys.executable, "-c", script], cwd=".", capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    assert "OK" in result.stdout

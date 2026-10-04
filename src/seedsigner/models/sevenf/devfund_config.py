@@ -16,7 +16,7 @@
 """
 import ctypes
 
-from seedsigner.chains.base import ReviewField
+from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind
 
@@ -200,7 +200,7 @@ def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
 def review_fields(fields: DevFundConfigFields) -> list[ReviewField]:
     """ The no-blind-signing field list for the on-device review screen, one
         ReviewField per field carried in the signed canonical bytes
-        (sf-core::DevFundConfig). Reuses chains.base.ReviewField, same as
+        (sf-core::DevFundConfig). Reuses models.review.ReviewField, same as
         genesis_config.py's own review_fields(). """
     return [ReviewField(label=label, value=value) for label, value in _labeled_values(fields)]
 
