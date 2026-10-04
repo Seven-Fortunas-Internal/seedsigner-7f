@@ -81,12 +81,59 @@ _CERT_TBS_MAX_LEN = 4096
 
 
 class CertRequestError(Exception):
-    """ Raised for a malformed/invalid CertRequest JSON envelope, or for any
-        non-zero return from the cert-request TBS FFI functions (`code` is
-        then the exact ERR_* constant from firmware/mldsa7f/src/ffi.rs). """
+    """ Raised for any non-zero return from the cert-request FFI functions
+        (`code` is then the exact ERR_* constant from
+        firmware/mldsa7f/src/ffi.rs). """
     def __init__(self, message: str, code: int | None = None):
         self.code = code
         super().__init__(message)
+
+
+#  Must match firmware/mldsa7f/src/ffi.rs's own ERR_* constants exactly --
+# display-only here, the handful this module's own FFI calls can actually
+# return (not every ERR_* constant in that file).
+_ERR_NULL_POINTER = -1
+_ERR_OUTPUT_BUFFER_TOO_SMALL = -14
+_ERR_PARSE_FAILED = -16
+_ERR_CERT_BUILD_FAILED = -17
+_ERR_CSR_VERIFY_FAILED = -23
+_ERR_CERT_PARSE_FAILED = -24
+_INTERNAL_ERROR_CODES = (_ERR_NULL_POINTER, _ERR_OUTPUT_BUFFER_TOO_SMALL)
+_ERR_CODE_NAMES = {
+    _ERR_NULL_POINTER: "ERR_NULL_POINTER",
+    _ERR_OUTPUT_BUFFER_TOO_SMALL: "ERR_OUTPUT_BUFFER_TOO_SMALL",
+    _ERR_PARSE_FAILED: "ERR_PARSE_FAILED",
+    _ERR_CERT_BUILD_FAILED: "ERR_CERT_BUILD_FAILED",
+    _ERR_CSR_VERIFY_FAILED: "ERR_CSR_VERIFY_FAILED",
+    _ERR_CERT_PARSE_FAILED: "ERR_CERT_PARSE_FAILED",
+}
+
+
+def _raise_cert_error(rc: int, artifact_causes: str) -> None:
+    """ 7f-review-parse-failure-messages-not-actionable (2026-10-04, found
+        by the full-project adversarial review's UI/UX dimension): these
+        raise sites used to show the same generic text ("couldn't parse
+        the Root certificate") regardless of the actual FFI return code,
+        unlike genesis_config.py's own GenesisConfigJsonError, which gives
+        specific field-level reasons. True single-cause differentiation
+        (one message per root cause, not a list of plausible ones) would
+        need either an FFI error-message buffer or more granular Rust-side
+        codes for the handful of these FFI functions that currently
+        collapse every internal failure into one code -- bigger,
+        FFI-contract-level work appropriately left to
+        7f-review-ctypes-bridge-consolidation's own planned ErrCode enum,
+        not attempted here. This is the honest improvement achievable from
+        the code alone: distinguishing "this device has an internal bug"
+        (NULL_POINTER/OUTPUT_BUFFER_TOO_SMALL) from "this artifact has a
+        problem," and for the latter, naming the actual plausible causes
+        (`artifact_causes`, grounded in the relevant cert_request.rs
+        function's own doc comment) instead of a bare code number. The
+        caller's own message (e.g. "couldn't parse the Root certificate")
+        is supplied by the view layer that catches this, not repeated
+        here, to avoid "couldn't X: couldn't X" doubling. """
+    if rc in _INTERNAL_ERROR_CODES:
+        raise CertRequestError(f"internal device error ({_ERR_CODE_NAMES.get(rc, rc)}); please report this", code=rc)
+    raise CertRequestError(f"{_ERR_CODE_NAMES.get(rc, rc)}: {artifact_causes}", code=rc)
 
 
 def _lib():
@@ -281,7 +328,9 @@ def parse_root_certificate_der(cert_der: bytes) -> ParsedRootCertificate:
         ctypes.byref(chain_kind_out),
     )
     if rc != 0:
-        raise CertRequestError("couldn't parse the Root certificate", code=rc)
+        _raise_cert_error(rc, "it may not be a well-formed X.509 certificate, may not be a CA "
+                               "certificate, may use the wrong signature algorithm, or may carry "
+                               "a public key of the wrong length")
     return ParsedRootCertificate(
         subject_vk=subject_vk_out.raw[:_CERT_SUBJECT_VK_LEN],
         not_before=not_before_out.value,
@@ -313,7 +362,8 @@ def verify_and_parse_csr_der(csr_der: bytes) -> ParsedCsr:
         subject_vk_out, _CERT_SUBJECT_VK_LEN,
     )
     if rc != 0:
-        raise CertRequestError("couldn't verify this certificate request", code=rc)
+        _raise_cert_error(rc, "it may not be a well-formed PKCS#10 request, may use the wrong "
+                               "signature algorithm, or its self-signature may not actually verify")
     return ParsedCsr(subject_vk=subject_vk_out.raw[:_CERT_SUBJECT_VK_LEN])
 
 
@@ -341,7 +391,23 @@ def build_deputy_tbs_v2(
         ctypes.byref(written),
     )
     if rc != 0:
-        raise CertRequestError("couldn't build the Deputy certificate body", code=rc)
+        # Unlike this module's other raise sites, mldsa7f_cert_deputy_tbs_v2
+        # (ffi.rs) genuinely DOES distinguish which of its two scanned
+        # inputs failed from the TBS-building step itself -- the three
+        # branches below name the real, different cause for each of its
+        # three possible failure codes, not a shared list of plausible ones.
+        if rc == _ERR_CERT_PARSE_FAILED:
+            _raise_cert_error(rc, "the scanned Root certificate isn't valid (malformed, not a "
+                                   "CA certificate, wrong algorithm, or wrong key length)")
+        elif rc == _ERR_CSR_VERIFY_FAILED:
+            _raise_cert_error(rc, "the scanned Deputy certificate request isn't valid (malformed, "
+                                   "wrong algorithm, or its self-signature doesn't verify)")
+        else:
+            # _raise_cert_error itself still distinguishes an internal-bug
+            # code (NULL_POINTER/OUTPUT_BUFFER_TOO_SMALL) from the real
+            # ERR_CERT_BUILD_FAILED case below.
+            _raise_cert_error(rc, "the requested chain or validity window doesn't match the "
+                                   "issuing Root certificate's own")
     return out_buf.raw[:written.value]
 
 

@@ -398,6 +398,16 @@ def test_parse_root_certificate_der_rejects_garbage_der():
         parse_root_certificate_der(b"not a certificate at all" * 20)
 
 
+def test_parse_root_certificate_der_failure_message_names_plausible_causes():
+    """ Regression test for 7f-review-parse-failure-messages-not-
+        actionable: this used to be the same generic "couldn't parse the
+        Root certificate" boilerplate regardless of cause. """
+    with pytest.raises(CertRequestError) as exc_info:
+        parse_root_certificate_der(b"not a certificate at all" * 20)
+    assert "ERR_CERT_PARSE_FAILED" in str(exc_info.value)
+    assert "X.509" in str(exc_info.value)
+
+
 def test_parse_root_certificate_der_rejects_truncated_der():
     with pytest.raises(CertRequestError):
         parse_root_certificate_der(ROOT_CERT_DER[: len(ROOT_CERT_DER) // 2])
@@ -418,6 +428,15 @@ def test_verify_and_parse_csr_der_matches_the_real_reference_vector():
 def test_verify_and_parse_csr_der_rejects_garbage_der():
     with pytest.raises(CertRequestError):
         verify_and_parse_csr_der(b"not a csr at all" * 20)
+
+
+def test_verify_and_parse_csr_der_failure_message_names_plausible_causes():
+    """ Mirrors test_parse_root_certificate_der_failure_message_names_
+        plausible_causes for the CSR verification path. """
+    with pytest.raises(CertRequestError) as exc_info:
+        verify_and_parse_csr_der(b"not a csr at all" * 20)
+    assert "ERR_CSR_VERIFY_FAILED" in str(exc_info.value)
+    assert "PKCS#10" in str(exc_info.value)
 
 
 def test_verify_and_parse_csr_der_rejects_truncated_der():
@@ -550,6 +569,34 @@ def test_build_deputy_tbs_v2_rejects_an_empty_serial():
         randomness. An empty serial must be refused, not substituted. """
     with pytest.raises(CertRequestError):
         build_deputy_tbs_v2(ROOT_CERT_DER, DEPUTY_CSR_DER, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, b"")
+
+
+def test_build_deputy_tbs_v2_gives_a_different_message_per_distinct_failure_cause():
+    """ Regression test for 7f-review-parse-failure-messages-not-
+        actionable: mldsa7f_cert_deputy_tbs_v2 (ffi.rs) genuinely
+        distinguishes a bad Root certificate (ERR_CERT_PARSE_FAILED) from
+        a bad Deputy CSR (ERR_CSR_VERIFY_FAILED) from a chain/window
+        mismatch in the TBS-build step itself (ERR_CERT_BUILD_FAILED) --
+        this used to collapse all three into the same generic "couldn't
+        build the Deputy certificate body" text, discarding a
+        differentiation the FFI boundary already provides for free. """
+    serial = bytes([0x33]) * 16
+    truncated_root = ROOT_CERT_DER[: len(ROOT_CERT_DER) // 2]
+    tampered_csr = _flip_byte(DEPUTY_CSR_DER, len(DEPUTY_CSR_DER) - 50)
+
+    with pytest.raises(CertRequestError) as root_exc:
+        build_deputy_tbs_v2(truncated_root, DEPUTY_CSR_DER, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, serial)
+    with pytest.raises(CertRequestError) as csr_exc:
+        build_deputy_tbs_v2(ROOT_CERT_DER, tampered_csr, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, serial)
+    with pytest.raises(CertRequestError) as window_exc:
+        build_deputy_tbs_v2(ROOT_CERT_DER, DEPUTY_CSR_DER, ChainKind.MAINNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, serial)
+
+    root_msg, csr_msg, window_msg = str(root_exc.value), str(csr_exc.value), str(window_exc.value)
+    assert "Root certificate" in root_msg
+    assert "Deputy certificate request" in csr_msg
+    assert "chain or validity window" in window_msg
+    # All three really are distinct messages, not the same generic text three times.
+    assert len({root_msg, csr_msg, window_msg}) == 3
 
 
 # --- deputy_cross_cert_v2_review_fields: the no-blind-signing screen content ---

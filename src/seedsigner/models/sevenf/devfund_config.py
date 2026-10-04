@@ -23,14 +23,76 @@ from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp
 
 
+#  Must match firmware/mldsa7f/src/ffi.rs's own ERR_* constants exactly --
+# display-only here, the handful this module's own FFI calls can actually
+# return (not every ERR_* constant in that file -- see this module's own
+# argtypes registration above for which functions are called).
+_ERR_NULL_POINTER = -1
+_ERR_BAD_CHAIN_KIND = -12
+_ERR_BAD_MESSAGE_UTF8 = -13
+_ERR_OUTPUT_BUFFER_TOO_SMALL = -14
+_ERR_MESSAGE_BUFFER_TOO_SMALL = -15
+_ERR_PARSE_FAILED = -16
+_ERR_BAD_RECIPIENT_TAG = -25
+
+# 7f-review-parse-failure-messages-not-actionable (2026-10-04): what each
+# code plausibly means for THIS artifact type, grounded directly in
+# devfund_config.rs's own parse_canonical_bytes()/build_canonical_bytes()
+# validation order (not guessed) -- used only to explain
+# parse_canonical_bytes failures below, since that is the operator-facing
+# path (a scanned devfund-config); build_canonical_bytes is test/tooling-
+# only (no production view calls it), so its own failures get the
+# shorter, code-name-only fallback instead.
+_PARSE_FAILURE_CAUSES = (
+    "the payload is missing or has the wrong domain tag (not a devfund-config at all), "
+    "has an unsupported schema version, names an unrecognized network, has a malformed "
+    "or truncated recipient field, or is truncated/overlong in its trailing fields"
+)
+_INTERNAL_ERROR_CODES = (_ERR_NULL_POINTER, _ERR_OUTPUT_BUFFER_TOO_SMALL, _ERR_MESSAGE_BUFFER_TOO_SMALL)
+_ERR_CODE_NAMES = {
+    _ERR_NULL_POINTER: "ERR_NULL_POINTER",
+    _ERR_BAD_CHAIN_KIND: "ERR_BAD_CHAIN_KIND",
+    _ERR_BAD_MESSAGE_UTF8: "ERR_BAD_MESSAGE_UTF8",
+    _ERR_OUTPUT_BUFFER_TOO_SMALL: "ERR_OUTPUT_BUFFER_TOO_SMALL",
+    _ERR_MESSAGE_BUFFER_TOO_SMALL: "ERR_MESSAGE_BUFFER_TOO_SMALL",
+    _ERR_PARSE_FAILED: "ERR_PARSE_FAILED",
+    _ERR_BAD_RECIPIENT_TAG: "ERR_BAD_RECIPIENT_TAG",
+}
+
+
 class DevFundConfigError(Exception):
     """ Raised for any non-zero return from the devfund-config FFI
         functions. `code` is the exact ERR_* constant from
-        firmware/mldsa7f/src/ffi.rs. """
+        firmware/mldsa7f/src/ffi.rs.
+
+        Message specificity improved 2026-10-04
+        (7f-review-parse-failure-messages-not-actionable, found by the
+        full-project adversarial review's UI/UX dimension): this used to
+        render as a bare "mldsa7f devfund-config parse_canonical_bytes
+        failed with code 3" shown straight to the operator, unlike
+        genesis_config.py's own GenesisConfigJsonError, which gives
+        specific field-level reasons. True single-cause differentiation
+        (one message per root cause, not a list of plausible ones) would
+        need either an FFI error-message buffer or more granular Rust-side
+        codes -- bigger, FFI-contract-level work appropriately left to
+        7f-review-ctypes-bridge-consolidation's own planned ErrCode enum,
+        not attempted here. This is the honest improvement achievable from
+        the code alone: distinguishing "this device has an internal bug"
+        from "this artifact has a problem," and for parse_canonical_bytes
+        specifically (the operator-facing scanned-artifact path), listing
+        the actual plausible causes grounded in that function's own
+        validation order instead of a bare code number. """
     def __init__(self, code: int, operation: str):
         self.code = code
         self.operation = operation
-        super().__init__(f"mldsa7f devfund-config {operation} failed with code {code}")
+        code_name = _ERR_CODE_NAMES.get(code, str(code))
+        if code in _INTERNAL_ERROR_CODES:
+            message = f"devfund-config {operation}: internal device error ({code_name}); please report this"
+        elif operation == "parse_canonical_bytes" and code == _ERR_PARSE_FAILED:
+            message = f"{code_name}: {_PARSE_FAILURE_CAUSES}"
+        else:
+            message = f"devfund-config {operation} failed ({code_name})"
+        super().__init__(message)
 
 
 @dataclass(frozen=True)

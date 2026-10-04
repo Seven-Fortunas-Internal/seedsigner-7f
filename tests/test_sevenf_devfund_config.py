@@ -85,6 +85,20 @@ def test_parse_rejects_garbage():
         parse_canonical_bytes(b"not a devfund config at all")
 
 
+def test_parse_rejects_garbage_with_an_actionable_message():
+    """ Regression test for 7f-review-parse-failure-messages-not-
+        actionable: this used to render as a bare "mldsa7f devfund-config
+        parse_canonical_bytes failed with code 3" shown straight to the
+        operator, unlike genesis_config.py's own field-level
+        differentiation. """
+    with pytest.raises(DevFundConfigError) as exc_info:
+        parse_canonical_bytes(b"not a devfund config at all")
+    message = str(exc_info.value)
+    assert "ERR_PARSE_FAILED" in message
+    assert "domain tag" in message
+    assert "failed with code" not in message  # the old bare-code phrasing
+
+
 def test_parse_rejects_the_retired_v1_shape():
     """ The exact bytes this bridge used to produce before the v2 re-port --
         must now be refused, not silently misparsed under the new layout. """
