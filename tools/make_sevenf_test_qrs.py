@@ -15,6 +15,14 @@ sf-deputy coordinator, is standing in on the other end of the airgap.
 See docs/7f-integration/root-ceremony-hardware-walkthrough.md for how to
 point a device's camera at the output.
 
+BUILD REQUIREMENT (2026-10-04, 7f-review-csr-tooling-ships-in-production-
+cdylib): the Deputy CSR artifact this script generates uses
+cert_request.csr_info_der/assemble_csr_der, whose firmware/mldsa7f FFI
+entry points only exist in a library built with `cargo build --release
+--features test-tooling` -- a plain `cargo build --release` (sufficient
+for the device app itself and for every other artifact this script
+builds) omits them, since nothing on the device needs to build a CSR.
+
 TEST-ONLY SEEDS -- never use these for anything but this test flow. Both
 are derived from the public, universally-known BIP-39 all-zero test vector
 ("abandon" x23 + "art"); the Deputy identity is the same mnemonic with a

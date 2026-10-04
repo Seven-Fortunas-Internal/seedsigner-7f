@@ -49,6 +49,26 @@ def _lib_available() -> bool:
         return False
 
 
+def _csr_tooling_available() -> bool:
+    """ csr_info_der/assemble_csr_der's FFI entry points only exist in a
+        library built with `cargo build --release --features test-tooling`
+        (7f-review-csr-tooling-ships-in-production-cdylib, 2026-10-04) -- a
+        plain `cargo build --release` (sufficient for every OTHER test in
+        this file) omits them. `hasattr` is the right probe: ctypes raises
+        AttributeError for a symbol the loaded library doesn't export, and
+        `hasattr` catches exactly that. """
+    if not _lib_available():
+        return False
+    return hasattr(mldsa._lib_handle(), "mldsa7f_cert_build_csr_info")
+
+
+_csr_tooling_skipif = pytest.mark.skipif(
+    not _csr_tooling_available(),
+    reason="mldsa7f built without --features test-tooling -- run `cargo build --release "
+           "--features test-tooling` in firmware/mldsa7f/ to exercise csr_info_der/assemble_csr_der",
+)
+
+
 pytestmark = pytest.mark.skipif(
     not _lib_available(),
     reason="firmware/mldsa7f not built -- run `cargo build --release` in firmware/mldsa7f/ first",
@@ -1025,6 +1045,7 @@ def _derive_csr_keypair(seed_byte: int = 0x52) -> tuple[bytes, bytes]:
     return vk, master_seed
 
 
+@_csr_tooling_skipif
 def test_csr_info_der_and_assemble_csr_der_round_trip_through_verify_and_parse_csr():
     from seedsigner.models.sevenf import mldsa
     from seedsigner.models.sevenf.constants import root_path
@@ -1037,6 +1058,7 @@ def test_csr_info_der_and_assemble_csr_der_round_trip_through_verify_and_parse_c
     assert parsed.subject_vk == vk
 
 
+@_csr_tooling_skipif
 def test_csr_info_der_round_trips_over_several_distinct_keys():
     from seedsigner.models.sevenf import mldsa
     from seedsigner.models.sevenf.constants import root_path
@@ -1050,11 +1072,13 @@ def test_csr_info_der_round_trips_over_several_distinct_keys():
         assert parsed.subject_vk == vk
 
 
+@_csr_tooling_skipif
 def test_csr_info_der_rejects_a_wrong_length_key():
     with pytest.raises(CertRequestError):
         csr_info_der(bytes([0x01]) * 100)
 
 
+@_csr_tooling_skipif
 def test_assemble_csr_der_rejects_a_tampered_signature():
     from seedsigner.models.sevenf import mldsa
     from seedsigner.models.sevenf.constants import root_path
@@ -1069,6 +1093,7 @@ def test_assemble_csr_der_rejects_a_tampered_signature():
         assemble_csr_der(info_der, bytes(tampered))
 
 
+@_csr_tooling_skipif
 def test_assemble_csr_der_rejects_a_wrong_signer():
     from seedsigner.models.sevenf import mldsa
     from seedsigner.models.sevenf.constants import root_path
@@ -1082,6 +1107,7 @@ def test_assemble_csr_der_rejects_a_wrong_signer():
         assemble_csr_der(info_der, wrong_signature)
 
 
+@_csr_tooling_skipif
 def test_assemble_csr_der_rejects_garbage_info_der():
     with pytest.raises(CertRequestError):
         assemble_csr_der(b"not a csr info at all", bytes(3309))

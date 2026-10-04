@@ -252,22 +252,51 @@ def _lib():
             ctypes.POINTER(ctypes.c_size_t),       # out_written
         ]
         lib.mldsa7f_cert_assemble_deputy.restype = ctypes.c_int32
-
-        lib.mldsa7f_cert_build_csr_info.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_cert_build_csr_info.restype = ctypes.c_int32
-
-        lib.mldsa7f_cert_assemble_csr.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # info_der
-            ctypes.c_char_p, ctypes.c_size_t,      # signature
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_cert_assemble_csr.restype = ctypes.c_int32
         lib._sevenf_cert_request_argtypes_registered = True
+    return lib
+
+
+def _csr_tooling_lib():
+    """ Separate from _lib() deliberately (7f-review-csr-tooling-ships-in-
+        production-cdylib, 2026-10-04): mldsa7f_cert_build_csr_info/
+        mldsa7f_cert_assemble_csr now only exist in the compiled library
+        when it was built with `cargo build --release --features
+        test-tooling` (see firmware/mldsa7f/src/cert_request.rs's own
+        module-doc note) -- a normal `cargo build --release` (what the
+        device's eventual production image will run) omits them entirely.
+        Registering their argtypes inside _lib() itself would make EVERY
+        cert_request.py function (not just the two CSR builders) raise an
+        opaque ctypes AttributeError the moment any of them first touched
+        the library, since ctypes looks up `.argtypes` by symbol name and
+        fails immediately if the symbol isn't exported -- a normal device
+        build would never be able to use this module at all. Kept lazy and
+        separate so only csr_info_der/assemble_csr_der -- the two functions
+        that actually need these symbols -- ever pay that cost, and fail
+        with a clear, specific message when they do. """
+    lib = mldsa._lib_handle()
+    if not hasattr(lib, "_sevenf_csr_tooling_argtypes_registered"):
+        try:
+            lib.mldsa7f_cert_build_csr_info.argtypes = [
+                ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
+                ctypes.c_char_p, ctypes.c_size_t,      # out
+                ctypes.POINTER(ctypes.c_size_t),       # out_written
+            ]
+            lib.mldsa7f_cert_build_csr_info.restype = ctypes.c_int32
+
+            lib.mldsa7f_cert_assemble_csr.argtypes = [
+                ctypes.c_char_p, ctypes.c_size_t,      # info_der
+                ctypes.c_char_p, ctypes.c_size_t,      # signature
+                ctypes.c_char_p, ctypes.c_size_t,      # out
+                ctypes.POINTER(ctypes.c_size_t),       # out_written
+            ]
+            lib.mldsa7f_cert_assemble_csr.restype = ctypes.c_int32
+        except AttributeError as e:
+            raise CertRequestError(
+                "This build of mldsa7f doesn't include the PKCS#10 CSR test-tooling "
+                "functions. Rebuild firmware/mldsa7f with `cargo build --release "
+                "--features test-tooling` to use csr_info_der/assemble_csr_der."
+            ) from e
+        lib._sevenf_csr_tooling_argtypes_registered = True
     return lib
 
 
@@ -613,7 +642,7 @@ def csr_info_der(subject_vk: bytes) -> bytes:
     """ The unsigned body of a PKCS#10 CertificationRequest -- the exact
         bytes a CSR requester signs. Raises CertRequestError on any
         failure (e.g. a wrong-length subject_vk). """
-    lib = _lib()
+    lib = _csr_tooling_lib()
     out_buf = ctypes.create_string_buffer(_CERT_TBS_MAX_LEN)
     written = ctypes.c_size_t(0)
     rc = lib.mldsa7f_cert_build_csr_info(
@@ -632,7 +661,7 @@ def assemble_csr_der(info_der: bytes, signature: bytes) -> bytes:
         over it under the same key the body embeds (a CSR is always
         self-signed). Raises CertRequestError if the signature doesn't
         verify over the info under its own embedded subject key. """
-    lib = _lib()
+    lib = _csr_tooling_lib()
     out_buf = ctypes.create_string_buffer(_CERT_FULL_MAX_LEN)
     written = ctypes.c_size_t(0)
     rc = lib.mldsa7f_cert_assemble_csr(
