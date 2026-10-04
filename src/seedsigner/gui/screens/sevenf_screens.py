@@ -31,9 +31,9 @@ class SevenFReviewFieldScreen(ButtonListScreen):
         See this module's own docstring for why this isn't merged with
         evm_screens.py's EvmReviewFieldScreen.
     """
-    page_title: str = None
-    label_text: str = None
-    value_text: str = None
+    page_title: str | None = None
+    label_text: str | None = None
+    value_text: str | None = None
     page_num: int = 0
     num_pages: int = 1
     is_final_page: bool = False
@@ -84,8 +84,8 @@ class SevenFConfirmSignScreen(ButtonListScreen):
         address instead, that's a real regression") -- an operator primed to
         watch for that exact mismatch would have seen the words "Root CA" on
         the one screen that was supposed to prove it wasn't. """
-    chain_kind_name: str = None
-    address: str = None
+    chain_kind_name: str | None = None
+    address: str | None = None
     signing_role_label: str = "Root CA"
 
     def __post_init__(self):

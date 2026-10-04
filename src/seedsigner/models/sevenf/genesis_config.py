@@ -34,6 +34,7 @@
 """
 import ctypes
 import json
+from dataclasses import dataclass
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
@@ -72,25 +73,19 @@ class GenesisConfigJsonError(Exception):
         devfund_config.DevFundConfigError, cert_request.CertRequestError). """
 
 
+@dataclass(frozen=True)
 class ConsensusParams:
-    def __init__(self, target_block_time_secs: int, difficulty_adjustment_interval_blocks: int, blocks_per_decay_period: int):
-        self.target_block_time_secs = target_block_time_secs
-        self.difficulty_adjustment_interval_blocks = difficulty_adjustment_interval_blocks
-        self.blocks_per_decay_period = blocks_per_decay_period
-
-    def __eq__(self, other):
-        return isinstance(other, ConsensusParams) and vars(self) == vars(other)
+    target_block_time_secs: int
+    difficulty_adjustment_interval_blocks: int
+    blocks_per_decay_period: int
 
 
+@dataclass(frozen=True)
 class GenesisConfigFields:
-    def __init__(self, chain_kind: ChainKind, timestamp: int, message: str, consensus: ConsensusParams):
-        self.chain_kind = chain_kind
-        self.timestamp = timestamp
-        self.message = message
-        self.consensus = consensus
-
-    def __eq__(self, other):
-        return isinstance(other, GenesisConfigFields) and vars(self) == vars(other)
+    chain_kind: ChainKind
+    timestamp: int
+    message: str
+    consensus: ConsensusParams
 
 
 # Fixed overhead per firmware/mldsa7f/src/ffi.rs's GENESIS_FIXED_OVERHEAD

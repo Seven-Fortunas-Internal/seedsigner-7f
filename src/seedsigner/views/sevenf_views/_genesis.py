@@ -67,8 +67,8 @@ class SevenFGenesisCeremonyState:
     chain_kind: ChainKind
     canonical_bytes: bytes
     review_fields: list[ReviewField]
-    public_key: bytes = None
-    signature: bytes = None
+    public_key: bytes | None = None
+    signature: bytes | None = None
 
 
 class SevenFScanGenesisConfigView(ScanView):

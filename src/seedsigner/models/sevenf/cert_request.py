@@ -110,7 +110,7 @@ class CertRequestError(Exception):
     """ Raised for a malformed/invalid CertRequest JSON envelope, or for any
         non-zero return from the cert-request TBS FFI functions (`code` is
         then the exact ERR_* constant from firmware/mldsa7f/src/ffi.rs). """
-    def __init__(self, message: str, code: int = None):
+    def __init__(self, message: str, code: int | None = None):
         self.code = code
         super().__init__(message)
 

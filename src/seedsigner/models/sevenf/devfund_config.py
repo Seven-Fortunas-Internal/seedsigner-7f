@@ -15,6 +15,7 @@
     which applies identically here.
 """
 import ctypes
+from dataclasses import dataclass
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
@@ -32,6 +33,7 @@ class DevFundConfigError(Exception):
         super().__init__(f"mldsa7f devfund-config {operation} failed with code {code}")
 
 
+@dataclass(frozen=True)
 class DevfundRecipient:
     """ Tagged union mirroring devfund_config.rs's own DevfundRecipient --
         tag values (1=Address, 2=Multisig) match that enum's explicit tag
@@ -39,27 +41,20 @@ class DevfundRecipient:
     ADDRESS = 1
     MULTISIG = 2
 
-    def __init__(self, tag: int, payload: str):
-        self.tag = tag
-        self.payload = payload
-
-    def __eq__(self, other):
-        return isinstance(other, DevfundRecipient) and vars(self) == vars(other)
+    tag: int
+    payload: str
 
     def __repr__(self):
         kind = "Address" if self.tag == self.ADDRESS else "Multisig" if self.tag == self.MULTISIG else self.tag
         return f"DevfundRecipient({kind}, {self.payload!r})"
 
 
+@dataclass(frozen=True)
 class DevFundConfigFields:
-    def __init__(self, network: ChainKind, recipient: DevfundRecipient, effective_block: int, timestamp: int):
-        self.network = network
-        self.recipient = recipient
-        self.effective_block = effective_block
-        self.timestamp = timestamp
-
-    def __eq__(self, other):
-        return isinstance(other, DevFundConfigFields) and vars(self) == vars(other)
+    network: ChainKind
+    recipient: DevfundRecipient
+    effective_block: int
+    timestamp: int
 
 
 # Fixed overhead per firmware/mldsa7f/src/ffi.rs's DEVFUND_FIXED_OVERHEAD

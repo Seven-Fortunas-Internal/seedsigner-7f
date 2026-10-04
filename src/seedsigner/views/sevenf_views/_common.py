@@ -40,7 +40,7 @@ class SevenFSignedCertificate:
     public_key: bytes
     signature: bytes
     tbs_bytes: bytes
-    root_cert_der: bytes = None
+    root_cert_der: bytes | None = None
 
 # Conservative, character-count-based page budget for a single review field's
 # value -- found live 2026-09-27 (7F hardware walkthrough): the genesis-
@@ -95,7 +95,7 @@ class SevenFUnsupportedArtefactView(View):
         database holds Root Y", mirroring sf-root.rs's own hard refusal).
         `headline` defaults to the original "Can't Parse This" wording so
         every existing call site is unaffected. """
-    def __init__(self, reason: str, headline: str = None):
+    def __init__(self, reason: str, headline: str | None = None):
         super().__init__()
         self.reason = reason
         self.headline = headline if headline is not None else _("Can't Parse This")
@@ -145,7 +145,7 @@ class SevenFCertRequestReviewFieldView(View):
         review_fields: list[ReviewField],
         page_title: str,
         confirmed_destination: type,
-        confirmed_view_args: dict = None,
+        confirmed_view_args: dict | None = None,
         page_num: int = 0,
     ):
         super().__init__()
@@ -227,7 +227,7 @@ class SevenFConfirmSignRootCertView(View):
         `signed_view_args` is the one thing that differs between them (the
         success message's wording, and which export view follows), passed
         straight through to SevenFRootCertSignedView. """
-    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, root_cert_der: bytes = None, signed_view_args: dict = None):
+    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, root_cert_der: bytes | None = None, signed_view_args: dict | None = None):
         super().__init__()
         self.seed = seed
         self.chain_kind = chain_kind
@@ -295,7 +295,7 @@ class SevenFRootCertSignedView(View):
         to `export_destination`, replacing the former read of
         controller.sevenf_ceremony_data that each export view used to do
         itself. """
-    def __init__(self, export_destination: type, certificate: SevenFSignedCertificate, title: str = None, text: str = None):
+    def __init__(self, export_destination: type, certificate: SevenFSignedCertificate, title: str | None = None, text: str | None = None):
         super().__init__()
         self.title = title if title is not None else _("Root Certificate Signed")
         self.text = text if text is not None else _("This Root's own certificate has been signed and is ready to export.")
