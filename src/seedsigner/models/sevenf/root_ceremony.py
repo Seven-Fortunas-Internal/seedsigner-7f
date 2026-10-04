@@ -7,8 +7,8 @@
     "Correction" section -- sf-core/src/genesis_config.rs has no
     treasury/premine field, B8/D20), and no mnemonic-generation logic here
     -- that's stock SeedSigner's existing Seed/mnemonic UI, reused as-is
-    per docs/7f-integration/README.md's "What's reusable from stock
-    SeedSigner" section.
+    (see docs/7f-integration/README.md's "Architecture, as built" section
+    for the current module map).
 
     BUG FIX, 2026-10-03 (R27 re-port): this module used to derive
     `devfund` from a *separate* path from `root_ca`

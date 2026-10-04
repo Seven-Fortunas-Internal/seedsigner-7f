@@ -14,14 +14,19 @@
     `Role`/`Algorithm`/`Leaf` enums and its `parse()`/`validate()`, not an
     independent redesign.
 
-    Not wired into any live flow today: every 7F path this device ever
-    builds is constructed internally by known-good functions
-    (constants.py's `root_path()`), never taken as a raw string from
-    scanned/external input. This exists so the validator itself is ready
-    the day something does need it, and so "reject a malformed derivation
-    path even though none reaches the device today" (R8's own framing) has
-    a real implementation instead of a filed gap. See
-    7f-signing-support-path-lexicon-validator in _delivery/backlog.yaml.
+    WIRED IN 2026-10-03 (7f-signing-support-path-validation-not-enforced):
+    mldsa.py's derive_pubkey()/derive_and_sign() call validate() on every
+    `path` before it reaches the FFI -- the actual boundary every real and
+    future Python caller on this device passes through (this architecture
+    is Python-orchestrated; nothing calls Rust's derive_seed directly
+    except through that ctypes bridge). Every 7F path this device builds is
+    still constructed internally by known-good functions (constants.py's
+    `root_path()`), never taken as a raw string from scanned/external
+    input -- so this validator is defense-in-depth against a future
+    caller-/scan-supplied path, not a response to a live attack surface
+    today. See 7f-signing-support-path-lexicon-validator and
+    7f-signing-support-path-validation-not-enforced in
+    _delivery/backlog.yaml.
 
     Deliberately kept in sync with path.rs by direct comparison, not by a
     shared source -- re-diff against that file if it changes. Same

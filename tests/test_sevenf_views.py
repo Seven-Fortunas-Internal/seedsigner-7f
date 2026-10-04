@@ -1489,7 +1489,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
                     before_run=_load_genesis_config_into_decoder(canonical_bytes),
                     screen_return_value=0,
                 ),
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Network
+                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Chain
                 FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Recipient kind
                 FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Recipient
                 FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Effective block

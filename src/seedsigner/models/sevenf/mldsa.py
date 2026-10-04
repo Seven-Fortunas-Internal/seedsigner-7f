@@ -34,9 +34,10 @@
     The compiled library search order:
       1. SEEDSIGNER_MLDSA7F_LIB env var, an explicit path override (tests/dev).
       2. resources/lib/libmldsa7f.so next to this package (the eventual
-         packaged location, per docs/7f-integration/README.md's Packaging
-         section -- doesn't exist yet as of this story; production
-         packaging is separate, not-yet-filed work).
+         packaged location -- doesn't exist yet; production packaging is
+         tracked separately as 7f-signing-support-buildroot-packaging in
+         _delivery/backlog.yaml, see docs/7f-integration/README.md's
+         "What's built" table for current status).
       3. firmware/mldsa7f/target/{release,debug}/libmldsa7f.{so,dylib}
          relative to this repo checkout -- a dev-only convenience so this
          module works against a local `cargo build` without a packaging

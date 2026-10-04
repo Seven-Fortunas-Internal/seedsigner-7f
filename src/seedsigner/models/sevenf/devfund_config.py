@@ -178,10 +178,18 @@ def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
         reads). Recipient kind is its own field, not folded into the
         payload label: the no-blind-signing requirement means an operator
         must see explicitly whether they're paying a single address or an
-        M-of-N multisig commitment, not infer it from the string's shape. """
+        M-of-N multisig commitment, not infer it from the string's shape.
+
+        Labeled "Chain" (not "Network", despite the Rust field's own name)
+        -- 7f-review-devfund-network-label-inconsistency, found by the
+        full-project adversarial review's UI/UX dimension, 2026-10-03:
+        genesis-config/Root self-cert/Deputy cross-cert all label the
+        identical ChainKind concept "Chain"; this was the one flow calling
+        it something else, in a ceremony sitting where an operator signs
+        all four artifacts back to back on the same seed. """
     kind = "Address" if fields.recipient.tag == DevfundRecipient.ADDRESS else "Multisig"
     return [
-        ("Network", fields.network.name.lower()),
+        ("Chain", fields.network.name.lower()),
         ("Recipient kind", kind),
         ("Recipient", fields.recipient.payload),
         ("Effective block", str(fields.effective_block)),

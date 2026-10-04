@@ -104,9 +104,9 @@ def test_review_fields_covers_every_signed_field():
     result = review_fields(fields)
     assert all(isinstance(f, ReviewField) for f in result)
     labels = [f.label for f in result]
-    assert labels == ["Network", "Recipient kind", "Recipient", "Effective block", "Timestamp"]
+    assert labels == ["Chain", "Recipient kind", "Recipient", "Effective block", "Timestamp"]
     values = {f.label: f.value for f in result}
-    assert values["Network"] == "testnet"
+    assert values["Chain"] == "testnet"
     assert values["Recipient kind"] == "Address"
     assert values["Recipient"] == "t1devfundexampleaddress"
     assert values["Effective block"] == "12345"

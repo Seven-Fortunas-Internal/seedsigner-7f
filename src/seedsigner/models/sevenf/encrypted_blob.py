@@ -1,10 +1,13 @@
 """
     Python ctypes bridge to firmware/mldsa7f's Argon2id + AES-256-GCM
     encrypted-blob primitive (ffi.rs's mldsa7f_blob_encrypt/mldsa7f_blob_decrypt,
-    backed by src/encrypted_blob.rs). Shared by the encrypted seed-file
-    backup (requirements doc section 5.7) and the Root-to-Deputy child-seed
-    export -- see those stories' own modules for their higher-level flows;
-    this module is just the primitive.
+    backed by src/encrypted_blob.rs). Used by the encrypted seed-file
+    backup (requirements doc section 5.7, models/seed_backup.py) -- see
+    that module for the higher-level flow; this module is just the
+    primitive. Previously also shared by the Root-to-Deputy child-seed
+    export, removed 2026-10-03
+    (7f-signing-support-deputy-seed-export-obsolete) once 7fchain's own
+    ceremony design dropped that handoff; this is the only caller left.
 
     The envelope JSON shape (version, algorithm, argon2_salt,
     argon2_memory_kb, argon2_iterations, aes_nonce, ciphertext) is confirmed
