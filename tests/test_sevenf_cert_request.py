@@ -47,7 +47,19 @@ def _csr_tooling_available() -> bool:
         plain `cargo build --release` (sufficient for every OTHER test in
         this file) omits them. `hasattr` is the right probe: ctypes raises
         AttributeError for a symbol the loaded library doesn't export, and
-        `hasattr` catches exactly that. """
+        `hasattr` catches exactly that.
+
+        CAVEAT (found by this session's own adversarial review,
+        2026-10-04): `mldsa._lib_handle()` is a module-level singleton,
+        cached for the life of the Python process -- this check (and the
+        `skipif` decorator it feeds, evaluated once at collection time) can
+        only see whichever library was loaded first. Correct for a plain
+        `pytest tests/` invocation (a fresh process every run, confirmed),
+        but would give a STALE answer in a long-lived process that
+        rebuilds the .so mid-session (a REPL, a Jupyter kernel, pytest's
+        own `--looponfail`/`pytest-watch`). Restart the process after
+        rebuilding with/without --features test-tooling if using one of
+        those workflows. """
     if not _lib_available():
         return False
     return hasattr(mldsa._lib_handle(), "mldsa7f_cert_build_csr_info")
@@ -900,6 +912,30 @@ def _derive_csr_keypair(seed_byte: int = 0x52) -> tuple[bytes, bytes]:
     master_seed = bytes([seed_byte]) * 64
     vk, _address = mldsa.derive_pubkey(master_seed, root_path(ChainKind.TESTNET), int(ChainKind.TESTNET), int(Layer.L1))
     return vk, master_seed
+
+
+def test_csr_tooling_lib_fails_closed_when_the_library_lacks_the_feature():
+    """ Regression test for an adversarial-review finding on
+        7f-review-csr-tooling-ships-in-production-cdylib (2026-10-04): the
+        fail-closed except-AttributeError branch in _csr_tooling_lib() was
+        previously verified only by reading the code, never by a test that
+        actually exercises it -- this runs unconditionally (not behind
+        _csr_tooling_skipif), using a fake lib object that raises
+        AttributeError for every attribute, the same failure ctypes itself
+        raises for a real missing symbol, so it proves the fail-closed
+        behavior regardless of whether this build happens to have
+        --features test-tooling. """
+    from seedsigner.models.sevenf import cert_request
+
+    class _FakeLibMissingCsrTooling:
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(mldsa, "_lib_handle", lambda: _FakeLibMissingCsrTooling())
+        with pytest.raises(CertRequestError) as exc_info:
+            cert_request._csr_tooling_lib()
+    assert "test-tooling" in str(exc_info.value)
 
 
 @_csr_tooling_skipif
