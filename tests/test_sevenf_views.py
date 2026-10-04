@@ -20,7 +20,6 @@ from seedsigner.models.encode_qr import BBQrEncoder
 from seedsigner.models.seed import Seed
 from seedsigner.models.settings import SettingsConstants
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.cert_request import CERT_REQUEST_VERSION, ROLE_DEPUTY, ROLE_ROOT
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.genesis_config import ConsensusParams, build_canonical_bytes, parse_canonical_bytes
 from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys
@@ -387,20 +386,6 @@ def _load_genesis_config_into_decoder(canonical_bytes: bytes, file_type: str = "
         for _ in range(encoder.seq_len()):
             view.decoder.add_data(encoder.next_part())
     return loader
-
-
-def _sample_cert_request_json(**overrides) -> bytes:
-    base = dict(
-        version=CERT_REQUEST_VERSION,
-        kind="testnet",
-        role=ROLE_ROOT,
-        subject_vk=(bytes([0xAB]) * 1952).hex(),
-        not_before=1_700_000_000,
-        days=3650,
-        serial=(bytes([0x11]) * 16).hex(),
-    )
-    base.update(overrides)
-    return json.dumps(base).encode("utf-8")
 
 
 def _load_cert_request_into_decoder(data: bytes, file_type: str = "J"):

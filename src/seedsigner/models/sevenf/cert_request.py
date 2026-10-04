@@ -1,47 +1,27 @@
 """
-    Python bridge for 7fchain's X.509 CertRequest signing (Root self-
-    certification / enrollment) and Deputy cross-certification. Two
-    generations of the Deputy flow coexist in this module's own history --
-    see the "PKCS#10 REWORK" note below for which one is current.
+    Python ctypes bridge to firmware/mldsa7f's X.509 Root self-
+    certification and Deputy cross-certification TBS-building, assembly,
+    and CSR verification/building functions (ffi.rs's cert-related entry
+    points, backed by src/cert_request.rs) -- the actual crypto-adjacent,
+    byte-precise work, which IS Rust, per D12. Two generations of the
+    Deputy flow coexisted in this module's own history; only the PKCS#10
+    one described below is current.
 
-    1. Parsing/validating the CertRequest JSON envelope itself -- pure
-       envelope parsing (field types, hex decoding, length bounds), not
-       derivation or canonical-bytes logic, so doing it in Python here
-       doesn't violate D12 (see genesis_config.py's own docstring for the
-       same reasoning already applied to genesis-config's review-line
-       formatting). **STALE as of 2026-10-03, corrected here rather than
-       left to contradict the newer note below**: this was "still current
-       for Root self-certification, confirmed unaffected by the Deputy
-       rework" when written (deputy-cross-cert-pkcs10-rework-plan.md §6),
-       but the Root self-cert PKCS#10 rework below retired that usage too.
-       `parse_cert_request_json`/`CertRequestFields`/`root_tbs_from_request`/
-       `subject_matches`/`review_fields`/`ROLE_ROOT`/`ROLE_DEPUTY`/
-       `CERT_REQUEST_VERSION` now have zero callers anywhere in the view
-       layer (confirmed by grep) -- kept only because removing them is out
-       of this story's reviewed scope (flagged as a follow-up, not silently
-       expanded into), not because anything still calls them for real.
-    2. A ctypes bridge to firmware/mldsa7f's TBS-building functions
-       (ffi.rs's mldsa7f_cert_root_tbs and the PKCS#10-based entry points
-       below, backed by src/cert_request.rs) -- the actual crypto-adjacent,
-       byte-precise work, which IS Rust, per D12.
-
-    Confirmed field-for-field against 7fchain's real
-    crates/sf-ca/src/x509_ceremony.rs::CertRequest struct (not guessed):
-    version, kind, role ("root"|"deputy"), subject_vk (hex), not_before,
-    days, serial (hex). `kind` is the SAME sf_core::genesis_config::ChainKind
-    genesis-config's own `chain_kind` field uses, so it serializes the same
-    lowercase strings ("devnet"/"testnet"/"mainnet").
-
-    **Chain-kind cross-check, stated here since this module cannot enforce
-    it itself**: a CertRequest's `kind` is chosen by the coordinator, not the
-    device. Whatever calls into this module to derive the signer's own
-    ML-DSA-65 keypair MUST use `CertRequestFields.kind` for that derivation
-    -- never a separately-configured/assumed chain -- mirroring
-    SevenFPlugin.sign()'s existing pattern of re-deriving chain_kind from the
-    payload itself rather than trusting a separately-supplied argument. A
-    device that used the wrong chain for derivation would produce a
-    different, VALID key and silently sign a wrong-network certificate with
-    no error. Found in adversarial plan-stage review, 2026-09-28 (CRITICAL).
+    TRIMMED 2026-10-04 (7f-review-dead-json-certrequest-code, found by the
+    full-project adversarial review's modularity dimension): this module
+    used to also carry ~185 dead lines parsing/validating the RETIRED JSON
+    CertRequest wire envelope (`parse_cert_request_json`/
+    `CertRequestFields`/`root_tbs_from_request`/`subject_matches`/
+    `review_fields`/`ROLE_ROOT`/`ROLE_DEPUTY`/`CERT_REQUEST_VERSION`) --
+    kept alive only by ~40 dead-code-only references in this module's own
+    test file, with zero callers anywhere in the view layer (confirmed by
+    grep at the time, and the deletion that followed). "CertRequest" (the
+    retired JSON envelope this module is named for) no longer describes
+    what this module actually does -- renaming it (e.g. x509_cert.py, or
+    splitting into root_cert.py/deputy_cert.py) is a bigger, separately-
+    scoped decision this story deliberately left undone; see
+    7f-review-dead-json-certrequest-code's own closure note in
+    _delivery/backlog.yaml for why.
 
     **PKCS#10 REWORK, 2026-10-03** (closes
     7f-signing-support-deputy-cross-certification-pkcs10-rework): 7fchain
@@ -86,7 +66,6 @@
     on-device and export THAT, not a detached signature.
 """
 import ctypes
-import json
 import secrets
 from dataclasses import dataclass
 
@@ -94,11 +73,6 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
 from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, root_id
-
-# Confirmed against 7fchain's crates/sf-ca/src/x509_ceremony.rs.
-CERT_REQUEST_VERSION = 1
-ROLE_ROOT = "root"
-ROLE_DEPUTY = "deputy"
 
 # Must match firmware/mldsa7f/src/ffi.rs's CERT_TBS_MAX_LEN exactly --
 # display/sizing-only here (the FFI call itself fails loudly with a
@@ -113,87 +87,6 @@ class CertRequestError(Exception):
     def __init__(self, message: str, code: int | None = None):
         self.code = code
         super().__init__(message)
-
-
-@dataclass
-class CertRequestFields:
-    version: int
-    kind: ChainKind
-    role: str
-    subject_vk: bytes
-    not_before: int
-    days: int
-    serial: bytes
-
-
-def parse_cert_request_json(data: bytes) -> CertRequestFields:
-    """ Parse and validate a CertRequest JSON envelope, refusing loudly
-        (CertRequestError) on anything malformed rather than guessing --
-        this data arrives over an untrusted airgap QR channel from a
-        potentially buggy coordinator. """
-    try:
-        obj = json.loads(data)
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise CertRequestError(f"CertRequest is not valid JSON: {e}") from e
-    if not isinstance(obj, dict):
-        raise CertRequestError("CertRequest JSON must be an object")
-
-    version = obj.get("version")
-    if version != CERT_REQUEST_VERSION:
-        raise CertRequestError(f"this request is version {version!r}, and this device speaks version {CERT_REQUEST_VERSION}")
-
-    role = obj.get("role")
-    if role not in (ROLE_ROOT, ROLE_DEPUTY):
-        raise CertRequestError(f"role must be {ROLE_ROOT!r} or {ROLE_DEPUTY!r}, got {role!r}")
-
-    kind_str = obj.get("kind")
-    try:
-        kind = ChainKind[str(kind_str).upper()]
-    except KeyError:
-        raise CertRequestError(f"unknown chain kind {kind_str!r} (devnet, testnet or mainnet)") from None
-
-    subject_vk_hex = obj.get("subject_vk")
-    if not isinstance(subject_vk_hex, str):
-        raise CertRequestError("subject_vk must be a hex string")
-    try:
-        subject_vk = bytes.fromhex(subject_vk_hex.strip())
-    except ValueError as e:
-        raise CertRequestError(f"subject_vk is not hex: {e}") from e
-    if len(subject_vk) != ML_DSA_PK_LEN:
-        raise CertRequestError(f"subject_vk must be an ML-DSA-65 public key of {ML_DSA_PK_LEN} bytes, not {len(subject_vk)}")
-
-    not_before = obj.get("not_before")
-    if not isinstance(not_before, int) or isinstance(not_before, bool) or not_before < 0:
-        raise CertRequestError("not_before must be a non-negative integer")
-
-    days = obj.get("days")
-    if not isinstance(days, int) or isinstance(days, bool) or days <= 0:
-        raise CertRequestError("a certificate valid for zero (or negative) days is not worth signing")
-
-    serial_hex = obj.get("serial")
-    if not isinstance(serial_hex, str):
-        raise CertRequestError("serial must be a hex string")
-    try:
-        serial = bytes.fromhex(serial_hex.strip())
-    except ValueError as e:
-        raise CertRequestError(f"serial is not hex: {e}") from e
-    if not (1 <= len(serial) <= 20) or serial[0] & 0x80:
-        raise CertRequestError("serial must be 1 to 20 bytes and positive")
-
-    return CertRequestFields(
-        version=version, kind=kind, role=role, subject_vk=subject_vk,
-        not_before=not_before, days=days, serial=serial,
-    )
-
-
-def subject_matches(req: CertRequestFields, derived_vk: bytes) -> bool:
-    """ Fail-closed comparison for no-blind-signing: a caller MUST refuse to
-        sign (not just warn) on a mismatch, mirroring the real
-        sf-root.rs::cmd_sign_root_cert's own hard refusal ("This request is
-        for Root X, and this database holds Root Y"). Applies to the root
-        flow (subject_vk vs. the device's own derived key) and, in the
-        deputy flow, to the Root's own re-derived key used as issuer. """
-    return req.subject_vk == derived_vk
 
 
 def _lib():
@@ -318,14 +211,6 @@ def build_root_tbs(subject_vk: bytes, kind: ChainKind, not_before: int, days: in
     if rc != 0:
         raise CertRequestError("build_root_tbs failed", code=rc)
     return out_buf.raw[:written.value]
-
-
-def root_tbs_from_request(req: CertRequestFields) -> bytes:
-    """ Rebuild a Root's own body from its CertRequest. Confirmed against
-        x509_ceremony.rs's `root_tbs_from_request()`. """
-    if req.role != ROLE_ROOT:
-        raise CertRequestError(f"this is a {req.role!r} request, and it was handed to the {ROLE_ROOT!r} operation")
-    return build_root_tbs(req.subject_vk, req.kind, req.not_before, req.days, req.serial)
 
 
 # --- PKCS#10 / real-certificate-based Deputy cross-certification ---
@@ -504,36 +389,6 @@ def deputy_cross_cert_v2_review_fields(
         ReviewField(label="Deputy: Valid until", value=_format_timestamp(not_after)),
         ReviewField(label="Deputy: Serial", value=serial.hex()),
     ]
-
-
-def _labeled_values(req: CertRequestFields) -> list[tuple[str, str]]:
-    """ Single source of truth for review_fields() below. Every field a
-        no-blind-signing review must show for a CertRequest: role, the
-        subject key's short id (the same root_id() convention signature
-        exports already use), chain, the validity window's start (raw +
-        UTC, like genesis-config's own timestamp field), its length in days,
-        and the serial -- shown explicitly so a coordinator re-run with a
-        fresh timestamp (which changes the serial, since CertRequest's
-        serial is SHA256(role||subject_vk||now||days)) is visibly
-        distinguishable from what looks like "the same" request. Added
-        2026-09-28 after two independent adversarial reviews both found this
-        review screen missing entirely from the original story filing
-        (CRITICAL). """
-    return [
-        ("Role", req.role),
-        ("Subject key id", root_id(req.subject_vk.hex())),
-        ("Chain", req.kind.name.lower()),
-        ("Valid from", _format_timestamp(req.not_before)),
-        ("Valid for", f"{req.days} days"),
-        ("Serial", req.serial.hex()),
-    ]
-
-
-def review_fields(req: CertRequestFields) -> list[ReviewField]:
-    """ The no-blind-signing field list for the on-device review screen.
-        Reuses models.review.ReviewField, same as genesis_config.review_fields()
-        and the EVM chain plugin's review screens. """
-    return [ReviewField(label=label, value=value) for label, value in _labeled_values(req)]
 
 
 # --- Root self-certification: real-certificate assembly (PKCS#10-era rework) ---
