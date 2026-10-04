@@ -1399,6 +1399,45 @@ class TestSevenFCertRequestReviewFieldView(FlowTest):
         assert captured["page_num"] == 0
         assert captured["num_pages"] == 2
         assert captured["is_final_page"] is False
+        assert captured["is_warning"] is False
+        assert captured["warning_detail"] == ""
+
+
+    def test_a_warning_field_is_preserved_through_chunking_and_passed_to_the_screen(self):
+        """ Regression test for 7f-review-enrollment-fingerprint-no-visual-
+            distinction: the chunk-rebuilding loop used to drop
+            is_warning/warning_detail entirely (it only copied label/value
+            into a fresh ReviewField), which would have silently defeated
+            the fix even after cert_request.py started setting the flag. """
+        from seedsigner.chains.base import ReviewField
+        fields = [
+            ReviewField(
+                label="Subject key id", value="abc123", is_warning=True,
+                warning_detail="Compare this against your recorded enrollment fingerprint before continuing.",
+            ),
+            ReviewField(label="Chain", value="testnet"),
+        ]
+        view = sevenf_views.SevenFCertRequestReviewFieldView(
+            review_fields=fields,
+            page_title="Review Root Certificate",
+            confirmed_destination=_DummyConfirmedDestination,
+        )
+        assert view.chunks[0].is_warning is True
+        assert view.chunks[0].warning_detail == "Compare this against your recorded enrollment fingerprint before continuing."
+        assert view.chunks[1].is_warning is False
+
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured.update(kwargs)
+            return 0
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+
+        assert captured["is_warning"] is True
+        assert captured["warning_detail"] == "Compare this against your recorded enrollment fingerprint before continuing."
 
 
     def test_raises_if_constructed_with_an_out_of_range_page_num(self):

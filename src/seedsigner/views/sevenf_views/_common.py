@@ -155,7 +155,7 @@ class SevenFCertRequestReviewFieldView(View):
         self.confirmed_view_args = confirmed_view_args or {}
         self.page_num = page_num
         self.chunks: list[ReviewField] = [
-            ReviewField(label=field.label, value=chunk_value)
+            ReviewField(label=field.label, value=chunk_value, is_warning=field.is_warning, warning_detail=field.warning_detail)
             for field in review_fields
             for chunk_value in _paginate_value(field.value)
         ]
@@ -177,6 +177,8 @@ class SevenFCertRequestReviewFieldView(View):
             page_num=self.page_num,
             num_pages=len(self.chunks),
             is_final_page=is_final_page,
+            is_warning=chunk.is_warning,
+            warning_detail=chunk.warning_detail,
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:

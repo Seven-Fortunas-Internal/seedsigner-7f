@@ -459,11 +459,17 @@ def deputy_cross_cert_v2_review_fields(
         projection that could overstate what's actually being signed. """
     not_after = min(now + days * 86_400, root_cert.not_after)
     return [
-        ReviewField(label="Issuing Root: Subject key id", value=root_id(root_cert.subject_vk.hex())),
+        ReviewField(
+            label="Issuing Root: Subject key id", value=root_id(root_cert.subject_vk.hex()), is_warning=True,
+            warning_detail="Compare this against the Root's recorded enrollment fingerprint before continuing.",
+        ),
         ReviewField(label="Issuing Root: Valid from", value=_format_timestamp(root_cert.not_before)),
         ReviewField(label="Issuing Root: Valid until", value=_format_timestamp(root_cert.not_after)),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
-        ReviewField(label="Deputy: Subject key id", value=root_id(csr.subject_vk.hex())),
+        ReviewField(
+            label="Deputy: Subject key id", value=root_id(csr.subject_vk.hex()), is_warning=True,
+            warning_detail="Compare this against the Deputy's recorded enrollment fingerprint before continuing.",
+        ),
         ReviewField(label="Deputy: Valid from", value=_format_timestamp(now)),
         ReviewField(label="Deputy: Valid for", value=f"{days} days"),
         ReviewField(label="Deputy: Valid until", value=_format_timestamp(not_after)),
@@ -580,7 +586,10 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
         informationally -- this is the compensating control the plan ships
         in place of a compiled-in pin allowlist (§5.1). """
     return [
-        ReviewField(label="Subject key id", value=root_id(subject_vk.hex())),
+        ReviewField(
+            label="Subject key id", value=root_id(subject_vk.hex()), is_warning=True,
+            warning_detail="Compare this against your recorded enrollment fingerprint before continuing.",
+        ),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
         ReviewField(label="Valid from", value=_format_timestamp(not_before)),
         ReviewField(label="Valid until", value=_format_timestamp(not_after)),

@@ -9,11 +9,24 @@
     SevenFReviewFieldScreen is a near-duplicate of evm_screens.py's own
     EvmReviewFieldScreen -- anticipated by name in that file's own docstring
     ("same pattern as the 7F work's SevenFReviewFieldScreen") -- rather than
-    a shared base class, since the two screens' dataclass fields already
-    differ (no warning_detail/is_warning distinction needed here yet: a
-    genesis-config has no anti-scam-style hard-stop field the way an EVM
-    approval/permit does) and forcing a shared base now would be a
-    speculative abstraction for a difference of one field.
+    a shared base class, since forcing a shared base across two independent
+    chain plugins' UI layers would be a speculative abstraction this
+    project's own coding-style convention (YAGNI) argues against.
+
+    `warning_detail`/`is_warning` (added 2026-10-04,
+    7f-review-enrollment-fingerprint-no-visual-distinction, found by the
+    full-project adversarial review's UI/UX dimension): mirrors
+    EvmReviewFieldScreen's own mechanism exactly. Root self-cert's and
+    Deputy cross-cert's "Subject key id" fields are the ENTIRE compensating
+    control for the device-side Wrong-Key check the PKCS#10 rework removed
+    (a federation-level decision, not a gap) -- "this comparison is now the
+    operator's job," per cert_request.py's own docstring -- but used to
+    render pixel-identical to every adjacent FYI field (same icon, same
+    layout), giving a tired operator mid-ceremony no on-screen cue that this
+    ONE field, unlike its neighbors, requires stopping to compare against
+    something written down earlier. cert_request.py's
+    root_self_cert_review_fields()/deputy_cross_cert_v2_review_fields() now
+    flag their "Subject key id" fields this way.
 """
 from dataclasses import dataclass
 from gettext import gettext as _
@@ -34,8 +47,10 @@ class SevenFReviewFieldScreen(ButtonListScreen):
     page_title: str | None = None
     label_text: str | None = None
     value_text: str | None = None
+    warning_detail: str = ""
     page_num: int = 0
     num_pages: int = 1
+    is_warning: bool = False
     is_final_page: bool = False
 
     def __post_init__(self):
@@ -48,9 +63,12 @@ class SevenFReviewFieldScreen(ButtonListScreen):
         self.button_data = [ButtonOption("Next")] if not self.is_final_page else [ButtonOption("Continue")]
         super().__post_init__()
 
+        icon_name = SeedSignerIconConstants.WARNING if self.is_warning else SeedSignerIconConstants.INFO
+        icon_color = GUIConstants.DIRE_WARNING_COLOR if self.is_warning else GUIConstants.INFO_COLOR
+
         value_display = IconTextLine(
-            icon_name=SeedSignerIconConstants.INFO,
-            icon_color=GUIConstants.INFO_COLOR,
+            icon_name=icon_name,
+            icon_color=icon_color,
             label_text=self.label_text,
             value_text=self.value_text,
             is_text_centered=True,
@@ -58,6 +76,16 @@ class SevenFReviewFieldScreen(ButtonListScreen):
             screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,
         )
         self.components.append(value_display)
+
+        if self.is_warning and self.warning_detail:
+            detail_display = IconTextLine(
+                icon_color=GUIConstants.DIRE_WARNING_COLOR,
+                value_text=self.warning_detail,
+                is_text_centered=True,
+                auto_line_break=True,
+                screen_y=value_display.screen_y + value_display.height + GUIConstants.COMPONENT_PADDING,
+            )
+            self.components.append(detail_display)
 
 
 

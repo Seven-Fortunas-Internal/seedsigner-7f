@@ -773,6 +773,25 @@ def test_deputy_cross_cert_v2_review_fields_key_ids_use_the_root_id_convention()
     assert by_label["Deputy: Subject key id"] == root_id(csr.subject_vk.hex())
 
 
+def test_deputy_cross_cert_v2_review_fields_subject_key_id_fields_are_flagged_as_warning_fields():
+    """ Mirrors test_root_self_cert_review_fields_subject_key_id_is_flagged_
+        as_a_warning_field: both the Issuing Root's and the Deputy's own
+        "Subject key id" fields are compensating controls (confirming the
+        correct Root is trusted, and the correct Deputy is being
+        certified, respectively) and must render distinctly. """
+    root_cert = parse_root_certificate_der(ROOT_CERT_DER)
+    csr = verify_and_parse_csr_der(DEPUTY_CSR_DER)
+    serial = bytes([0x99]) * 16
+    fields = deputy_cross_cert_v2_review_fields(root_cert, csr, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, serial)
+    by_field = {f.label: f for f in fields}
+    assert by_field["Issuing Root: Subject key id"].is_warning is True
+    assert by_field["Issuing Root: Subject key id"].warning_detail
+    assert by_field["Deputy: Subject key id"].is_warning is True
+    assert by_field["Deputy: Subject key id"].warning_detail
+    assert not by_field["Chain"].is_warning
+    assert not by_field["Deputy: Serial"].is_warning
+
+
 # --- Root self-certification: real-certificate assembly (PKCS#10-era rework) ---
 
 def test_root_days_matches_the_real_reference_constant():
@@ -877,6 +896,21 @@ def test_root_self_cert_review_fields_key_id_uses_the_root_id_convention():
     fields = root_self_cert_review_fields(vk, ChainKind.MAINNET, 1_700_000_000, 1_900_000_000, bytes([0x22]) * 16)
     by_label = {f.label: f.value for f in fields}
     assert by_label["Subject key id"] == root_id(vk.hex())
+
+
+def test_root_self_cert_review_fields_subject_key_id_is_flagged_as_a_warning_field():
+    """ Regression test for 7f-review-enrollment-fingerprint-no-visual-
+        distinction: "Subject key id" is the ENTIRE compensating control
+        for the removed device-side Wrong-Key check, so it must render
+        distinctly (is_warning=True) with real instruction text, not
+        pixel-identical to the adjacent FYI fields. """
+    vk = bytes([0xCD]) * 1952
+    fields = root_self_cert_review_fields(vk, ChainKind.MAINNET, 1_700_000_000, 1_900_000_000, bytes([0x22]) * 16)
+    by_field = {f.label: f for f in fields}
+    assert by_field["Subject key id"].is_warning is True
+    assert by_field["Subject key id"].warning_detail
+    assert not by_field["Chain"].is_warning
+    assert not by_field["Serial"].is_warning
 
 
 # --- Deputy cross-certification: real-certificate assembly (closes the
