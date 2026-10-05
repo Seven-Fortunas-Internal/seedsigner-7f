@@ -48,6 +48,7 @@ import os
 from pathlib import Path
 
 from seedsigner.models.sevenf import path_lexicon
+from seedsigner.models.sevenf._ffi import MlDsa7fError, register_argtypes
 from seedsigner.models.sevenf.constants import (
     ADDRESS_LEN,
     ML_DSA_PK_LEN,
@@ -56,7 +57,7 @@ from seedsigner.models.sevenf.constants import (
 )
 
 
-class MlDsaError(Exception):
+class MlDsaError(MlDsa7fError):
     """ Raised for any non-zero return from the mldsa7f C ABI. `code` is
         the exact ERR_* constant from firmware/mldsa7f/src/ffi.rs, so a
         caller (or a test) can distinguish failure modes precisely rather
@@ -104,6 +105,24 @@ def _load_library() -> ctypes.CDLL:
 
 _lib = None
 
+_MLDSA_ARGTYPES = {
+    "mldsa7f_derive_pubkey": ([
+        ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
+        ctypes.c_char_p, ctypes.c_size_t,   # path
+        ctypes.c_uint8, ctypes.c_uint8,      # network, layer
+        ctypes.c_char_p, ctypes.c_size_t,   # pk_out
+        ctypes.c_char_p, ctypes.c_size_t,   # address_out
+        ctypes.POINTER(ctypes.c_size_t),     # address_written_out
+    ], ctypes.c_int32),
+    "mldsa7f_derive_and_sign": ([
+        ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
+        ctypes.c_char_p, ctypes.c_size_t,   # path
+        ctypes.c_char_p, ctypes.c_size_t,   # msg
+        ctypes.c_char_p, ctypes.c_size_t,   # pk_out
+        ctypes.c_char_p, ctypes.c_size_t,   # sig_out
+    ], ctypes.c_int32),
+}
+
 
 def _lib_handle() -> ctypes.CDLL:
     """ Lazy singleton -- avoids loading the shared library at import time
@@ -112,24 +131,7 @@ def _lib_handle() -> ctypes.CDLL:
     global _lib
     if _lib is None:
         lib = _load_library()
-        lib.mldsa7f_derive_pubkey.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
-            ctypes.c_char_p, ctypes.c_size_t,   # path
-            ctypes.c_uint8, ctypes.c_uint8,      # network, layer
-            ctypes.c_char_p, ctypes.c_size_t,   # pk_out
-            ctypes.c_char_p, ctypes.c_size_t,   # address_out
-            ctypes.POINTER(ctypes.c_size_t),     # address_written_out
-        ]
-        lib.mldsa7f_derive_pubkey.restype = ctypes.c_int32
-
-        lib.mldsa7f_derive_and_sign.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
-            ctypes.c_char_p, ctypes.c_size_t,   # path
-            ctypes.c_char_p, ctypes.c_size_t,   # msg
-            ctypes.c_char_p, ctypes.c_size_t,   # pk_out
-            ctypes.c_char_p, ctypes.c_size_t,   # sig_out
-        ]
-        lib.mldsa7f_derive_and_sign.restype = ctypes.c_int32
+        register_argtypes(lib, "_sevenf_mldsa_argtypes_registered", _MLDSA_ARGTYPES)
         _lib = lib
     return _lib
 

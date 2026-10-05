@@ -18,6 +18,7 @@
 import ctypes
 
 from seedsigner.models.sevenf import mldsa
+from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 
 # Must match firmware/mldsa7f/src/ffi.rs's ENCRYPTED_BLOB_MAX_LEN exactly --
 # display/sizing-only here (the FFI call itself fails loudly with a
@@ -25,7 +26,7 @@ from seedsigner.models.sevenf import mldsa
 _ENCRYPTED_BLOB_MAX_LEN = 4096
 
 
-class EncryptedBlobError(Exception):
+class EncryptedBlobError(MlDsa7fError):
     """ Raised for any non-zero return from the encrypted-blob FFI
         functions. `code` is the exact ERR_* constant from
         firmware/mldsa7f/src/ffi.rs -- in particular, a wrong passphrase and
@@ -37,25 +38,25 @@ class EncryptedBlobError(Exception):
         super().__init__(f"mldsa7f encrypted-blob {operation} failed with code {code}")
 
 
+_ENCRYPTED_BLOB_ARGTYPES = {
+    "mldsa7f_blob_encrypt": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # plaintext
+        ctypes.c_char_p, ctypes.c_size_t,      # passphrase
+        ctypes.c_char_p, ctypes.c_size_t,      # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+    "mldsa7f_blob_decrypt": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # envelope_json
+        ctypes.c_char_p, ctypes.c_size_t,      # passphrase
+        ctypes.c_char_p, ctypes.c_size_t,      # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+}
+
+
 def _lib():
     lib = mldsa._lib_handle()
-    if not hasattr(lib, "_sevenf_encrypted_blob_argtypes_registered"):
-        lib.mldsa7f_blob_encrypt.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # plaintext
-            ctypes.c_char_p, ctypes.c_size_t,      # passphrase
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_blob_encrypt.restype = ctypes.c_int32
-
-        lib.mldsa7f_blob_decrypt.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # envelope_json
-            ctypes.c_char_p, ctypes.c_size_t,      # passphrase
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_blob_decrypt.restype = ctypes.c_int32
-        lib._sevenf_encrypted_blob_argtypes_registered = True
+    register_argtypes(lib, "_sevenf_encrypted_blob_argtypes_registered", _ENCRYPTED_BLOB_ARGTYPES)
     return lib
 
 
@@ -63,17 +64,16 @@ def encrypt(plaintext: bytes, passphrase: bytes) -> str:
     """ Encrypt `plaintext` under `passphrase`, returning the envelope as a
         JSON string. Raises EncryptedBlobError on any failure. """
     lib = _lib()
-    out_buf = ctypes.create_string_buffer(_ENCRYPTED_BLOB_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_blob_encrypt(
-        plaintext, len(plaintext),
-        passphrase, len(passphrase),
-        out_buf, _ENCRYPTED_BLOB_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise EncryptedBlobError(rc, "encrypt")
-    return out_buf.raw[:written.value].decode("utf-8")
+    try:
+        out = call_into_buffer(
+            lib.mldsa7f_blob_encrypt,
+            plaintext, len(plaintext),
+            passphrase, len(passphrase),
+            cap=_ENCRYPTED_BLOB_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        raise EncryptedBlobError(e.code, "encrypt") from e
+    return out.decode("utf-8")
 
 
 def decrypt(envelope_json: str, passphrase: bytes) -> bytes:
@@ -84,14 +84,12 @@ def decrypt(envelope_json: str, passphrase: bytes) -> bytes:
         tampered envelope, or malformed JSON) -- never returns garbage. """
     lib = _lib()
     envelope_bytes = envelope_json.encode("utf-8")
-    out_buf = ctypes.create_string_buffer(_ENCRYPTED_BLOB_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_blob_decrypt(
-        envelope_bytes, len(envelope_bytes),
-        passphrase, len(passphrase),
-        out_buf, _ENCRYPTED_BLOB_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise EncryptedBlobError(rc, "decrypt")
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_blob_decrypt,
+            envelope_bytes, len(envelope_bytes),
+            passphrase, len(passphrase),
+            cap=_ENCRYPTED_BLOB_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        raise EncryptedBlobError(e.code, "decrypt") from e

@@ -19,21 +19,9 @@ from dataclasses import dataclass
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
+from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp
-
-
-#  Must match firmware/mldsa7f/src/ffi.rs's own ERR_* constants exactly --
-# display-only here, the handful this module's own FFI calls can actually
-# return (not every ERR_* constant in that file -- see this module's own
-# argtypes registration above for which functions are called).
-_ERR_NULL_POINTER = -1
-_ERR_BAD_CHAIN_KIND = -12
-_ERR_BAD_MESSAGE_UTF8 = -13
-_ERR_OUTPUT_BUFFER_TOO_SMALL = -14
-_ERR_MESSAGE_BUFFER_TOO_SMALL = -15
-_ERR_PARSE_FAILED = -16
-_ERR_BAD_RECIPIENT_TAG = -25
 
 # 7f-review-parse-failure-messages-not-actionable (2026-10-04): what each
 # code plausibly means for THIS artifact type, grounded directly in
@@ -48,19 +36,30 @@ _PARSE_FAILURE_CAUSES = (
     "has an unsupported schema version, names an unrecognized network, has a malformed "
     "or truncated recipient field, or is truncated/overlong in its trailing fields"
 )
-_INTERNAL_ERROR_CODES = (_ERR_NULL_POINTER, _ERR_OUTPUT_BUFFER_TOO_SMALL, _ERR_MESSAGE_BUFFER_TOO_SMALL)
-_ERR_CODE_NAMES = {
-    _ERR_NULL_POINTER: "ERR_NULL_POINTER",
-    _ERR_BAD_CHAIN_KIND: "ERR_BAD_CHAIN_KIND",
-    _ERR_BAD_MESSAGE_UTF8: "ERR_BAD_MESSAGE_UTF8",
-    _ERR_OUTPUT_BUFFER_TOO_SMALL: "ERR_OUTPUT_BUFFER_TOO_SMALL",
-    _ERR_MESSAGE_BUFFER_TOO_SMALL: "ERR_MESSAGE_BUFFER_TOO_SMALL",
-    _ERR_PARSE_FAILED: "ERR_PARSE_FAILED",
-    _ERR_BAD_RECIPIENT_TAG: "ERR_BAD_RECIPIENT_TAG",
-}
+# Codes this module's own FFI calls (build/parse_canonical_bytes) can
+# actually return and that mean "this device has an internal bug" rather
+# than "this artifact has a problem" -- not every ErrCode member, just the
+# ones reachable here.
+_INTERNAL_ERROR_CODES = (ErrCode.NULL_POINTER, ErrCode.OUTPUT_BUFFER_TOO_SMALL, ErrCode.MESSAGE_BUFFER_TOO_SMALL)
+
+# Codes this module's own FFI calls can actually return, period -- the
+# shared err_code_name() knows every ERR_* constant in ffi.rs, but this
+# module's pre-consolidation behavior only ever named the handful below,
+# falling back to the bare number for anything else (adversarial review,
+# 2026-10-05: widening the lookup to the full shared enum silently changed
+# message text for out-of-contract codes -- this clamp restores that).
+_KNOWN_CODES = frozenset({
+    ErrCode.NULL_POINTER, ErrCode.BAD_CHAIN_KIND, ErrCode.BAD_MESSAGE_UTF8,
+    ErrCode.OUTPUT_BUFFER_TOO_SMALL, ErrCode.MESSAGE_BUFFER_TOO_SMALL,
+    ErrCode.PARSE_FAILED, ErrCode.BAD_RECIPIENT_TAG,
+})
 
 
-class DevFundConfigError(Exception):
+def _code_name(code: int) -> str:
+    return err_code_name(code) if code in _KNOWN_CODES else str(code)
+
+
+class DevFundConfigError(MlDsa7fError):
     """ Raised for any non-zero return from the devfund-config FFI
         functions. `code` is the exact ERR_* constant from
         firmware/mldsa7f/src/ffi.rs.
@@ -85,10 +84,10 @@ class DevFundConfigError(Exception):
     def __init__(self, code: int, operation: str):
         self.code = code
         self.operation = operation
-        code_name = _ERR_CODE_NAMES.get(code, str(code))
+        code_name = _code_name(code)
         if code in _INTERNAL_ERROR_CODES:
             message = f"devfund-config {operation}: internal device error ({code_name}); please report this"
-        elif operation == "parse_canonical_bytes" and code == _ERR_PARSE_FAILED:
+        elif operation == "parse_canonical_bytes" and code == ErrCode.PARSE_FAILED:
             message = f"{code_name}: {_PARSE_FAILURE_CAUSES}"
         else:
             message = f"devfund-config {operation} failed ({code_name})"
@@ -130,30 +129,30 @@ class DevFundConfigFields:
 _DEVFUND_FIXED_OVERHEAD = 43
 
 
+_DEVFUND_ARGTYPES = {
+    "mldsa7f_devfund_build_canonical_bytes": ([
+        ctypes.c_uint8,                        # network
+        ctypes.c_uint8,                        # recipient_tag
+        ctypes.c_char_p, ctypes.c_size_t,      # payload
+        ctypes.c_uint64, ctypes.c_uint64,      # effective_block, timestamp
+        ctypes.c_char_p, ctypes.c_size_t,      # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+    "mldsa7f_devfund_parse_canonical_bytes": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # bytes
+        ctypes.POINTER(ctypes.c_uint8),        # network_out
+        ctypes.POINTER(ctypes.c_uint8),        # recipient_tag_out
+        ctypes.c_char_p, ctypes.c_size_t,      # payload_out
+        ctypes.POINTER(ctypes.c_size_t),       # payload_written_out
+        ctypes.POINTER(ctypes.c_uint64),       # effective_block_out
+        ctypes.POINTER(ctypes.c_uint64),       # timestamp_out
+    ], ctypes.c_int32),
+}
+
+
 def _lib():
     lib = mldsa._lib_handle()
-    if not hasattr(lib, "_sevenf_devfund_argtypes_registered"):
-        lib.mldsa7f_devfund_build_canonical_bytes.argtypes = [
-            ctypes.c_uint8,                        # network
-            ctypes.c_uint8,                        # recipient_tag
-            ctypes.c_char_p, ctypes.c_size_t,      # payload
-            ctypes.c_uint64, ctypes.c_uint64,      # effective_block, timestamp
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_devfund_build_canonical_bytes.restype = ctypes.c_int32
-
-        lib.mldsa7f_devfund_parse_canonical_bytes.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # bytes
-            ctypes.POINTER(ctypes.c_uint8),        # network_out
-            ctypes.POINTER(ctypes.c_uint8),        # recipient_tag_out
-            ctypes.c_char_p, ctypes.c_size_t,      # payload_out
-            ctypes.POINTER(ctypes.c_size_t),       # payload_written_out
-            ctypes.POINTER(ctypes.c_uint64),       # effective_block_out
-            ctypes.POINTER(ctypes.c_uint64),       # timestamp_out
-        ]
-        lib.mldsa7f_devfund_parse_canonical_bytes.restype = ctypes.c_int32
-        lib._sevenf_devfund_argtypes_registered = True
+    register_argtypes(lib, "_sevenf_devfund_argtypes_registered", _DEVFUND_ARGTYPES)
     return lib
 
 
@@ -163,21 +162,18 @@ def build_canonical_bytes(network: ChainKind, recipient: DevfundRecipient, effec
     lib = _lib()
     payload_bytes = recipient.payload.encode("utf-8")
     out_len = _DEVFUND_FIXED_OVERHEAD + len(payload_bytes) + 64  # margin, see module-level comment
-    out_buf = ctypes.create_string_buffer(out_len)
-    written = ctypes.c_size_t(0)
 
-    rc = lib.mldsa7f_devfund_build_canonical_bytes(
-        int(network),
-        recipient.tag,
-        payload_bytes, len(payload_bytes),
-        effective_block, timestamp,
-        out_buf, out_len,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise DevFundConfigError(rc, "build_canonical_bytes")
-
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_devfund_build_canonical_bytes,
+            int(network),
+            recipient.tag,
+            payload_bytes, len(payload_bytes),
+            effective_block, timestamp,
+            cap=out_len,
+        )
+    except FfiCallFailed as e:
+        raise DevFundConfigError(e.code, "build_canonical_bytes") from e
 
 
 def parse_canonical_bytes(data: bytes, max_payload_len: int = 4096) -> DevFundConfigFields:

@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
+from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, root_id
 
@@ -52,7 +53,7 @@ DERIVATION_SCHEME_V1 = "7fchain.ml-dsa-keygen.v1"
 SCHEMA_VERSION = 1
 
 
-class GenesisConfigError(Exception):
+class GenesisConfigError(MlDsa7fError):
     """ Raised for any non-zero return from the genesis-config FFI
         functions. `code` is the exact ERR_* constant from
         firmware/mldsa7f/src/ffi.rs. """
@@ -98,31 +99,31 @@ class GenesisConfigFields:
 _GENESIS_FIXED_OVERHEAD = 78
 
 
+_GENESIS_ARGTYPES = {
+    "mldsa7f_genesis_build_canonical_bytes": ([
+        ctypes.c_uint8,                       # chain_kind
+        ctypes.c_uint64,                       # timestamp
+        ctypes.c_char_p, ctypes.c_size_t,     # message
+        ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,  # consensus
+        ctypes.c_char_p, ctypes.c_size_t,     # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+    "mldsa7f_genesis_parse_canonical_bytes": ([
+        ctypes.c_char_p, ctypes.c_size_t,     # bytes
+        ctypes.POINTER(ctypes.c_uint8),        # chain_kind_out
+        ctypes.POINTER(ctypes.c_uint64),       # timestamp_out
+        ctypes.c_char_p, ctypes.c_size_t,     # message_out
+        ctypes.POINTER(ctypes.c_size_t),       # message_written_out
+        ctypes.POINTER(ctypes.c_uint64),       # target_block_time_secs_out
+        ctypes.POINTER(ctypes.c_uint64),       # difficulty_adjustment_interval_blocks_out
+        ctypes.POINTER(ctypes.c_uint64),       # blocks_per_decay_period_out
+    ], ctypes.c_int32),
+}
+
+
 def _lib():
     lib = mldsa._lib_handle()
-    if not hasattr(lib, "_sevenf_genesis_argtypes_registered"):
-        lib.mldsa7f_genesis_build_canonical_bytes.argtypes = [
-            ctypes.c_uint8,                       # chain_kind
-            ctypes.c_uint64,                       # timestamp
-            ctypes.c_char_p, ctypes.c_size_t,     # message
-            ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64,  # consensus
-            ctypes.c_char_p, ctypes.c_size_t,     # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_genesis_build_canonical_bytes.restype = ctypes.c_int32
-
-        lib.mldsa7f_genesis_parse_canonical_bytes.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,     # bytes
-            ctypes.POINTER(ctypes.c_uint8),        # chain_kind_out
-            ctypes.POINTER(ctypes.c_uint64),       # timestamp_out
-            ctypes.c_char_p, ctypes.c_size_t,     # message_out
-            ctypes.POINTER(ctypes.c_size_t),       # message_written_out
-            ctypes.POINTER(ctypes.c_uint64),       # target_block_time_secs_out
-            ctypes.POINTER(ctypes.c_uint64),       # difficulty_adjustment_interval_blocks_out
-            ctypes.POINTER(ctypes.c_uint64),       # blocks_per_decay_period_out
-        ]
-        lib.mldsa7f_genesis_parse_canonical_bytes.restype = ctypes.c_int32
-        lib._sevenf_genesis_argtypes_registered = True
+    register_argtypes(lib, "_sevenf_genesis_argtypes_registered", _GENESIS_ARGTYPES)
     return lib
 
 
@@ -132,23 +133,20 @@ def build_canonical_bytes(chain_kind: ChainKind, timestamp: int, message: str, c
     lib = _lib()
     message_bytes = message.encode("utf-8")
     out_len = _GENESIS_FIXED_OVERHEAD + len(message_bytes) + 64  # margin, see module-level comment
-    out_buf = ctypes.create_string_buffer(out_len)
-    written = ctypes.c_size_t(0)
 
-    rc = lib.mldsa7f_genesis_build_canonical_bytes(
-        int(chain_kind),
-        timestamp,
-        message_bytes, len(message_bytes),
-        consensus.target_block_time_secs,
-        consensus.difficulty_adjustment_interval_blocks,
-        consensus.blocks_per_decay_period,
-        out_buf, out_len,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise GenesisConfigError(rc, "build_canonical_bytes")
-
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_genesis_build_canonical_bytes,
+            int(chain_kind),
+            timestamp,
+            message_bytes, len(message_bytes),
+            consensus.target_block_time_secs,
+            consensus.difficulty_adjustment_interval_blocks,
+            consensus.blocks_per_decay_period,
+            cap=out_len,
+        )
+    except FfiCallFailed as e:
+        raise GenesisConfigError(e.code, "build_canonical_bytes") from e
 
 
 def parse_canonical_bytes(data: bytes, max_message_len: int = 4096) -> GenesisConfigFields:

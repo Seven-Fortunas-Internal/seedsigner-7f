@@ -71,6 +71,7 @@ from dataclasses import dataclass
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
+from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
 from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, root_id
 
@@ -80,7 +81,7 @@ from seedsigner.models.sevenf.review_format import format_timestamp as _format_t
 _CERT_TBS_MAX_LEN = 4096
 
 
-class CertRequestError(Exception):
+class CertRequestError(MlDsa7fError):
     """ Raised for any non-zero return from the cert-request FFI functions
         (`code` is then the exact ERR_* constant from
         firmware/mldsa7f/src/ffi.rs). """
@@ -89,26 +90,25 @@ class CertRequestError(Exception):
         super().__init__(message)
 
 
-#  Must match firmware/mldsa7f/src/ffi.rs's own ERR_* constants exactly --
-# display-only here, the handful this module's own FFI calls can actually
-# return (not every ERR_* constant in that file).
-_ERR_NULL_POINTER = -1
-_ERR_BAD_CHAIN_KIND = -12
-_ERR_OUTPUT_BUFFER_TOO_SMALL = -14
-_ERR_PARSE_FAILED = -16
-_ERR_CERT_BUILD_FAILED = -17
-_ERR_CSR_VERIFY_FAILED = -23
-_ERR_CERT_PARSE_FAILED = -24
-_INTERNAL_ERROR_CODES = (_ERR_NULL_POINTER, _ERR_OUTPUT_BUFFER_TOO_SMALL)
-_ERR_CODE_NAMES = {
-    _ERR_NULL_POINTER: "ERR_NULL_POINTER",
-    _ERR_BAD_CHAIN_KIND: "ERR_BAD_CHAIN_KIND",
-    _ERR_OUTPUT_BUFFER_TOO_SMALL: "ERR_OUTPUT_BUFFER_TOO_SMALL",
-    _ERR_PARSE_FAILED: "ERR_PARSE_FAILED",
-    _ERR_CERT_BUILD_FAILED: "ERR_CERT_BUILD_FAILED",
-    _ERR_CSR_VERIFY_FAILED: "ERR_CSR_VERIFY_FAILED",
-    _ERR_CERT_PARSE_FAILED: "ERR_CERT_PARSE_FAILED",
-}
+# Codes this module's own FFI calls can actually return and that mean
+# "this device has an internal bug" rather than "this artifact has a
+# problem" -- not every ErrCode member, just the ones reachable here.
+_INTERNAL_ERROR_CODES = (ErrCode.NULL_POINTER, ErrCode.OUTPUT_BUFFER_TOO_SMALL)
+
+# Codes this module's own FFI calls can actually return, period -- the
+# shared err_code_name() knows every ERR_* constant in ffi.rs, but this
+# module's pre-consolidation behavior only ever named the handful below,
+# falling back to the bare number for anything else (adversarial review,
+# 2026-10-05: widening the lookup to the full shared enum silently changed
+# message text for out-of-contract codes -- this clamp restores that).
+_KNOWN_CODES = frozenset({
+    ErrCode.NULL_POINTER, ErrCode.BAD_CHAIN_KIND, ErrCode.OUTPUT_BUFFER_TOO_SMALL,
+    ErrCode.PARSE_FAILED, ErrCode.CERT_BUILD_FAILED, ErrCode.CSR_VERIFY_FAILED, ErrCode.CERT_PARSE_FAILED,
+})
+
+
+def _code_name(code: int) -> str:
+    return err_code_name(code) if code in _KNOWN_CODES else str(code)
 
 
 def _raise_cert_error(rc: int, artifact_causes: str) -> None:
@@ -134,67 +134,59 @@ def _raise_cert_error(rc: int, artifact_causes: str) -> None:
         is supplied by the view layer that catches this, not repeated
         here, to avoid "couldn't X: couldn't X" doubling. """
     if rc in _INTERNAL_ERROR_CODES:
-        raise CertRequestError(f"internal device error ({_ERR_CODE_NAMES.get(rc, rc)}); please report this", code=rc)
-    raise CertRequestError(f"{_ERR_CODE_NAMES.get(rc, rc)}: {artifact_causes}", code=rc)
+        raise CertRequestError(f"internal device error ({_code_name(rc)}); please report this", code=rc)
+    raise CertRequestError(f"{_code_name(rc)}: {artifact_causes}", code=rc)
+
+
+_CERT_REQUEST_ARGTYPES = {
+    "mldsa7f_cert_root_tbs": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
+        ctypes.c_uint8,                        # chain_kind
+        ctypes.c_uint64, ctypes.c_uint64,      # not_before, days
+        ctypes.c_char_p, ctypes.c_size_t,      # serial
+        ctypes.c_char_p, ctypes.c_size_t,      # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+    "mldsa7f_cert_parse_root": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # cert_der
+        ctypes.c_char_p, ctypes.c_size_t,      # subject_vk_out
+        ctypes.POINTER(ctypes.c_uint64),       # not_before_out
+        ctypes.POINTER(ctypes.c_uint64),       # not_after_out
+        ctypes.POINTER(ctypes.c_uint8),        # chain_kind_out
+    ], ctypes.c_int32),
+    "mldsa7f_cert_verify_csr": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # csr_der
+        ctypes.c_char_p, ctypes.c_size_t,      # subject_vk_out
+    ], ctypes.c_int32),
+    "mldsa7f_cert_deputy_tbs_v2": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # root_cert_der
+        ctypes.c_char_p, ctypes.c_size_t,      # deputy_csr_der
+        ctypes.c_uint8,                        # chain_kind
+        ctypes.c_uint64, ctypes.c_uint64,      # now, days
+        ctypes.c_char_p, ctypes.c_size_t,      # serial
+        ctypes.c_char_p, ctypes.c_size_t,      # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+    "mldsa7f_cert_assemble_root": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # tbs_der
+        ctypes.c_char_p, ctypes.c_size_t,      # signature
+        ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
+        ctypes.c_char_p, ctypes.c_size_t,      # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+    "mldsa7f_cert_assemble_deputy": ([
+        ctypes.c_char_p, ctypes.c_size_t,      # tbs_der
+        ctypes.c_char_p, ctypes.c_size_t,      # signature
+        ctypes.c_char_p, ctypes.c_size_t,      # root_cert_der
+        ctypes.c_char_p, ctypes.c_size_t,      # out
+        ctypes.POINTER(ctypes.c_size_t),       # out_written
+    ], ctypes.c_int32),
+}
 
 
 def _lib():
     lib = mldsa._lib_handle()
-    if not hasattr(lib, "_sevenf_cert_request_argtypes_registered"):
-        lib.mldsa7f_cert_root_tbs.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
-            ctypes.c_uint8,                        # chain_kind
-            ctypes.c_uint64, ctypes.c_uint64,      # not_before, days
-            ctypes.c_char_p, ctypes.c_size_t,      # serial
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_cert_root_tbs.restype = ctypes.c_int32
-
-        lib.mldsa7f_cert_parse_root.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # cert_der
-            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk_out
-            ctypes.POINTER(ctypes.c_uint64),       # not_before_out
-            ctypes.POINTER(ctypes.c_uint64),       # not_after_out
-            ctypes.POINTER(ctypes.c_uint8),        # chain_kind_out
-        ]
-        lib.mldsa7f_cert_parse_root.restype = ctypes.c_int32
-
-        lib.mldsa7f_cert_verify_csr.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # csr_der
-            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk_out
-        ]
-        lib.mldsa7f_cert_verify_csr.restype = ctypes.c_int32
-
-        lib.mldsa7f_cert_deputy_tbs_v2.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # root_cert_der
-            ctypes.c_char_p, ctypes.c_size_t,      # deputy_csr_der
-            ctypes.c_uint8,                        # chain_kind
-            ctypes.c_uint64, ctypes.c_uint64,      # now, days
-            ctypes.c_char_p, ctypes.c_size_t,      # serial
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_cert_deputy_tbs_v2.restype = ctypes.c_int32
-
-        lib.mldsa7f_cert_assemble_root.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # tbs_der
-            ctypes.c_char_p, ctypes.c_size_t,      # signature
-            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_cert_assemble_root.restype = ctypes.c_int32
-
-        lib.mldsa7f_cert_assemble_deputy.argtypes = [
-            ctypes.c_char_p, ctypes.c_size_t,      # tbs_der
-            ctypes.c_char_p, ctypes.c_size_t,      # signature
-            ctypes.c_char_p, ctypes.c_size_t,      # root_cert_der
-            ctypes.c_char_p, ctypes.c_size_t,      # out
-            ctypes.POINTER(ctypes.c_size_t),       # out_written
-        ]
-        lib.mldsa7f_cert_assemble_deputy.restype = ctypes.c_int32
-        lib._sevenf_cert_request_argtypes_registered = True
+    register_argtypes(lib, "_sevenf_cert_request_argtypes_registered", _CERT_REQUEST_ARGTYPES)
     return lib
 
 
@@ -216,29 +208,27 @@ def _csr_tooling_lib():
         that actually need these symbols -- ever pay that cost, and fail
         with a clear, specific message when they do. """
     lib = mldsa._lib_handle()
-    if not hasattr(lib, "_sevenf_csr_tooling_argtypes_registered"):
-        try:
-            lib.mldsa7f_cert_build_csr_info.argtypes = [
-                ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
-                ctypes.c_char_p, ctypes.c_size_t,      # out
-                ctypes.POINTER(ctypes.c_size_t),       # out_written
-            ]
-            lib.mldsa7f_cert_build_csr_info.restype = ctypes.c_int32
-
-            lib.mldsa7f_cert_assemble_csr.argtypes = [
-                ctypes.c_char_p, ctypes.c_size_t,      # info_der
-                ctypes.c_char_p, ctypes.c_size_t,      # signature
-                ctypes.c_char_p, ctypes.c_size_t,      # out
-                ctypes.POINTER(ctypes.c_size_t),       # out_written
-            ]
-            lib.mldsa7f_cert_assemble_csr.restype = ctypes.c_int32
-        except AttributeError as e:
-            raise CertRequestError(
-                "This build of mldsa7f doesn't include the PKCS#10 CSR test-tooling "
-                "functions. Rebuild firmware/mldsa7f with `cargo build --release "
-                "--features test-tooling` to use csr_info_der/assemble_csr_der."
-            ) from e
-        lib._sevenf_csr_tooling_argtypes_registered = True
+    _csr_tooling_argtypes = {
+        "mldsa7f_cert_build_csr_info": ([
+            ctypes.c_char_p, ctypes.c_size_t,      # subject_vk
+            ctypes.c_char_p, ctypes.c_size_t,      # out
+            ctypes.POINTER(ctypes.c_size_t),       # out_written
+        ], ctypes.c_int32),
+        "mldsa7f_cert_assemble_csr": ([
+            ctypes.c_char_p, ctypes.c_size_t,      # info_der
+            ctypes.c_char_p, ctypes.c_size_t,      # signature
+            ctypes.c_char_p, ctypes.c_size_t,      # out
+            ctypes.POINTER(ctypes.c_size_t),       # out_written
+        ], ctypes.c_int32),
+    }
+    try:
+        register_argtypes(lib, "_sevenf_csr_tooling_argtypes_registered", _csr_tooling_argtypes)
+    except AttributeError as e:
+        raise CertRequestError(
+            "This build of mldsa7f doesn't include the PKCS#10 CSR test-tooling "
+            "functions. Rebuild firmware/mldsa7f with `cargo build --release "
+            "--features test-tooling` to use csr_info_der/assemble_csr_der."
+        ) from e
     return lib
 
 
@@ -247,19 +237,17 @@ def build_root_tbs(subject_vk: bytes, kind: ChainKind, not_before: int, days: in
         exact bytes a Root signs for enrollment. Raises CertRequestError on
         any failure. """
     lib = _lib()
-    out_buf = ctypes.create_string_buffer(_CERT_TBS_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_cert_root_tbs(
-        subject_vk, len(subject_vk),
-        int(kind),
-        not_before, days,
-        serial, len(serial),
-        out_buf, _CERT_TBS_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise CertRequestError("build_root_tbs failed", code=rc)
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_cert_root_tbs,
+            subject_vk, len(subject_vk),
+            int(kind),
+            not_before, days,
+            serial, len(serial),
+            cap=_CERT_TBS_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        raise CertRequestError("build_root_tbs failed", code=e.code) from e
 
 
 # --- PKCS#10 / real-certificate-based Deputy cross-certification ---
@@ -381,27 +369,27 @@ def build_deputy_tbs_v2(
         Root certificate's own chain_kind, fail-closed on mismatch. Raises
         CertRequestError on any failure. """
     lib = _lib()
-    out_buf = ctypes.create_string_buffer(_CERT_TBS_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_cert_deputy_tbs_v2(
-        root_cert_der, len(root_cert_der),
-        deputy_csr_der, len(deputy_csr_der),
-        int(chain_kind),
-        now, days,
-        serial, len(serial),
-        out_buf, _CERT_TBS_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_cert_deputy_tbs_v2,
+            root_cert_der, len(root_cert_der),
+            deputy_csr_der, len(deputy_csr_der),
+            int(chain_kind),
+            now, days,
+            serial, len(serial),
+            cap=_CERT_TBS_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        rc = e.code
         # Unlike this module's other raise sites, mldsa7f_cert_deputy_tbs_v2
         # (ffi.rs) genuinely DOES distinguish which of its two scanned
         # inputs failed from the TBS-building step itself -- the three
         # branches below name the real, different cause for each of its
         # three possible failure codes, not a shared list of plausible ones.
-        if rc == _ERR_CERT_PARSE_FAILED:
+        if rc == ErrCode.CERT_PARSE_FAILED:
             _raise_cert_error(rc, "the scanned Root certificate isn't valid (malformed, not a "
                                    "CA certificate, wrong algorithm, or wrong key length)")
-        elif rc == _ERR_CSR_VERIFY_FAILED:
+        elif rc == ErrCode.CSR_VERIFY_FAILED:
             _raise_cert_error(rc, "the scanned Deputy certificate request isn't valid (malformed, "
                                    "wrong algorithm, or its self-signature doesn't verify)")
         else:
@@ -410,7 +398,6 @@ def build_deputy_tbs_v2(
             # ERR_CERT_BUILD_FAILED case below.
             _raise_cert_error(rc, "the requested chain or validity window doesn't match the "
                                    "issuing Root certificate's own")
-    return out_buf.raw[:written.value]
 
 
 def deputy_cross_cert_v2_review_fields(
@@ -485,18 +472,16 @@ def assemble_root_cert_der(tbs_der: bytes, signature: bytes, subject_vk: bytes) 
         mismatch fails closed rather than producing a self-inconsistent
         certificate). """
     lib = _lib()
-    out_buf = ctypes.create_string_buffer(_CERT_FULL_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_cert_assemble_root(
-        tbs_der, len(tbs_der),
-        signature, len(signature),
-        subject_vk, len(subject_vk),
-        out_buf, _CERT_FULL_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise CertRequestError("couldn't assemble the Root certificate", code=rc)
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_cert_assemble_root,
+            tbs_der, len(tbs_der),
+            signature, len(signature),
+            subject_vk, len(subject_vk),
+            cap=_CERT_FULL_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        raise CertRequestError("couldn't assemble the Root certificate", code=e.code) from e
 
 
 def assemble_deputy_cert_der(tbs_der: bytes, signature: bytes, root_cert_der: bytes) -> bytes:
@@ -514,18 +499,16 @@ def assemble_deputy_cert_der(tbs_der: bytes, signature: bytes, root_cert_der: by
         reasoning (self-signed-vs-CA-issued distinction, and why the AKI
         binding check is genuine defense-in-depth rather than a no-op). """
     lib = _lib()
-    out_buf = ctypes.create_string_buffer(_CERT_FULL_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_cert_assemble_deputy(
-        tbs_der, len(tbs_der),
-        signature, len(signature),
-        root_cert_der, len(root_cert_der),
-        out_buf, _CERT_FULL_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise CertRequestError("couldn't assemble the Deputy certificate", code=rc)
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_cert_assemble_deputy,
+            tbs_der, len(tbs_der),
+            signature, len(signature),
+            root_cert_der, len(root_cert_der),
+            cap=_CERT_FULL_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        raise CertRequestError("couldn't assemble the Deputy certificate", code=e.code) from e
 
 
 def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_before: int, not_after: int, serial: bytes) -> list[ReviewField]:
@@ -566,16 +549,14 @@ def csr_info_der(subject_vk: bytes) -> bytes:
         bytes a CSR requester signs. Raises CertRequestError on any
         failure (e.g. a wrong-length subject_vk). """
     lib = _csr_tooling_lib()
-    out_buf = ctypes.create_string_buffer(_CERT_TBS_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_cert_build_csr_info(
-        subject_vk, len(subject_vk),
-        out_buf, _CERT_TBS_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise CertRequestError("couldn't build the CSR body", code=rc)
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_cert_build_csr_info,
+            subject_vk, len(subject_vk),
+            cap=_CERT_TBS_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        raise CertRequestError("couldn't build the CSR body", code=e.code) from e
 
 
 def assemble_csr_der(info_der: bytes, signature: bytes) -> bytes:
@@ -585,14 +566,12 @@ def assemble_csr_der(info_der: bytes, signature: bytes) -> bytes:
         self-signed). Raises CertRequestError if the signature doesn't
         verify over the info under its own embedded subject key. """
     lib = _csr_tooling_lib()
-    out_buf = ctypes.create_string_buffer(_CERT_FULL_MAX_LEN)
-    written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_cert_assemble_csr(
-        info_der, len(info_der),
-        signature, len(signature),
-        out_buf, _CERT_FULL_MAX_LEN,
-        ctypes.byref(written),
-    )
-    if rc != 0:
-        raise CertRequestError("couldn't assemble the CSR", code=rc)
-    return out_buf.raw[:written.value]
+    try:
+        return call_into_buffer(
+            lib.mldsa7f_cert_assemble_csr,
+            info_der, len(info_der),
+            signature, len(signature),
+            cap=_CERT_FULL_MAX_LEN,
+        )
+    except FfiCallFailed as e:
+        raise CertRequestError("couldn't assemble the CSR", code=e.code) from e
