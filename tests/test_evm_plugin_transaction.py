@@ -211,6 +211,21 @@ def test_sign_refuses_a_non_evm_derivation_path():
         plugin.sign(_seed_bytes(), "m/84'/0'/0'/0/0", payload)  # a Bitcoin native-segwit path
 
 
+def test_derive_address_refuses_a_non_evm_derivation_path():
+    """The same bug, the other method: derive_address() took a bare path with no
+    validation at all until 2026-10-05 (multi-chain-chainregistry-no-security-review's
+    adversarial review) -- an asymmetry with sign() above, discovered while
+    reviewing ChainRegistry as a cross-chain trust boundary. Its one
+    attacker-reachable caller (views/evm_views.py's seed-selection hint) happens to
+    wrap this in a broad except, but that caller's exception handler is not a
+    substitute for this plugin validating its own input -- see base.py's
+    ChainPlugin docstring."""
+    plugin = ChainRegistry.get("evm")
+
+    with pytest.raises(ValueError, match="not a recognized Ethereum account path"):
+        plugin.derive_address(_seed_bytes(), "m/84'/0'/0'/0/0")  # a Bitcoin native-segwit path
+
+
 @pytest.mark.parametrize("bad_path", [
     "m/44'/0'/0'/0/0",    # wrong coin_type (Bitcoin's, not Ethereum's)
     "m/44'/60'/0'/1/0",   # internal/change chain, not external

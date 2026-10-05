@@ -130,6 +130,13 @@ class EvmPlugin:
     display_name = "Ethereum / EVM"
 
     def derive_address(self, seed_bytes: bytes, path: str) -> Address:
+        # Structural refusal for a path outside this plugin's own namespace -- see
+        # validate_derivation_path()'s own docstring. Added 2026-10-05
+        # (multi-chain-chainregistry-no-security-review): this call was previously
+        # missing here while sign() already had it, the exact asymmetry base.py's
+        # ChainPlugin docstring now calls out as a required invariant for every
+        # method taking `path`, not just sign().
+        self.validate_derivation_path(path)
         # seed_bytes already has any BIP-39 passphrase mixed in (Seed.seed_bytes) --
         # honored as-is, the standard behavior for EVM (see crypto.py's module
         # docstring for why this differs from the paused 7F work's refusal).

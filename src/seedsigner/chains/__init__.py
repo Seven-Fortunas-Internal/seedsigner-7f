@@ -21,6 +21,20 @@ class ChainRegistry:
 
     @classmethod
     def register(cls, plugin: ChainPlugin) -> None:
+        # Both checks added 2026-10-05 (multi-chain-chainregistry-no-security-review):
+        # this is the one shared cross-chain trust boundary, so a mistake here must
+        # fail loudly at import/boot time, not silently misroute a live signing call.
+        if not isinstance(plugin, ChainPlugin):
+            raise TypeError(
+                f"{type(plugin).__name__} does not implement the full ChainPlugin "
+                "contract (base.py) -- a structurally incomplete plugin must not register."
+            )
+        if plugin.chain_id in cls._plugins:
+            raise ValueError(
+                f"chain_id {plugin.chain_id!r} is already registered to "
+                f"{type(cls._plugins[plugin.chain_id]).__name__} -- refusing to silently "
+                f"overwrite it with {type(plugin).__name__}."
+            )
         cls._plugins[plugin.chain_id] = plugin
 
     @classmethod

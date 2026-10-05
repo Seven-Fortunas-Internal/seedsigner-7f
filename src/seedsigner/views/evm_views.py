@@ -387,8 +387,10 @@ class EvmSelectSeedView(View):
             # attacker-controlled (unlike PSBT's real input-fingerprint check), so a
             # mismatch is flagged, never used to hide/block a seed outright. A
             # malformed/non-EVM derivation_path must not crash seed selection --
-            # validate_derivation_path()/is_real_transaction_payload() are what
-            # actually gate signing, inside EvmScanSignRequestView's own second scan.
+            # derive_address() itself now refuses one (validate_derivation_path(),
+            # 2026-10-05), caught here by this same except like any other malformed
+            # input; is_real_transaction_payload() is the other half that gates
+            # signing, inside EvmScanSignRequestView's own second scan.
             if self.eth_sign_request.address is not None:
                 try:
                     plugin = ChainRegistry.get("evm")
