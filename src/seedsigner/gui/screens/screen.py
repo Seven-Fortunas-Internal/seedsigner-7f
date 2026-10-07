@@ -142,10 +142,24 @@ class LoadingScreenThread(BaseThread):
 
 
     def run(self):
+        from seedsigner.controller import Controller
         from seedsigner.gui.renderer import Renderer
         renderer: Renderer = Renderer.get_instance()
 
-        center_image = load_image("btc_logo_60x60.png")
+        # Chain-aware center icon (2026-10-07, found live during a real Root
+        # VK enrollment ceremony): this thread is shared/generic (also used
+        # by Bitcoin-only flows -- PSBT parsing, xpub generation -- where
+        # active_chain_id is always "bitcoin" anyway, so their behavior is
+        # unchanged), but the seed backup/restore flow in seed_views.py is
+        # deliberately chain-agnostic and reachable under any active chain,
+        # so the spinner shown there should match. No EVM-specific icon
+        # exists yet, so EVM falls back to the Bitcoin icon unchanged --
+        # narrower in scope than introducing a per-chain icon registry for
+        # one requested case.
+        if Controller.get_instance().active_chain_id == "sevenf":
+            center_image = load_image("sevenf_logo_60x60.png")
+        else:
+            center_image = load_image("btc_logo_60x60.png")
         orbit_gap = 2*GUIConstants.COMPONENT_PADDING
         bounding_box = (
             int((renderer.canvas_width - center_image.width)/2 - orbit_gap),
