@@ -51,6 +51,8 @@
   <button id="reset">Reset</button>
   <button id="torch" class="secondary" hidden>Torch: off</button>
   <button id="copy" class="secondary" hidden>Copy result</button>
+  <button id="copyVk" class="secondary" hidden>Copy VK</button>
+  <button id="copyId" class="secondary" hidden>Copy ID</button>
 </div>
 <div id="result"></div>
 
@@ -66,6 +68,8 @@ const gridEl = document.getElementById("grid");
 const missingEl = document.getElementById("missing");
 const resultEl = document.getElementById("result");
 const copyBtn = document.getElementById("copy");
+const copyVkBtn = document.getElementById("copyVk");
+const copyIdBtn = document.getElementById("copyId");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const capture = document.getElementById("capture");
@@ -82,6 +86,8 @@ const RECENT_RESULT_MS = 2000;
 let cameraStarted = false;
 let detectionTimestamps = []; // ms timestamps of ticks where jsQR found any code
 let lastResult = null; // { index, isNew, at }
+let lastVkText = null;
+let lastIdText = null;
 
 function recordDetection(found, now) {
   if (found) detectionTimestamps.push(now);
@@ -203,8 +209,26 @@ async function renderResult(bytes) {
   }
   resultEl.textContent = fingerprint ? `Subject key id (root_id): ${fingerprint}\n\n${text}` : text;
   setStatus(`Complete -- ${bytes.length} bytes decoded.`, "ok");
-  copyBtn.hidden = false;
-  copyBtn.textContent = "Copy result";
+
+  // A vk result has two genuinely separate things worth copying on their
+  // own -- the full 3904-char hex to send/import somewhere, and the short
+  // 20-char id to read aloud or paste into a message confirming a match --
+  // so it gets its own pair of buttons instead of the generic "copy
+  // everything" one, which would otherwise copy both concatenated together.
+  if (fingerprint) {
+    lastVkText = text;
+    lastIdText = fingerprint;
+    copyBtn.hidden = true;
+    copyVkBtn.hidden = false;
+    copyVkBtn.textContent = "Copy VK";
+    copyIdBtn.hidden = false;
+    copyIdBtn.textContent = "Copy ID";
+  } else {
+    copyBtn.hidden = false;
+    copyBtn.textContent = "Copy result";
+    copyVkBtn.hidden = true;
+    copyIdBtn.hidden = true;
+  }
 }
 
 function handleDecodedText(text, now) {
@@ -237,6 +261,10 @@ document.getElementById("reset").addEventListener("click", () => {
   detectionTimestamps = [];
   renderProgress();
   copyBtn.hidden = true;
+  copyVkBtn.hidden = true;
+  copyIdBtn.hidden = true;
+  lastVkText = null;
+  lastIdText = null;
 });
 
 // For a long hex value (e.g. a 1952-byte ML-DSA-65 verification key, 3904 hex
@@ -245,16 +273,27 @@ document.getElementById("reset").addEventListener("click", () => {
 // message to send elsewhere. navigator.clipboard requires a secure context
 // (HTTPS or localhost), same requirement this page's camera access already
 // has (see README.md) -- no new deployment constraint.
-copyBtn.addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(resultEl.textContent);
-    copyBtn.textContent = "Copied!";
-    setTimeout(() => { copyBtn.textContent = "Copy result"; }, 1500);
-  } catch (e) {
-    copyBtn.textContent = "Copy failed";
-    setTimeout(() => { copyBtn.textContent = "Copy result"; }, 1500);
-  }
-});
+//
+// Shared by all three copy buttons (generic "copy everything", and the vk
+// result's separate "copy just the vk" / "copy just the id") -- getText is
+// called at click time, not bind time, so it always reads whatever the most
+// recent scan produced rather than a stale closed-over value.
+function wireCopyButton(btn, label, getText) {
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(getText());
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = label; }, 1500);
+    } catch (e) {
+      btn.textContent = "Copy failed";
+      setTimeout(() => { btn.textContent = label; }, 1500);
+    }
+  });
+}
+
+wireCopyButton(copyBtn, "Copy result", () => resultEl.textContent);
+wireCopyButton(copyVkBtn, "Copy VK", () => lastVkText);
+wireCopyButton(copyIdBtn, "Copy ID", () => lastIdText);
 
 // Continuous autofocus and torch are both device-gated (iPhones and most
 // laptop webcams expose neither) -- every call here is guarded by a real
