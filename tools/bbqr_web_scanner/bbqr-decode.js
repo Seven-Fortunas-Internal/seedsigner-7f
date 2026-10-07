@@ -25,6 +25,26 @@ function fromBase36Pair(pair) {
   return BASE36.indexOf(pair[0]) * 36 + BASE36.indexOf(pair[1]);
 }
 
+// root_id(): SHA-256 of the RAW key bytes (not the hex string's own UTF-8
+// bytes), truncated to the first 10 bytes, hex-encoded -- byte-for-byte port
+// of sf-core::genesis_config::root_id() (7fchain) / review_format.root_id()
+// (this device's own Python port). Uses the Web Crypto API (crypto.subtle),
+// present natively in both browsers (secure context -- same requirement
+// this page's camera access already has) and Node 19+, so no new
+// dependency. Returns null for input that isn't well-formed hex.
+async function rootId(hexText) {
+  const clean = String(hexText).trim().toLowerCase();
+  if (!/^[0-9a-f]+$/.test(clean) || clean.length % 2 !== 0) return null;
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.substr(i * 2, 2), 16);
+  }
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest).slice(0, 10))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 // RFC 4648 base32 decode, matching Python's base64.b32decode (uppercase
 // alphabet, '=' padding). No built-in JS equivalent, so hand-rolled --
 // this is the whole alphabet, nothing invented.
@@ -142,6 +162,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, rootId };
 
 });

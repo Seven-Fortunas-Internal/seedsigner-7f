@@ -156,8 +156,23 @@ function setStatus(text, cls) {
   statusEl.className = cls || "";
 }
 
-function renderResult(bytes) {
+// BBQrDecode.rootId() (bbqr-decode.js, shared with decode_cli.js so it's
+// covered by tests/test_bbqr_web_scanner.py) -- same fingerprint the device
+// itself shows on its "Subject key id" screen before export, and the same
+// one sf-root-coordinator's `status` command uses to identify a key, so
+// this is a genuine independent cross-check, not just redisplaying the input.
+
+// A 1952-byte ML-DSA-65 verification key is the only payload this project's
+// device ever exports as BBQr file_type 'U' (confirmed: the device's own
+// views/sevenf_views/_root_cert.py and _genesis.py are the only two 'U'
+// export sites, both vk hex) -- gate on that exact shape so a decoded value
+// that happens to also be plain hex text, but isn't a vk, doesn't get a
+// meaningless fingerprint shown next to it.
+const VK_HEX_LEN = 1952 * 2;
+
+async function renderResult(bytes) {
   let text;
+  let fingerprint = null;
   if (session.fileType === "J") {
     try {
       const obj = JSON.parse(new TextDecoder().decode(bytes));
@@ -167,10 +182,13 @@ function renderResult(bytes) {
     }
   } else if (session.fileType === "U") {
     text = new TextDecoder().decode(bytes);
+    if (text.trim().length === VK_HEX_LEN) {
+      fingerprint = await BBQrDecode.rootId(text);
+    }
   } else {
     text = `file_type=${session.fileType}, ${bytes.length} bytes\n\nhex:\n${bytesToHex(bytes)}`;
   }
-  resultEl.textContent = text;
+  resultEl.textContent = fingerprint ? `Subject key id (root_id): ${fingerprint}\n\n${text}` : text;
   setStatus(`Complete -- ${bytes.length} bytes decoded.`, "ok");
   copyBtn.hidden = false;
   copyBtn.textContent = "Copy result";
