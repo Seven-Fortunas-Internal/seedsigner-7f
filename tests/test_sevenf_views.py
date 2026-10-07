@@ -456,11 +456,13 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         )
 
 
-    def test_enrollment_chain_kind_select_derives_the_real_key_and_routes_to_export(self):
+    def test_enrollment_chain_kind_select_derives_the_real_key_and_routes_to_fingerprint(self):
         """ Unit-level: selecting a chain derives THIS seed's own real Root CA
-            key for that chain and routes straight to the VK export -- no
-            signing, no TBS, no review screen (there's nothing to review:
-            this operation makes no claim beyond "here is a public key"). """
+            key for that chain and routes to the fingerprint confirmation
+            screen -- no signing, no TBS, no multi-field review (there's
+            nothing to review: this operation makes no claim beyond "here is
+            a public key"), just the one on-screen fact worth confirming
+            before export. """
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
 
@@ -469,8 +471,54 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET (Mainnet=0, Testnet=1, Devnet=2)
             destination = view.run()
 
+        assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
+        assert destination.view_args["public_key"] == keys.root_ca.public_key
+
+
+    def test_fingerprint_view_shows_the_real_root_id_and_routes_to_export(self):
+        """ Confirms the on-screen fingerprint is the REAL root_id() of this
+            seed's own key (not a placeholder), matching 7fchain's own
+            sf-root-coordinator `status` id exactly -- the whole point is
+            that Patrick can independently recompute this same short value
+            from whatever vk Jorge sends and confirm it matches what was
+            read off the device screen. """
+        from seedsigner.models.sevenf.review_format import root_id
+
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+
+        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key)
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["text"] = kwargs["text"]
+            captured["status_headline"] = kwargs["status_headline"]
+            return 0
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            destination = view.run()
+
+        assert captured["status_headline"] == "Subject key id"
+        assert captured["text"] == root_id(keys.root_ca.public_key.hex())
+        assert len(captured["text"]) == 20  # 10 bytes, hex-encoded
+
         assert destination.View_cls == sevenf_views.SevenFExportRootVkQRView
         assert destination.view_args["public_key"] == keys.root_ca.public_key
+
+
+    def test_fingerprint_view_back_button_returns_to_back_stack_without_exporting(self):
+        from seedsigner.views.view import BackStackView
+
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key)
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
+            destination = view.run()
+
+        assert destination.View_cls == BackStackView
 
 
     def test_export_root_vk_qr_view_encodes_the_real_root_ca_pubkey(self):

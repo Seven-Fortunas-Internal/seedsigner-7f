@@ -155,8 +155,50 @@ class SevenFSelectChainKindForRootEnrollmentView(View):
         keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind)
 
         return Destination(
-            SevenFExportRootVkQRView,
+            SevenFRootVkFingerprintView,
             view_args=dict(public_key=keys.root_ca.public_key),
+        )
+
+
+
+class SevenFRootVkFingerprintView(View):
+    """ Shows the enrollment vk's short fingerprint (root_id -- the same
+        SHA-256-truncated id 7fchain's own sf-root-coordinator `status`
+        command uses to identify a key, per decision C17) directly on the
+        device screen before the QR export, so the operator has an
+        authoritative value read with their own eyes to compare against
+        whatever a phone scanner later decodes from the QR -- catching a
+        transport/encoding bug the QR round-trip alone couldn't surface.
+        Found live 2026-10-07, asked for mid-ceremony during the first real
+        testnet Root VK enrollment ("how can I verify it? -- can I display
+        it on the seedsigner screen?"). Same fingerprint convention as
+        root_self_cert_review_fields's "Subject key id" field, but this
+        operation has no review-fields flow of its own to attach it to
+        (derive-vk makes no claim beyond "here is a public key" -- nothing
+        else to review), so it gets this one small dedicated screen. """
+    def __init__(self, public_key: bytes):
+        super().__init__()
+        self.public_key = public_key
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import LargeIconStatusScreen
+        from seedsigner.models.sevenf.review_format import root_id
+
+        selected_menu_num = self.run_screen(
+            LargeIconStatusScreen,
+            title=_("Root VK"),
+            status_headline=_("Subject key id"),
+            text=root_id(self.public_key.hex()),
+            button_data=[ButtonOption("Continue to QR")],
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        return Destination(
+            SevenFExportRootVkQRView,
+            view_args=dict(public_key=self.public_key),
         )
 
 

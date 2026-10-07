@@ -61,6 +61,7 @@ from ._genesis import (
 from ._root_cert import (
     SevenFExportRootCertQRView,
     SevenFExportRootVkQRView,
+    SevenFRootVkFingerprintView,
     SevenFSelectChainKindForRootEnrollmentView,
     SevenFSelectChainKindForRootSelfCertView,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "SevenFGenesisReviewStartView",
     "SevenFGenesisSignedView",
     "SevenFRootCertSignedView",
+    "SevenFRootVkFingerprintView",
     "SevenFScanDeputyCsrView",
     "SevenFScanDevFundConfigView",
     "SevenFScanGenesisConfigView",
