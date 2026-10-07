@@ -112,6 +112,85 @@ class SevenFSelectChainKindForRootSelfCertView(View):
 
 
 
+class SevenFSelectChainKindForRootEnrollmentView(View):
+    """ Standalone Root enrollment: derive the Root CA verification key for a
+        chosen chain and export it as bare hex -- no genesis-ceremony state
+        required, no signing at all. Closes
+        7f-signing-support-standalone-pubkey-enrollment-menu-entry.
+
+        This is the real enrollment operation (sf-wallet-gov's `derive-vk`
+        equivalent, decision C17 -- see the decision record in
+        7f-signing-support-enrollment-payload-vs-root-self-cert): no
+        self-signature, no path, no fingerprint field, just the bare vk a
+        coordinator compiles into a node's trust list. Previously only
+        reachable as a side effect of SevenFExportPubkeyQRView being gated
+        behind starting a genesis-signing ceremony -- a Root holder who
+        hasn't signed genesis yet had no way to just publish their
+        enrollment key. Mirrors SevenFSelectChainKindForRootSelfCertView's
+        own chain-selection pattern exactly. """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "sevenf"):
+            return
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        kinds = list(ChainKind)
+        button_data = [ButtonOption(k.name.lower()) for k in kinds]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Root Enrollment: Chain"),
+            is_button_text_centered=True,
+            button_data=button_data,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        chain_kind = kinds[selected_menu_num]
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind)
+
+        return Destination(
+            SevenFExportRootVkQRView,
+            view_args=dict(public_key=keys.root_ca.public_key),
+        )
+
+
+
+class SevenFExportRootVkQRView(View):
+    """ Exports the Root CA verification key as bare hex, BBQr-encoded ('U':
+        unicode/plain-text) -- the real enrollment artifact. No signature, no
+        certificate, no path, no fingerprint: matches 7fchain's own
+        sf-wallet-gov `derive-vk --out` exactly (bare hex vk written to a
+        `<id>.vk` file; see sf-root-coordinator.rs's decision C17). Reuses
+        the identical export mechanic as _genesis.SevenFExportPubkeyQRView,
+        kept as its own small view rather than shared because the two have
+        different next destinations (that one returns to its own genesis
+        export menu; this one, like SevenFExportRootCertQRView, returns
+        straight to MainMenuView -- there's nothing else to do after a
+        standalone enrollment export). """
+    def __init__(self, public_key: bytes):
+        super().__init__()
+        self.public_key = public_key
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import QRDisplayScreen
+        from seedsigner.models.encode_qr import BBQrEncoder
+        pubkey_hex = self.public_key.hex().encode("utf-8")
+
+        self.run_screen(
+            QRDisplayScreen,
+            qr_encoder=BBQrEncoder(data=pubkey_hex, file_type="U"),  # 'U': BBQr unicode/plain-text
+        )
+        return Destination(MainMenuView, skip_current_view=True)
+
+
+
 class SevenFExportRootCertQRView(View):
     """ Exports the complete, assembled Root self-certification certificate
         as BBQr-encoded binary -- the Root self-cert PKCS#10-era rework's

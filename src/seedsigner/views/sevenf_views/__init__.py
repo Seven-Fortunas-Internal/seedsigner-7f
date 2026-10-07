@@ -60,6 +60,8 @@ from ._genesis import (
 )
 from ._root_cert import (
     SevenFExportRootCertQRView,
+    SevenFExportRootVkQRView,
+    SevenFSelectChainKindForRootEnrollmentView,
     SevenFSelectChainKindForRootSelfCertView,
 )
 from ._deputy_cert import (
@@ -85,6 +87,7 @@ __all__ = [
     "SevenFExportDeputyCertQRView",
     "SevenFExportPubkeyQRView",
     "SevenFExportRootCertQRView",
+    "SevenFExportRootVkQRView",
     "SevenFExportSignedConfigQRView",
     "SevenFExportSignedDevFundConfigQRView",
     "SevenFExportView",
@@ -98,6 +101,7 @@ __all__ = [
     "SevenFScanGenesisConfigView",
     "SevenFScanRootCertificateView",
     "SevenFSelectChainKindForDeputyCrossCertView",
+    "SevenFSelectChainKindForRootEnrollmentView",
     "SevenFSelectChainKindForRootSelfCertView",
     "SevenFSignedArtifact",
     "SevenFSignedCertificate",

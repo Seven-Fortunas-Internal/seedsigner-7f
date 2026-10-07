@@ -50,6 +50,7 @@
 <div>
   <button id="reset">Reset</button>
   <button id="torch" class="secondary" hidden>Torch: off</button>
+  <button id="copy" class="secondary" hidden>Copy result</button>
 </div>
 <div id="result"></div>
 
@@ -64,6 +65,7 @@ const progressEl = document.getElementById("progress");
 const gridEl = document.getElementById("grid");
 const missingEl = document.getElementById("missing");
 const resultEl = document.getElementById("result");
+const copyBtn = document.getElementById("copy");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const capture = document.getElementById("capture");
@@ -170,6 +172,8 @@ function renderResult(bytes) {
   }
   resultEl.textContent = text;
   setStatus(`Complete -- ${bytes.length} bytes decoded.`, "ok");
+  copyBtn.hidden = false;
+  copyBtn.textContent = "Copy result";
 }
 
 function handleDecodedText(text, now) {
@@ -196,6 +200,24 @@ document.getElementById("reset").addEventListener("click", () => {
   lastResult = null;
   detectionTimestamps = [];
   renderProgress();
+  copyBtn.hidden = true;
+});
+
+// For a long hex value (e.g. a 1952-byte ML-DSA-65 verification key, 3904 hex
+// characters), manually selecting and copying on a phone is slow and
+// error-prone -- this is specifically for pasting a decoded result into a
+// message to send elsewhere. navigator.clipboard requires a secure context
+// (HTTPS or localhost), same requirement this page's camera access already
+// has (see README.md) -- no new deployment constraint.
+copyBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(resultEl.textContent);
+    copyBtn.textContent = "Copied!";
+    setTimeout(() => { copyBtn.textContent = "Copy result"; }, 1500);
+  } catch (e) {
+    copyBtn.textContent = "Copy failed";
+    setTimeout(() => { copyBtn.textContent = "Copy result"; }, 1500);
+  }
 });
 
 // Continuous autofocus and torch are both device-gated (iPhones and most

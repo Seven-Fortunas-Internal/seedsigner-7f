@@ -423,6 +423,88 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         return seed
 
 
+    def test_seed_options_view_offers_the_enroll_root_vk_button_only_in_sevenf_mode(self):
+        """ Standalone enrollment entry (7f-signing-support-standalone-pubkey-
+            enrollment-menu-entry): "7F: Enroll Root (export VK)" -> no
+            genesis-ceremony state required, same chain-gating as every
+            other 7F menu button. """
+        seed = self.seed_fixture()
+        for active_chain_id, should_appear in [("sevenf", True), ("bitcoin", False), ("evm", False), (None, False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.SeedOptionsView(seed=seed)
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+            is_present = seed_views.SeedOptionsView.SEVENF_EXPORT_ROOT_VK in captured["button_data"]
+            assert is_present == should_appear, f"active_chain_id={active_chain_id!r}: expected present={should_appear}, got {is_present}"
+
+
+    def test_seed_options_view_routes_to_select_chain_kind_for_enrollment_view(self):
+        seed = self.seed_fixture()
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_EXPORT_ROOT_VK),
+                FlowStep(sevenf_views.SevenFSelectChainKindForRootEnrollmentView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_enrollment_chain_kind_select_derives_the_real_key_and_routes_to_export(self):
+        """ Unit-level: selecting a chain derives THIS seed's own real Root CA
+            key for that chain and routes straight to the VK export -- no
+            signing, no TBS, no review screen (there's nothing to review:
+            this operation makes no claim beyond "here is a public key"). """
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+
+        view = sevenf_views.SevenFSelectChainKindForRootEnrollmentView(seed=seed)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET (Mainnet=0, Testnet=1, Devnet=2)
+            destination = view.run()
+
+        assert destination.View_cls == sevenf_views.SevenFExportRootVkQRView
+        assert destination.view_args["public_key"] == keys.root_ca.public_key
+
+
+    def test_export_root_vk_qr_view_encodes_the_real_root_ca_pubkey(self):
+        """ Mirrors test_export_pubkey_qr_view_encodes_the_real_root_ca_pubkey
+            (the genesis-flow equivalent) -- same bare-hex/BBQr-'U' shape,
+            different (and simpler) next destination: straight to
+            MainMenuView, since a standalone enrollment export has nothing
+            else to offer afterward. """
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+
+        view = sevenf_views.SevenFExportRootVkQRView(public_key=keys.root_ca.public_key)
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["qr_encoder"] = kwargs["qr_encoder"]
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            destination = view.run()
+
+        encoder = captured["qr_encoder"]
+        assert encoder.file_type == "U"
+
+        d = DecodeQR()
+        while True:
+            status = d.add_data(encoder.next_part())
+            if status == DecodeQRStatus.COMPLETE:
+                break
+        assert d.decoder.get_data() == keys.root_ca.public_key.hex().encode("utf-8")
+
+        assert destination.View_cls == MainMenuView
+
+
     def test_seed_options_view_offers_the_self_certify_button_only_in_sevenf_mode(self):
         seed = self.seed_fixture()
         for active_chain_id, should_appear in [("sevenf", True), ("bitcoin", False), ("evm", False), (None, False)]:
