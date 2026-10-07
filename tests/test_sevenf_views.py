@@ -445,6 +445,34 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             assert is_present == should_appear, f"active_chain_id={active_chain_id!r}: expected present={should_appear}, got {is_present}"
 
 
+    def test_seed_options_view_omits_the_bip32_fingerprint_header_in_sevenf_mode(self):
+        """ The Seed Options screen's header is normally the seed's BIP-32
+            secp256k1 fingerprint -- meaningless in 7F/ML-DSA mode, where which
+            vk a seed implies depends on a ceremony role and chain_kind not yet
+            chosen on this screen (found 2026-10-06 comparing SeedSigner's
+            fields against sf-wallet-gov's "fingerprint" vs. "id" output;
+            root_id/"Subject key id" already matched -- this generic header is
+            the unrelated, genuinely-meaningless-here value). SeedOptionsScreen
+            falls back to a generic title when fingerprint is None. """
+        seed = self.seed_fixture()
+        for active_chain_id, expect_fingerprint in [("sevenf", False), ("bitcoin", True), ("evm", True)]:
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.SeedOptionsView(seed=seed)
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["fingerprint"] = kwargs.get("fingerprint")
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+            if expect_fingerprint:
+                assert captured["fingerprint"], f"active_chain_id={active_chain_id!r}: expected a real fingerprint"
+            else:
+                assert captured["fingerprint"] is None, f"active_chain_id={active_chain_id!r}: expected no fingerprint"
+
+
     def test_seed_options_view_routes_to_select_chain_kind_for_enrollment_view(self):
         seed = self.seed_fixture()
         self.run_sequence(

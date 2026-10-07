@@ -686,10 +686,21 @@ class SeedOptionsView(View):
 
         button_data.append(self.DISCARD)
         
+        # 7F/ML-DSA mode has no single canonical per-seed fingerprint the way
+        # Bitcoin's BIP-32 master key does -- which vk this seed implies depends
+        # on a ceremony role and chain_kind not yet chosen on this screen (see
+        # chains/sevenf/plugin.py). Showing the secp256k1 fingerprint here would
+        # be a value with no relationship to any 7F key; SeedOptionsScreen falls
+        # back to a generic title when fingerprint is omitted.
+        if self.controller.active_chain_id == "sevenf":
+            fingerprint = None
+        else:
+            fingerprint = self.seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+
         selected_menu_num = self.run_screen(
             seed_screens.SeedOptionsScreen,
             button_data=button_data,
-            fingerprint=self.seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK)),
+            fingerprint=fingerprint,
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:

@@ -445,9 +445,19 @@ class SeedOptionsScreen(ButtonListScreen):
     fingerprint: str = None
 
     def __post_init__(self):
-        self.top_nav_icon_name = SeedSignerIconConstants.FINGERPRINT
-        self.top_nav_icon_color = GUIConstants.INFO_COLOR
-        self.title = self.fingerprint
+        if self.fingerprint:
+            self.top_nav_icon_name = SeedSignerIconConstants.FINGERPRINT
+            self.top_nav_icon_color = GUIConstants.INFO_COLOR
+            self.title = self.fingerprint
+        else:
+            # No fingerprint passed in -- a chain without one canonical per-seed
+            # key (e.g. 7F/ML-DSA: which vk this seed implies depends on a
+            # ceremony role and chain_kind not yet chosen on this screen) has
+            # nothing meaningful to show here. Falling back to the BIP-32
+            # secp256k1 fingerprint in that case would display a value with no
+            # relationship to any key the operator is about to use.
+            self.top_nav_icon_name = SeedSignerIconConstants.SEEDS
+            self.title = _("Seed Options")
         self.is_button_text_centered = False
         self.is_bottom_list = True
 
