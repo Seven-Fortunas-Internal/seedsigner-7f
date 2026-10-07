@@ -56,7 +56,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js"></script>
+<script src="bbqr-decode.js?v=20261007a"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -183,7 +183,20 @@ async function renderResult(bytes) {
   } else if (session.fileType === "U") {
     text = new TextDecoder().decode(bytes);
     if (text.trim().length === VK_HEX_LEN) {
-      fingerprint = await BBQrDecode.rootId(text);
+      // A failure here (e.g. a stale cached bbqr-decode.js from before
+      // rootId() existed, or an unsupported crypto.subtle) must never
+      // prevent the actual decoded result below from displaying -- that's
+      // the primary thing this page exists to show. Found live 2026-10-07:
+      // this was previously unguarded, and because renderResult() is
+      // async, a thrown error here aborted the whole function before
+      // resultEl.textContent was ever set, with no visible error at all --
+      // the scan looked complete but nothing displayed.
+      try {
+        fingerprint = await BBQrDecode.rootId(text);
+      } catch (e) {
+        console.warn("root_id computation failed:", e.message);
+        fingerprint = `(unavailable: ${e.message} -- try a hard refresh)`;
+      }
     }
   } else {
     text = `file_type=${session.fileType}, ${bytes.length} bytes\n\nhex:\n${bytesToHex(bytes)}`;
@@ -204,7 +217,12 @@ function handleDecodedText(text, now) {
     renderProgress(result.isNew ? result.index : undefined);
     if (session.isComplete) {
       const bytes = session.decode();
-      renderResult(bytes);
+      // renderResult() is async -- a rejection from it is NOT caught by
+      // this surrounding try/catch (that only covers the synchronous call
+      // itself), so without this .catch() a later failure inside it would
+      // fail silently: the scan would look complete with no result and no
+      // visible error. Found live 2026-10-07.
+      renderResult(bytes).catch((e) => setStatus(`Failed to render result: ${e.message}`, "error"));
     }
   } catch (e) {
     setStatus(e.message, "error");
