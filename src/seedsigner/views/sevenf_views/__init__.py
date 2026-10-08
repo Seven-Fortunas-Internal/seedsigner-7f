@@ -71,6 +71,8 @@ from ._key_index import (
     SevenFSelectKeyIndexView,
 )
 from ._root_cert import (
+    SevenFBuildRootSelfCertView,
+    SevenFDeriveEnrollmentVkView,
     SevenFExportRootCertQRView,
     SevenFExportRootVkQRView,
     SevenFRootVkFingerprintView,
@@ -86,6 +88,7 @@ from ._deputy_cert import (
     SevenFSelectChainKindForDeputyCrossCertView,
 )
 from ._devfund import (
+    SevenFDevFundReviewStartView,
     SevenFConfirmSignDevFundView,
     SevenFDevFundConfigSignedView,
     SevenFExportSignedDevFundConfigQRView,
@@ -94,6 +97,9 @@ from ._devfund import (
 )
 
 __all__ = [
+    "SevenFDevFundReviewStartView",
+    "SevenFDeriveEnrollmentVkView",
+    "SevenFBuildRootSelfCertView",
     "SevenFCertRequestReviewFieldView",
     "SevenFConfirmKeyIndexView",
     "SevenFConfirmSignDevFundView",

@@ -112,8 +112,9 @@ class SevenFInvalidKeyIndexView(_KeyIndexStep):
 class SevenFConfirmKeyIndexView(_KeyIndexStep):
     """ One deliberate extra step before a nonzero index: our practice is one
         phrase per key at index 0 (7fchain#7), so a nonzero index should only
-        ever be chosen on purpose. The seed label is always the index-0 Root
-        ski (it names the phrase), so the screen says so. """
+        ever be chosen on purpose. (The seed label stays the index-0 Root ski:
+        it names the phrase. The operator guide says so; on this screen the
+        sentence didn't fit at a long index.) """
     def __init__(self, role: str, key_index: int, next_destination: type, next_view_args: dict):
         super().__init__(role, next_destination, next_view_args)
         key_index_segment(key_index)
@@ -128,8 +129,7 @@ class SevenFConfirmKeyIndexView(_KeyIndexStep):
             WarningScreen,
             title=self.title,
             status_headline=_("Index {}").format(self.key_index),
-            text=_("Not the default. Use it only if this key was made at index {}. "
-                   "The seed label stays the index 0 key's.").format(self.key_index),
+            text=_("Not the default. Use it only if this key was made at index {}.").format(self.key_index),
             button_data=[ButtonOptionWithoutTranslation(_("Use index {}").format(self.key_index))],
         )
 

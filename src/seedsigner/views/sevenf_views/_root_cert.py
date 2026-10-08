@@ -26,7 +26,9 @@ from ._common import (
     SevenFConfirmSignRootCertView,
     SevenFSignedCertificate,
     SevenFUnsupportedArtefactView,
+    key_index_review_field,
 )
+from ._key_index import SevenFSelectKeyIndexView
 
 
 class SevenFSelectChainKindForRootSelfCertView(View):
@@ -80,8 +82,29 @@ class SevenFSelectChainKindForRootSelfCertView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        chain_kind = kinds[selected_menu_num]
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind)
+        return Destination(SevenFSelectKeyIndexView, view_args=dict(
+            role="root",
+            next_destination=SevenFBuildRootSelfCertView,
+            next_view_args=dict(seed=self.seed, chain_kind=kinds[selected_menu_num]),
+        ))
+
+
+
+class SevenFBuildRootSelfCertView(View):
+    """ After the network and the Root key index: derive that key, build the
+        certificate body and its review fields (7f-signing-support-key-index-
+        selector). Moved out of the network view, which used to do this
+        inline, because the key depends on the index. """
+    def __init__(self, seed: Seed, chain_kind: ChainKind, key_index: int):
+        super().__init__()
+        self.seed = seed
+        self.chain_kind = chain_kind
+        self.key_index = key_index
+
+
+    def run(self):
+        chain_kind = self.chain_kind
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind, self.key_index)
         subject_vk = keys.root_ca.public_key
         serial = cert_request.generate_serial()
         not_before = ceremony_now(self.controller)
@@ -101,7 +124,10 @@ class SevenFSelectChainKindForRootSelfCertView(View):
         # Deputy's TBS, which clamps to the issuing Root's own window), so
         # this is the exact value the TBS just built also carries.
         not_after = not_before + days * 86_400
-        review_fields = cert_request.root_self_cert_review_fields(subject_vk, chain_kind, not_before, not_after, serial)
+        review_fields = [
+            key_index_review_field(chain_kind, self.key_index),
+            *cert_request.root_self_cert_review_fields(subject_vk, chain_kind, not_before, not_after, serial),
+        ]
 
         return Destination(
             SevenFCertRequestReviewFieldView,
@@ -113,11 +139,13 @@ class SevenFSelectChainKindForRootSelfCertView(View):
                     seed=self.seed,
                     chain_kind=chain_kind,
                     tbs_bytes=tbs_bytes,
+                    key_index=self.key_index,
                     signed_view_args=dict(
                         export_destination=SevenFExportRootCertQRView,
                     ),
                 ),
             ),
+            skip_current_view=True,
         )
 
 
@@ -161,13 +189,11 @@ class SevenFSelectChainKindForRootEnrollmentView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        chain_kind = kinds[selected_menu_num]
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind)
-
-        return Destination(
-            SevenFRootVkFingerprintView,
-            view_args=dict(public_key=keys.root_ca.public_key, title=_("Root VK"), role="root"),
-        )
+        return Destination(SevenFSelectKeyIndexView, view_args=dict(
+            role="root",
+            next_destination=SevenFDeriveEnrollmentVkView,
+            next_view_args=dict(seed=self.seed, chain_kind=kinds[selected_menu_num], role="root"),
+        ))
 
 
 
@@ -202,11 +228,42 @@ class SevenFSelectChainKindForDevfundEnrollmentView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        devfund = root_ceremony.derive_devfund_key(self.seed.seed_bytes, kinds[selected_menu_num])
+        return Destination(SevenFSelectKeyIndexView, view_args=dict(
+            role="devfund",
+            next_destination=SevenFDeriveEnrollmentVkView,
+            next_view_args=dict(seed=self.seed, chain_kind=kinds[selected_menu_num], role="devfund"),
+        ))
+
+
+
+class SevenFDeriveEnrollmentVkView(View):
+    """ After the network and the key index: derive the Root or dev-fund
+        key at that index and show its ski (7f-signing-support-key-index-
+        selector). The dev-fund index is asked for on its own; it is never
+        taken from the Root index (what pairs them is open on 7fchain#7). """
+    def __init__(self, seed: Seed, chain_kind: ChainKind, role: str, key_index: int):
+        super().__init__()
+        self.seed = seed
+        self.chain_kind = chain_kind
+        self.role = role
+        self.key_index = key_index
+
+
+    def run(self):
+        if self.role == "root":
+            public_key = root_ceremony.derive_root_ceremony_keys(
+                self.seed.seed_bytes, self.chain_kind, self.key_index).root_ca.public_key
+            title = _("Root VK")
+        elif self.role == "devfund":
+            public_key = root_ceremony.derive_devfund_key(self.seed.seed_bytes, self.chain_kind, self.key_index).public_key
+            title = _("Dev-fund VK")
+        else:
+            raise ValueError(f"no enrollment key for role {self.role!r}")
 
         return Destination(
             SevenFRootVkFingerprintView,
-            view_args=dict(public_key=devfund.public_key, title=_("Dev-fund VK"), role="devfund"),
+            view_args=dict(public_key=public_key, title=title, role=self.role, key_index=self.key_index),
+            skip_current_view=True,
         )
 
 
@@ -227,10 +284,11 @@ class SevenFRootVkFingerprintView(View):
         (derive-vk makes no claim beyond "here is a public key" -- nothing
         else to review), so it gets this one small dedicated screen. Shared
         by Root and dev-fund enrollment; `title` says which key this is. """
-    def __init__(self, public_key: bytes, title: str, role: str = "root"):
+    def __init__(self, public_key: bytes, title: str, key_index: int, role: str = "root"):
         super().__init__()
         self.public_key = public_key
         self.title = title
+        self.key_index = key_index
         self.role = role
 
 
@@ -242,7 +300,8 @@ class SevenFRootVkFingerprintView(View):
             LargeIconStatusScreen,
             title=self.title,
             status_headline=_("Subject key id"),
-            text=group_hex_for_display(ski(self.public_key.hex())),
+            # The index on its own line: in the headline it runs off the screen.
+            text=group_hex_for_display(ski(self.public_key.hex())) + "\n" + _("index {}").format(self.key_index),
             button_data=[ButtonOption("Next")],
         )
 
@@ -251,7 +310,7 @@ class SevenFRootVkFingerprintView(View):
 
         return Destination(
             SevenFVkPinView,
-            view_args=dict(public_key=self.public_key, title=self.title, role=self.role),
+            view_args=dict(public_key=self.public_key, title=self.title, role=self.role, key_index=self.key_index),
         )
 
 
@@ -265,10 +324,11 @@ class SevenFVkPinView(View):
         the phone scanner computes it from whatever it scanned, so it would
         agree with a bad scan. Own screen because 64 hex (16 groups) doesn't
         fit beside the subject key id. """
-    def __init__(self, public_key: bytes, title: str, role: str = "root"):
+    def __init__(self, public_key: bytes, title: str, key_index: int, role: str = "root"):
         super().__init__()
         self.public_key = public_key
         self.title = title
+        self.key_index = key_index
         self.role = role
 
 
@@ -279,7 +339,7 @@ class SevenFVkPinView(View):
         selected_menu_num = self.run_screen(
             LargeIconStatusScreen,
             title=self.title,
-            status_headline=_("Pin"),
+            status_headline=_("Index {}: pin").format(self.key_index),
             text=group_hex_for_display(pin(self.public_key.hex())),
             button_data=[ButtonOption("Continue to QR")],
         )
@@ -372,6 +432,7 @@ class SevenFExportRootCertQRView(View):
         # to the Root VK (ski -> pin -> QR) in the same sitting.
         return Destination(
             SevenFRootVkFingerprintView,
-            view_args=dict(public_key=self.certificate.public_key, title=_("Root VK"), role="root"),
+            view_args=dict(public_key=self.certificate.public_key, title=_("Root VK"), role="root",
+                           key_index=self.certificate.key_index),
             skip_current_view=True,
         )

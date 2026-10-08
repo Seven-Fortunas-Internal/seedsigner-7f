@@ -30,7 +30,9 @@ from ._common import (
     SevenFConfirmSignRootCertView,
     SevenFSignedCertificate,
     SevenFUnsupportedArtefactView,
+    key_index_review_field,
 )
+from ._key_index import SevenFSelectKeyIndexView
 
 
 class SevenFSelectChainKindForDeputyCrossCertView(View):
@@ -78,10 +80,13 @@ class SevenFSelectChainKindForDeputyCrossCertView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
-        return Destination(
-            SevenFScanRootCertificateView,
-            view_args=dict(seed=self.seed, chain_kind=kinds[selected_menu_num]),
-        )
+        # Which of this seed's Root keys issues the Deputy certificate
+        # (sf-wallet-gov sign-deputy-cert --index N).
+        return Destination(SevenFSelectKeyIndexView, view_args=dict(
+            role="root",
+            next_destination=SevenFScanRootCertificateView,
+            next_view_args=dict(seed=self.seed, chain_kind=kinds[selected_menu_num]),
+        ))
 
 
 
@@ -113,10 +118,11 @@ class SevenFScanRootCertificateView(ScanView):
     invalid_qr_type_message = _mft("Expected a Root certificate QR (BBQr, from the coordinator)")
 
 
-    def __init__(self, seed: Seed, chain_kind: ChainKind):
+    def __init__(self, seed: Seed, chain_kind: ChainKind, key_index: int):
         super().__init__()
         self.seed = seed
         self.chain_kind = chain_kind
+        self.key_index = key_index
 
         if guard_active_chain(self, "sevenf"):
             return
@@ -145,18 +151,19 @@ class SevenFScanRootCertificateView(ScanView):
                              root_cert.chain_kind.name.lower(), self.chain_kind.name.lower()),
             ))
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, self.key_index)
         if root_cert.subject_vk != keys.root_ca.public_key:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 headline=_("Wrong Key"),
                 reason=_("This certificate is for a different Root's key. This seed's own Root CA key for "
-                         "{} does not match the subject key in the scanned certificate.").format(
-                             self.chain_kind.name.lower()),
+                         "{} at index {} does not match the subject key in the scanned certificate.").format(
+                             self.chain_kind.name.lower(), self.key_index),
             ))
 
         return Destination(
             SevenFScanDeputyCsrView,
-            view_args=dict(seed=self.seed, chain_kind=self.chain_kind, root_cert_der=data, root_cert=root_cert),
+            view_args=dict(seed=self.seed, chain_kind=self.chain_kind, key_index=self.key_index,
+                           root_cert_der=data, root_cert=root_cert),
             skip_current_view=True,
         )
 
@@ -180,10 +187,11 @@ class SevenFScanDeputyCsrView(ScanView):
     invalid_qr_type_message = _mft("Expected a Deputy certificate request QR (BBQr, from the coordinator)")
 
 
-    def __init__(self, seed: Seed, chain_kind: ChainKind, root_cert_der: bytes, root_cert):
+    def __init__(self, seed: Seed, chain_kind: ChainKind, key_index: int, root_cert_der: bytes, root_cert):
         super().__init__()
         self.seed = seed
         self.chain_kind = chain_kind
+        self.key_index = key_index
         self.root_cert_der = root_cert_der
         self.root_cert = root_cert
 
@@ -221,9 +229,10 @@ class SevenFScanDeputyCsrView(ScanView):
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't build the Deputy certificate body: {}").format(e)))
 
-        review_fields = cert_request.deputy_cross_cert_v2_review_fields(
-            self.root_cert, csr, self.chain_kind, now, days, serial,
-        )
+        review_fields = [
+            key_index_review_field(self.chain_kind, self.key_index),
+            *cert_request.deputy_cross_cert_v2_review_fields(self.root_cert, csr, self.chain_kind, now, days, serial),
+        ]
 
         return Destination(
             SevenFCertRequestReviewFieldView,
@@ -235,6 +244,7 @@ class SevenFScanDeputyCsrView(ScanView):
                     seed=self.seed,
                     chain_kind=self.chain_kind,
                     tbs_bytes=tbs_bytes,
+                    key_index=self.key_index,
                     root_cert_der=self.root_cert_der,
                     signed_view_args=dict(
                         title=_("Deputy Certificate Signed"),

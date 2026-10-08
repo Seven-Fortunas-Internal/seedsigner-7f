@@ -22,7 +22,7 @@ from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.review import ReviewField
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import root_ceremony
-from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.constants import ChainKind, root_path
 from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 
@@ -42,6 +42,7 @@ class SevenFSignedCertificate:
     signature: bytes
     tbs_bytes: bytes
     root_cert_der: bytes | None = None
+    key_index: int = 0  # the Root key index it was signed at, for the ski/pin screens after export
 
 # Conservative, character-count-based page budget for a single review field's
 # value -- found live 2026-09-27 (7F hardware walkthrough): the genesis-
@@ -143,6 +144,42 @@ class SevenFUnsupportedArtefactView(View):
             button_data=[ButtonOption("OK")],
         )
         return Destination(MainMenuView, skip_current_view=True)
+
+
+
+def subject_key_id_with_index(public_key: bytes, key_index: int) -> str:
+    """ The ski as the device shows it, with the key index on its own line
+        under it (7f-signing-support-key-index-selector). Its own line because
+        "signing as Root CA, index 4294967295" runs off a 240px screen;
+        rendered at the maximum index, 2026-10-08. """
+    return group_hex_for_display(ski(public_key.hex())) + "\n" + _("index {}").format(key_index)
+
+
+def key_index_review_field(chain_kind: ChainKind, key_index: int) -> ReviewField:
+    """ The first review page of every Root-signed artefact: which key will
+        sign, by index and full path, as sf-wallet-gov prints it ("signing as
+        root <ski> (<path>)"). The path is one word wider than the screen at a
+        long index, so it breaks before "ml-dsa". A warning when the index is
+        not the default. """
+    head, tail = root_path(chain_kind, key_index).split("ml-dsa/", 1)
+    return ReviewField(
+        label=_("Root key"),
+        value=_("index {}").format(key_index) + "\n" + head + "\nml-dsa/" + tail,
+        is_warning=key_index != 0,
+        warning_detail=_("Not the default index 0") if key_index != 0 else "",
+    )
+
+
+def refuse_unless_signed_by_shown_key(signed_with: bytes, shown: bytes):
+    """ Fail closed if the key that signed is not the key the confirm screen
+        showed (a lost index would sign at 0 under a key shown at N). Returns
+        a refusal Destination, or None when they match. """
+    if signed_with == shown:
+        return None
+    return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+        headline=_("Key Mismatch"),
+        reason=_("The signing key is not the key shown for confirmation. Nothing was exported; start again."),
+    ))
 
 
 
@@ -254,17 +291,19 @@ class SevenFConfirmSignRootCertView(View):
         `signed_view_args` is the one thing that differs between them (the
         success message's wording, and which export view follows), passed
         straight through to SevenFRootCertSignedView. """
-    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, root_cert_der: bytes | None = None, signed_view_args: dict | None = None):
+    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, key_index: int, root_cert_der: bytes | None = None, signed_view_args: dict | None = None):
         super().__init__()
         self.seed = seed
         self.chain_kind = chain_kind
         self.tbs_bytes = tbs_bytes
+        self.key_index = key_index
         self.root_cert_der = root_cert_der
         self.signed_view_args = signed_view_args or {}
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, key_index)
+        self.public_key = keys.root_ca.public_key
         self.root_ca_address = keys.root_ca.address
-        self.subject_key_id = group_hex_for_display(ski(keys.root_ca.public_key.hex()))
+        self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, key_index)
 
 
     def run(self):
@@ -286,9 +325,14 @@ class SevenFConfirmSignRootCertView(View):
             self.chain_kind,
             self.tbs_bytes,
             confirmed=True,
+            index=self.key_index,
         )
+        refused = refuse_unless_signed_by_shown_key(public_key, self.public_key)
+        if refused:
+            return refused
         certificate = SevenFSignedCertificate(
             public_key=public_key, signature=signature, tbs_bytes=self.tbs_bytes, root_cert_der=self.root_cert_der,
+            key_index=self.key_index,
         )
         return Destination(
             SevenFRootCertSignedView,

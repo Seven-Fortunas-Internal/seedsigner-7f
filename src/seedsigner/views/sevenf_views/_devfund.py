@@ -12,12 +12,17 @@ from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import devfund_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 from seedsigner.models.sevenf.devfund_config import DevFundConfigError, DevFundConfigJsonError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
-from ._common import refuse_on_unexpected_error, SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView
+from seedsigner.models.review import ReviewField
+
+from ._common import (
+    refuse_on_unexpected_error, SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView,
+    key_index_review_field, refuse_unless_signed_by_shown_key, subject_key_id_with_index,
+)
+from ._key_index import SevenFSelectKeyIndexView
 
 
 @dataclass(frozen=True)
@@ -82,16 +87,50 @@ class SevenFScanDevFundConfigView(ScanView):
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't parse this as a devfund-config: the bytes to sign don't match the file")))
 
+        # Signed with the ROOT key (sf-wallet-gov sign-devfund --index N signs
+        # as Role::Root), so this asks for the Root index, not a dev-fund one.
+        return Destination(
+            SevenFSelectKeyIndexView,
+            view_args=dict(
+                role="root",
+                next_destination=SevenFDevFundReviewStartView,
+                next_view_args=dict(
+                    seed=self.seed,
+                    chain_kind=fields.network,
+                    canonical_bytes=canonical_bytes,
+                    review_fields=devfund_config.review_fields(fields, canonical_bytes=canonical_bytes),
+                ),
+            ),
+            skip_current_view=True,
+        )
+
+
+
+class SevenFDevFundReviewStartView(View):
+    """ After the Root key index: the review pages, with the signing key
+        first (7f-signing-support-key-index-selector). """
+    def __init__(self, seed: Seed, chain_kind: ChainKind, canonical_bytes: bytes,
+                 review_fields: list[ReviewField], key_index: int):
+        super().__init__()
+        self.seed = seed
+        self.chain_kind = chain_kind
+        self.canonical_bytes = canonical_bytes
+        self.review_fields = review_fields
+        self.key_index = key_index
+
+
+    def run(self):
         return Destination(
             SevenFCertRequestReviewFieldView,
             view_args=dict(
-                review_fields=devfund_config.review_fields(fields, canonical_bytes=canonical_bytes),
+                review_fields=[key_index_review_field(self.chain_kind, self.key_index), *self.review_fields],
                 page_title=_("Review Devfund Config"),
                 confirmed_destination=SevenFConfirmSignDevFundView,
                 confirmed_view_args=dict(
                     seed=self.seed,
-                    chain_kind=fields.network,
-                    tbs_bytes=canonical_bytes,
+                    chain_kind=self.chain_kind,
+                    tbs_bytes=self.canonical_bytes,
+                    key_index=self.key_index,
                 ),
             ),
             skip_current_view=True,
@@ -126,15 +165,17 @@ class SevenFConfirmSignDevFundView(View):
         Reuses root_ceremony.sign_with_devfund() unmodified. This is the
         ONLY caller permitted to pass confirmed=True for this flow, same
         contract as _common.SevenFConfirmSignRootCertView. """
-    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes):
+    def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, key_index: int):
         super().__init__()
         self.seed = seed
         self.chain_kind = chain_kind
         self.tbs_bytes = tbs_bytes
+        self.key_index = key_index
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, key_index)
+        self.public_key = keys.devfund.public_key
         self.devfund_address = keys.devfund.address
-        self.subject_key_id = group_hex_for_display(ski(keys.devfund.public_key.hex()))
+        self.subject_key_id = subject_key_id_with_index(keys.devfund.public_key, key_index)
 
 
     def run(self):
@@ -157,7 +198,11 @@ class SevenFConfirmSignDevFundView(View):
             self.chain_kind,
             self.tbs_bytes,
             confirmed=True,
+            index=self.key_index,
         )
+        refused = refuse_unless_signed_by_shown_key(public_key, self.public_key)
+        if refused:
+            return refused
         artifact = SevenFSignedArtifact(public_key=public_key, signature=signature)
         return Destination(SevenFDevFundConfigSignedView, view_args=dict(artifact=artifact))
 

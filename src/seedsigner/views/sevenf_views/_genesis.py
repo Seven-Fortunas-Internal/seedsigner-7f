@@ -38,12 +38,15 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import genesis_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
-from ._common import refuse_on_unexpected_error, SevenFUnsupportedArtefactView, _review_pages
+from ._common import (
+    refuse_on_unexpected_error, SevenFUnsupportedArtefactView, _review_pages,
+    key_index_review_field, refuse_unless_signed_by_shown_key, subject_key_id_with_index,
+)
+from ._key_index import SevenFSelectKeyIndexView
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ class SevenFGenesisCeremonyState:
     chain_kind: ChainKind
     canonical_bytes: bytes
     review_fields: list[ReviewField]
+    key_index: int
     public_key: bytes | None = None
     signature: bytes | None = None
 
@@ -130,9 +134,14 @@ class SevenFScanGenesisConfigView(ScanView):
             fields.chain_kind, fields.timestamp, fields.message, fields.consensus,
         )
 
+        # Which of this seed's Root keys signs (sf-wallet-gov sign-genesis --index N).
         return Destination(
-            SevenFGenesisReviewStartView,
-            view_args=dict(seed=self.seed, canonical_bytes=canonical_bytes),
+            SevenFSelectKeyIndexView,
+            view_args=dict(
+                role="root",
+                next_destination=SevenFGenesisReviewStartView,
+                next_view_args=dict(seed=self.seed, canonical_bytes=canonical_bytes),
+            ),
             skip_current_view=True,
         )
 
@@ -153,14 +162,21 @@ class SevenFGenesisReviewStartView(View):
         chain_kind as an independent argument; caught and fixed while
         wiring the real scan/export flow, before any scan entry point ever
         shipped a caller that could have supplied a mismatched value. """
-    def __init__(self, seed: Seed, canonical_bytes: bytes):
+    def __init__(self, seed: Seed, canonical_bytes: bytes, key_index: int):
         super().__init__()
         fields = genesis_config.parse_canonical_bytes(canonical_bytes)
         self.state = SevenFGenesisCeremonyState(
             seed=seed,
             chain_kind=fields.chain_kind,
             canonical_bytes=canonical_bytes,
-            review_fields=genesis_config.review_fields(fields, canonical_bytes=canonical_bytes),
+            # The key comes first, then the content (prepended here, not in
+            # genesis_config.review_fields, which the plugin and the parity
+            # tests share).
+            review_fields=[
+                key_index_review_field(fields.chain_kind, key_index),
+                *genesis_config.review_fields(fields, canonical_bytes=canonical_bytes),
+            ],
+            key_index=key_index,
         )
 
 
@@ -236,9 +252,10 @@ class SevenFConfirmSignView(View):
         super().__init__()
         self.state = state
 
-        keys = root_ceremony.derive_root_ceremony_keys(state.seed.seed_bytes, state.chain_kind)
+        keys = root_ceremony.derive_root_ceremony_keys(state.seed.seed_bytes, state.chain_kind, state.key_index)
+        self.public_key = keys.root_ca.public_key
         self.root_ca_address = keys.root_ca.address
-        self.subject_key_id = group_hex_for_display(ski(keys.root_ca.public_key.hex()))
+        self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, state.key_index)
 
 
     def run(self):
@@ -260,7 +277,11 @@ class SevenFConfirmSignView(View):
             self.state.chain_kind,
             self.state.canonical_bytes,
             confirmed=True,
+            index=self.state.key_index,
         )
+        refused = refuse_unless_signed_by_shown_key(public_key, self.public_key)
+        if refused:
+            return refused
         signed_state = replace(self.state, public_key=public_key, signature=signature)
         return Destination(SevenFGenesisSignedView, view_args=dict(state=signed_state))
 

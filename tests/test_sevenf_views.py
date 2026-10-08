@@ -41,6 +41,17 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _past_key_index(destination, role: str = "root", key_index: int = 0):
+    """ The network views now route to the shared key index step
+        (7f-signing-support-key-index-selector); this checks that, then runs
+        the view that step continues to (a redirect: it shows no screen)
+        with the index chosen, and returns where that goes. """
+    assert destination.View_cls == sevenf_views.SevenFSelectKeyIndexView
+    assert destination.view_args["role"] == role
+    view = destination.view_args["next_destination"](**destination.view_args["next_view_args"], key_index=key_index)
+    return view.run()
+
+
 def _sample_canonical_bytes() -> bytes:
     consensus = ConsensusParams(target_block_time_secs=420, difficulty_adjustment_interval_blocks=3500, blocks_per_decay_period=70_000)
     return build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", consensus)
@@ -94,7 +105,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             (7f-review-ceremony-data-untyped-shared-dict: this flow's state
             is threaded through view_args now, not a controller global). """
         start_view = sevenf_views.SevenFGenesisReviewStartView(
-            seed=seed, canonical_bytes=canonical_bytes,
+            key_index=0, seed=seed, canonical_bytes=canonical_bytes,
         )
         destination = start_view.run()
         assert destination.View_cls == sevenf_views.SevenFGenesisReviewFieldView
@@ -116,6 +127,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
 
         self.run_sequence(
             [
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Root key (index and path)
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Chain (1/7)
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Timestamp (2/7)
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Message (3/7)
@@ -155,6 +167,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
 
         self.run_sequence(
             [
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Root key
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
@@ -226,7 +239,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
         state = sevenf_views.SevenFGenesisCeremonyState(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
         )
 
         view = sevenf_views.SevenFConfirmSignView(state=state)
@@ -248,7 +261,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
         state = sevenf_views.SevenFGenesisCeremonyState(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
         )
 
         view = sevenf_views.SevenFConfirmSignView(state=state)
@@ -273,7 +286,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             :sevenf_views.SevenFGenesisReviewStartView.__init__.__code__.co_argcount
         ]
 
-        view = sevenf_views.SevenFGenesisReviewStartView(seed=seed, canonical_bytes=canonical_bytes)
+        view = sevenf_views.SevenFGenesisReviewStartView(key_index=0, seed=seed, canonical_bytes=canonical_bytes)
         assert view.state.chain_kind == ChainKind.TESTNET
 
 
@@ -286,7 +299,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         canonical_bytes = _sample_canonical_bytes()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         state = sevenf_views.SevenFGenesisCeremonyState(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
             review_fields=[], public_key=keys.root_ca.public_key, signature=b"\x00" * 3309,
         )
 
@@ -332,7 +345,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         signature = bytes(range(256)) * 12 + bytes(3309 - 256 * 12)  # 3309 varied bytes, not all-zero
         state = sevenf_views.SevenFGenesisCeremonyState(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
             review_fields=[], public_key=keys.root_ca.public_key, signature=signature,
         )
 
@@ -370,7 +383,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
         state = sevenf_views.SevenFGenesisCeremonyState(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes, review_fields=[],
         )
 
         view = sevenf_views.SevenFExportView(state=state)
@@ -519,11 +532,12 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         view = sevenf_views.SevenFSelectChainKindForRootEnrollmentView(seed=seed)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET (Mainnet=0, Testnet=1, Devnet=2)
-            destination = view.run()
+            destination = _past_key_index(view.run())
 
         assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
         assert destination.view_args["public_key"] == keys.root_ca.public_key
         assert destination.view_args["title"] == "Root VK"
+        assert destination.view_args["key_index"] == 0
 
 
     def test_fingerprint_view_shows_the_real_ski_and_routes_to_export(self):
@@ -537,7 +551,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
 
-        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key, title="Root VK")
+        view = sevenf_views.SevenFRootVkFingerprintView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
@@ -551,8 +565,9 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             destination = view.run()
 
         assert captured["status_headline"] == "Subject key id"
-        assert captured["text"] == group_hex_for_display(ski(keys.root_ca.public_key.hex()))
-        assert len(captured["text"].replace(" ", "")) == 40  # 20 bytes, hex-encoded
+        # The ski, then the key index on its own line (7f-signing-support-key-index-selector).
+        assert captured["text"] == group_hex_for_display(ski(keys.root_ca.public_key.hex())) + "\nindex 0"
+        assert len(captured["text"].split("\n")[0].replace(" ", "")) == 40  # 20 bytes, hex-encoded
         assert captured["title"] == "Root VK"
 
         assert destination.View_cls == sevenf_views.SevenFVkPinView
@@ -565,7 +580,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
 
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key, title="Root VK")
+        view = sevenf_views.SevenFRootVkFingerprintView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
@@ -584,7 +599,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
 
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        view = sevenf_views.SevenFVkPinView(public_key=keys.root_ca.public_key, title="Root VK")
+        view = sevenf_views.SevenFVkPinView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
@@ -596,7 +611,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             destination = view.run()
 
         assert captured["title"] == "Root VK"
-        assert captured["status_headline"] == "Pin"
+        assert captured["status_headline"] == "Index 0: pin"
         assert captured["text"] == group_hex_for_display(hashlib.sha256(keys.root_ca.public_key).hexdigest())
         assert destination.View_cls == sevenf_views.SevenFExportRootVkQRView
         assert destination.view_args["public_key"] == keys.root_ca.public_key
@@ -607,7 +622,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
 
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        view = sevenf_views.SevenFVkPinView(public_key=keys.root_ca.public_key, title="Root VK")
+        view = sevenf_views.SevenFVkPinView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
@@ -656,7 +671,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         view = sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView(seed=seed)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET
-            destination = view.run()
+            destination = _past_key_index(view.run(), role="devfund")
 
         assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
         assert destination.view_args["public_key"] == devfund.public_key
@@ -708,7 +723,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         view = sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView(seed=seed)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)
-            dest = view.run()
+            dest = _past_key_index(view.run(), role="devfund")
         assert dest.view_args["role"] == "devfund"
         ski_view = dest.View_cls(**dest.view_args)
         with pytest.MonkeyPatch().context() as mp:
@@ -779,15 +794,18 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed, date_confirmed=True)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET (Mainnet=0, Testnet=1, Devnet=2)
-            destination1 = view.run()
-            destination2 = view.run()
+            destination1 = _past_key_index(view.run())
+            destination2 = _past_key_index(view.run())
 
         assert destination1.View_cls == sevenf_views.SevenFCertRequestReviewFieldView
         args1 = destination1.view_args
-        assert len(args1["review_fields"]) == 5
-        assert [f.label for f in args1["review_fields"]] == ["Subject key id", "Chain", "Valid from", "Valid until", "Serial"]
+        assert len(args1["review_fields"]) == 6
+        assert [f.label for f in args1["review_fields"]] == ["Root key", "Subject key id", "Chain", "Valid from", "Valid until", "Serial"]
+        assert args1["review_fields"][0].value == "index 0\nroot/testnet/0/\nml-dsa/v1"
+        assert args1["review_fields"][0].is_warning is False
         confirmed_args = args1["confirmed_view_args"]
         assert confirmed_args["chain_kind"] == ChainKind.TESTNET
+        assert confirmed_args["key_index"] == 0
         assert confirmed_args["signed_view_args"] == dict(export_destination=sevenf_views.SevenFExportRootCertQRView)
 
         tbs_bytes = confirmed_args["tbs_bytes"]
@@ -825,7 +843,9 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, is_redirect=True),  # asks for the date first
                 FlowStep(sevenf_views.SevenFConfirmDateTimeView, before_run=lambda v: v.controller.sevenf_confirmed_clock or _confirm_clock_now(v.controller), screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, button_data_selection=ButtonOption("testnet")),
-                *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(5)],
+                FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),  # "Index 0 (default)"
+                FlowStep(sevenf_views.SevenFBuildRootSelfCertView, is_redirect=True),
+                *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(6)],  # Root key + 5
                 FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
                 FlowStep(sevenf_views.SevenFRootCertSignedView, before_run=capture_before_export, screen_return_value=0),  # "OK"
                 FlowStep(sevenf_views.SevenFExportRootCertQRView, screen_return_value=0),
@@ -900,7 +920,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         # Runbook Step 2 yields root-<ski>.pem AND <ski>.vk: carry straight on
         # to the Root VK (ski -> pin -> QR) in the same sitting.
         assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
-        assert destination.view_args == dict(public_key=keys.root_ca.public_key, title="Root VK", role="root")
+        assert destination.view_args == dict(public_key=keys.root_ca.public_key, title="Root VK", role="root", key_index=0)
 
 
     def test_select_chain_kind_fails_closed_if_tbs_building_fails(self):
@@ -917,7 +937,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # TESTNET
             mp.setattr(cert_request_module, "build_root_tbs", fake_build_root_tbs)
-            destination = view.run()
+            destination = _past_key_index(view.run())
 
         assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
 
@@ -932,7 +952,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
-        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
+        view = sevenf_views.SevenFConfirmSignRootCertView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
@@ -948,7 +968,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
-        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
+        view = sevenf_views.SevenFConfirmSignRootCertView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
         assert view.root_ca_address == keys.root_ca.address
 
 
@@ -963,7 +983,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
         view = sevenf_views.SevenFConfirmSignRootCertView(
-            seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes,
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes,
             signed_view_args=dict(export_destination=sevenf_views.SevenFExportRootCertQRView),
         )
         with pytest.MonkeyPatch().context() as mp:
@@ -1058,6 +1078,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, is_redirect=True),  # asks for the date first
                 FlowStep(sevenf_views.SevenFConfirmDateTimeView, before_run=lambda v: v.controller.sevenf_confirmed_clock or _confirm_clock_now(v.controller), screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
+                FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),  # "Index 0 (default)"
                 FlowStep(sevenf_views.SevenFScanRootCertificateView),
             ],
             initial_destination_view_args=dict(seed=seed),
@@ -1125,6 +1146,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                     FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, is_redirect=True),  # asks for the date first
                 FlowStep(sevenf_views.SevenFConfirmDateTimeView, before_run=lambda v: v.controller.sevenf_confirmed_clock or _confirm_clock_now(v.controller), screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
+                    FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),  # "Index 0 (default)"
                     FlowStep(
                         sevenf_views.SevenFScanRootCertificateView,
                         before_run=_load_cert_request_into_decoder(root_cert_der),
@@ -1135,9 +1157,10 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                         before_run=_load_cert_request_into_decoder(DEPUTY_CSR_DER),
                         screen_return_value=0,
                     ),
-                    # 9 review pages (deputy_cross_cert_v2_review_fields): 3 "Issuing
-                    # Root: ..." fields, "Chain", then 5 "Deputy: ..." fields.
-                    *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(9)],
+                    # 10 review pages: "Root key" (index and path), then
+                    # deputy_cross_cert_v2_review_fields' 3 "Issuing Root: ..."
+                    # fields, "Chain", then 5 "Deputy: ..." fields.
+                    *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(10)],
                     FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
                     FlowStep(
                         sevenf_views.SevenFRootCertSignedView,
@@ -1183,7 +1206,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                 return DEPUTY_CSR_DER
 
         view = sevenf_views.SevenFScanDeputyCsrView(
-            seed=seed, chain_kind=ChainKind.TESTNET, root_cert_der=ROOT_CERT_DER, root_cert=root_cert,
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, root_cert_der=ROOT_CERT_DER, root_cert=root_cert,
         )
         view.decoder = _FakeDecoder()
         # The real reference Root certificate's validity window starts in
@@ -1195,11 +1218,13 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
 
         fields = destination.view_args["review_fields"]
         assert [f.label for f in fields] == [
+            "Root key",
             "Issuing Root: Subject key id", "Issuing Root: Valid from", "Issuing Root: Valid until",
             "Chain", "Deputy: Subject key id", "Deputy: Valid from", "Deputy: Valid for",
             "Deputy: Valid until", "Deputy: Serial",
         ]
-        assert fields[3].value == "testnet"
+        assert fields[0].value == "index 0\nroot/testnet/0/\nml-dsa/v1"
+        assert fields[4].value == "testnet"
 
 
     def test_scan_root_certificate_rejects_a_chain_kind_mismatch(self):
@@ -1213,7 +1238,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             def get_sevenf_bbqr_data(self):
                 return ROOT_CERT_DER
 
-        view = sevenf_views.SevenFScanRootCertificateView(seed=seed, chain_kind=ChainKind.MAINNET)
+        view = sevenf_views.SevenFScanRootCertificateView(key_index=0, seed=seed, chain_kind=ChainKind.MAINNET)
         view.decoder = _FakeDecoder()
         destination = view._handle_complete_scan()
         assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
@@ -1234,7 +1259,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             def get_sevenf_bbqr_data(self):
                 return ROOT_CERT_DER
 
-        view = sevenf_views.SevenFScanRootCertificateView(seed=seed, chain_kind=ChainKind.TESTNET)
+        view = sevenf_views.SevenFScanRootCertificateView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET)
         view.decoder = _FakeDecoder()
         destination = view._handle_complete_scan()
         assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
@@ -1248,7 +1273,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             def get_sevenf_bbqr_data(self):
                 return b"not a certificate at all" * 20
 
-        view = sevenf_views.SevenFScanRootCertificateView(seed=seed, chain_kind=ChainKind.TESTNET)
+        view = sevenf_views.SevenFScanRootCertificateView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET)
         view.decoder = _FakeDecoder()
         destination = view._handle_complete_scan()
         assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
@@ -1269,7 +1294,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                 return b"not a csr at all" * 20
 
         view = sevenf_views.SevenFScanDeputyCsrView(
-            seed=seed, chain_kind=ChainKind.TESTNET, root_cert_der=ROOT_CERT_DER, root_cert=root_cert,
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, root_cert_der=ROOT_CERT_DER, root_cert=root_cert,
         )
         view.decoder = _FakeDecoder()
         destination = view._handle_complete_scan()
@@ -1292,7 +1317,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         )
 
         view = sevenf_views.SevenFConfirmSignRootCertView(
-            seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes,
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes,
             signed_view_args=dict(title="Deputy Certificate Signed", text="whatever"),
         )
         with pytest.MonkeyPatch().context() as mp:
@@ -1456,6 +1481,7 @@ class TestSevenFScanEntryPoint(FlowTest):
                     before_run=_load_genesis_config_into_decoder(genesis_json),
                     screen_return_value=0,
                 ),
+                FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),  # "Index 0 (default)"
                 FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, before_run=capture_state, screen_return_value=0),
             ],
@@ -1463,6 +1489,7 @@ class TestSevenFScanEntryPoint(FlowTest):
         )
 
         state = captured["state"]
+        assert state.key_index == 0
         assert state.seed is seed
         assert state.canonical_bytes == expected_canonical_bytes
         assert state.chain_kind == ChainKind.TESTNET
@@ -1847,8 +1874,9 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         from seedsigner.models.sevenf import devfund_config
         from seedsigner.views.sevenf_views._common import _review_pages
-        review_pages = len(_review_pages(devfund_config.review_fields(devfund_config.parse_devfund_config_json(devfund_json))))
-        assert review_pages > 6  # 5 signed fields + digest, the commitment split across pages
+        # +1: the "Root key" page (index and path) comes first.
+        review_pages = 1 + len(_review_pages(devfund_config.review_fields(devfund_config.parse_devfund_config_json(devfund_json))))
+        assert review_pages > 7  # Root key + 5 signed fields + digest, the commitment split across pages
 
         captured = {}
 
@@ -1864,6 +1892,8 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
                     before_run=_load_genesis_config_into_decoder(devfund_json),
                     screen_return_value=0,
                 ),
+                FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),  # Root index: "Index 0 (default)"
+                FlowStep(sevenf_views.SevenFDevFundReviewStartView, is_redirect=True),
                 # every review page: the commitment spans several (warning pages are shorter)
                 *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(review_pages)],
                 FlowStep(sevenf_views.SevenFConfirmSignDevFundView, screen_return_value=0),  # "Sign"
@@ -1890,7 +1920,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         canonical_bytes = _sample_devfund_canonical_bytes()
         fields = parse_devfund_canonical_bytes(canonical_bytes)
 
-        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        view = sevenf_views.SevenFConfirmSignDevFundView(key_index=0, seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 0)
             destination = view.run()
@@ -1916,7 +1946,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         canonical_bytes = _sample_devfund_canonical_bytes()
         fields = parse_devfund_canonical_bytes(canonical_bytes)
 
-        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        view = sevenf_views.SevenFConfirmSignDevFundView(key_index=0, seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
@@ -1958,11 +1988,12 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         seed = self.seed_fixture()
         view = sevenf_views.SevenFScanDevFundConfigView(seed=seed)
         _load_genesis_config_into_decoder(_sample_devfund_json())(view)
-        destination = view._handle_complete_scan()
+        destination = _past_key_index(view._handle_complete_scan())  # the ROOT index: Root-signed
 
         assert destination.View_cls == sevenf_views.SevenFCertRequestReviewFieldView
         args = destination.view_args["confirmed_view_args"]
         assert args["chain_kind"] == ChainKind.TESTNET
+        assert args["key_index"] == 0
         assert hashlib.sha256(args["tbs_bytes"]).hexdigest()[:32] == REAL_DEVFUND_DIGEST
 
 
@@ -2048,7 +2079,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
         fields = parse_devfund_canonical_bytes(canonical_bytes)
 
-        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        view = sevenf_views.SevenFConfirmSignDevFundView(key_index=0, seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
@@ -2068,7 +2099,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         canonical_bytes = _sample_devfund_canonical_bytes()
         fields = parse_devfund_canonical_bytes(canonical_bytes)
 
-        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
+        view = sevenf_views.SevenFConfirmSignDevFundView(key_index=0, seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         assert view.devfund_address == keys.devfund.address
         assert view.devfund_address == keys.root_ca.address
@@ -2159,7 +2190,7 @@ class TestSevenFCeremonyClockGate(FlowTest):
         view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed, date_confirmed=True)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # testnet
-            destination = view.run()
+            destination = _past_key_index(view.run())
         assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
 
 
@@ -2168,7 +2199,7 @@ class TestSevenFCeremonyClockGate(FlowTest):
         from test_sevenf_cert_request import DEPUTY_CSR_DER, ROOT_CERT_DER
         seed = self.seed_fixture()
         view = sevenf_views.SevenFScanDeputyCsrView(
-            seed=seed, chain_kind=ChainKind.TESTNET, root_cert_der=ROOT_CERT_DER,
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, root_cert_der=ROOT_CERT_DER,
             root_cert=cert_request.parse_root_certificate_der(ROOT_CERT_DER))
         _load_cert_request_into_decoder(DEPUTY_CSR_DER, file_type="B")(view)
         destination = view._handle_complete_scan()
@@ -2194,7 +2225,7 @@ class TestSevenFCeremonyClockGate(FlowTest):
             mp.setattr(cert_request, "build_root_tbs", spy)
             mp.setattr(time, "time", lambda: 0.0)  # what a fresh air-gapped boot reports
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # testnet
-            view.run()
+            _past_key_index(view.run())
         assert confirmed <= captured["not_before"] <= confirmed + 5
 
 
@@ -2376,8 +2407,10 @@ class TestSevenFConfirmScreensShowTheSigningSki(FlowTest):
 
 
     def expected(self, seed):
+        """ The ski, then the key index on its own line under it
+            (7f-signing-support-key-index-selector). """
         from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
-        return group_hex_for_display(ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key.hex()))
+        return group_hex_for_display(ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key.hex())) + "\nindex 0"
 
 
     def seed(self):
@@ -2386,19 +2419,19 @@ class TestSevenFConfirmScreensShowTheSigningSki(FlowTest):
 
     def test_root_cert_confirm(self):
         seed = self.seed()
-        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", signed_view_args={})
+        view = sevenf_views.SevenFConfirmSignRootCertView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", signed_view_args={})
         assert self.capture(view)["subject_key_id"] == self.expected(seed)
 
 
     def test_devfund_confirm(self):
         seed = self.seed()
-        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x")
+        view = sevenf_views.SevenFConfirmSignDevFundView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x")
         assert self.capture(view)["subject_key_id"] == self.expected(seed)
 
 
     def test_genesis_confirm(self):
         seed = self.seed()
         state = sevenf_views.SevenFGenesisCeremonyState(
-            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=b"x", review_fields=[])
+            key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=b"x", review_fields=[])
         view = sevenf_views.SevenFConfirmSignView(state=state)
         assert self.capture(view)["subject_key_id"] == self.expected(seed)
