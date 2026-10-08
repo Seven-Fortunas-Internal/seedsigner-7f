@@ -17,7 +17,7 @@ from seedsigner.models.sevenf.devfund_config import DevFundConfigError, DevFundC
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
-from ._common import SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView
+from ._common import refuse_on_unexpected_error, SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,7 @@ class SevenFScanDevFundConfigView(ScanView):
         return self.decoder.is_sevenf_bbqr
 
 
+    @refuse_on_unexpected_error
     def _handle_complete_scan(self):
         # The coordinator's real artifact is devfund-unsigned.json
         # (sf-root-coordinator prepare-devfund); the bytes signed are rebuilt

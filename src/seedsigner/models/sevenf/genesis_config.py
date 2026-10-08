@@ -40,7 +40,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, ski
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, ski, strict_json_loads, visible_text
 
 # Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
 # exactly -- display-only here (parse_canonical_bytes already enforces the
@@ -232,8 +232,10 @@ def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
         raise GenesisConfigJsonError(f"payload is not valid UTF-8: {e}") from e
 
     try:
-        obj = json.loads(text)
-    except (json.JSONDecodeError, RecursionError) as e:
+        obj = strict_json_loads(text)
+    except (json.JSONDecodeError, RecursionError, ValueError) as e:
+        # ValueError: NaN/Infinity, a duplicate key, or an integer past
+        # Python's digit limit -- refused as serde_json would.
         # RecursionError: Python's json module is recursive-descent, so a
         # pathologically deeply-nested payload (e.g. ~100k levels of "[") --
         # untrusted, coordinator-supplied, BBQr-scanned bytes -- raises
@@ -283,6 +285,12 @@ def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
     message = obj.get("message")
     if not isinstance(message, str):
         raise GenesisConfigJsonError(f"message must be a string, got {type(message).__name__}")
+    try:
+        message_len = len(message.encode("utf-8"))
+    except UnicodeEncodeError as e:
+        raise GenesisConfigJsonError(f"message is not valid Unicode text: {e}") from e
+    if message_len > 4096:
+        raise GenesisConfigJsonError(f"message is {message_len} bytes; this device reviews at most 4096")
 
     consensus_obj = obj.get("consensus")
     if not isinstance(consensus_obj, dict):
@@ -336,7 +344,7 @@ def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
     return [
         ("Chain", fields.chain_kind.name.lower()),
         ("Timestamp", _format_timestamp(fields.timestamp)),
-        ("Message", fields.message),
+        ("Message", visible_text(fields.message)),
         ("Derivation scheme", DERIVATION_SCHEME_V1),
         ("Target block time", f"{fields.consensus.target_block_time_secs}s"),
         ("Difficulty adjustment interval", f"{fields.consensus.difficulty_adjustment_interval_blocks} blocks"),

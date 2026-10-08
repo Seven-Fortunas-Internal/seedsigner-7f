@@ -459,3 +459,43 @@ def test_summary_records_the_role_when_known():
     vk = (b"\x0b" * 1952).hex()
     out = _node(f"require('./bbqr-decode.js').vkSummary('{vk}', 'devfund').then(r => process.stdout.write(JSON.stringify(r)));")
     assert "role: devfund" in json.loads(out)["text"]
+
+
+def test_scanner_refuses_a_decompression_bomb(tmp_path):
+    """ Same cap in the browser: a bomb would otherwise crash the tab. """
+    import json
+    encoder = BBQrEncoder(data=b"\x00" * (2 * 1024 * 1024), file_type="J", bbqr_encoding="Z")
+    segments = [encoder.next_part() for _ in range(encoder.seq_len())]
+    out = _node(f"""
+const d = require('./bbqr-decode.js');
+const s = new d.BBQrSession();
+for (const seg of {json.dumps(segments)}) s.addSegment(seg);
+try {{ s.decode(); process.stdout.write('decoded'); }} catch (e) {{ process.stdout.write('refused: ' + e.message); }}
+""")
+    assert out.startswith("refused") and "too large" in out
+
+
+def test_a_part_already_received_is_never_overwritten():
+    """ First wins, like the device's decoder: a frame from a different code
+        with the same part number can't splice into a received payload. """
+    import json
+    a = BBQrEncoder(data=b"A" * 3000, file_type="J", bbqr_encoding="Z")
+    b = BBQrEncoder(data=b"B" * 3000, file_type="J", bbqr_encoding="Z")
+    pa = [a.next_part() for _ in range(a.seq_len())]
+    pb = [b.next_part() for _ in range(b.seq_len())]
+    out = _node(f"""
+const d = require('./bbqr-decode.js');
+const s = new d.BBQrSession();
+const pa = {json.dumps(pa)}, pb = {json.dumps(pb)};
+s.addSegment(pa[0]);
+const r = s.addSegment(pb[0].slice(0, 2) + pa[0].slice(2, 8) + pb[0].slice(8));
+for (const p of pa.slice(1)) s.addSegment(p);
+process.stdout.write(JSON.stringify({{ conflict: r.kind, decoded: Buffer.from(s.decode()).toString() === 'A'.repeat(3000) }}));
+""")
+    assert json.loads(out) == {"conflict": "conflict", "decoded": True}
+
+
+def test_scanner_page_locks_after_a_complete_scan():
+    from pathlib import Path
+    html = (Path(TOOL_DIR) / "index.html").read_text()
+    assert "press Reset" in html and "session.isComplete" in html

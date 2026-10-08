@@ -23,7 +23,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display, strict_json_loads, visible_text
 
 # 7f-review-parse-failure-messages-not-actionable (2026-10-04): what each
 # code plausibly means for THIS artifact type, grounded directly in
@@ -297,18 +297,6 @@ def _parse_recipient(obj) -> DevfundRecipient:
     raise DevFundConfigJsonError(f"unknown recipient kind {kind!r}, expected 'address' or 'multisig'")
 
 
-def _refuse_constant(name: str):
-    raise ValueError(f"non-standard JSON literal {name}")
-
-
-def _refuse_duplicate_keys(pairs: list) -> dict:
-    keys = [k for k, _ in pairs]
-    duplicates = sorted({k for k in keys if keys.count(k) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate key(s) {duplicates}")
-    return dict(pairs)
-
-
 def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
     """ Parse the coordinator's real artifact: `devfund-unsigned.json` as
         `sf-root-coordinator prepare-devfund` writes it and `sf-wallet-gov
@@ -326,7 +314,7 @@ def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
     except UnicodeDecodeError as e:
         raise DevFundConfigJsonError(f"payload is not valid UTF-8: {e}") from e
     try:
-        obj = json.loads(text, parse_constant=_refuse_constant, object_pairs_hook=_refuse_duplicate_keys)
+        obj = strict_json_loads(text)
     except (json.JSONDecodeError, RecursionError, ValueError) as e:
         # RecursionError: see genesis_config.parse_genesis_config_json.
         # ValueError: NaN/Infinity or a duplicate key -- both refused by
@@ -394,7 +382,7 @@ def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
         ("Recipient kind", kind),
         # A 128-hex commitment can't wrap unbroken; group it for the screen.
         ("Recipient", group_hex_for_display(fields.recipient.payload)
-         if fields.recipient.tag == DevfundRecipient.MULTISIG else fields.recipient.payload),
+         if fields.recipient.tag == DevfundRecipient.MULTISIG else visible_text(fields.recipient.payload)),
         ("Effective block", str(fields.effective_block)),
         ("Timestamp", _format_timestamp(fields.timestamp)),
     ]

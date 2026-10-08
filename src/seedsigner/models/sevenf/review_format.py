@@ -13,6 +13,8 @@
     devfund, cert_request) now import from here instead.
 """
 import hashlib
+import json
+import unicodedata
 from datetime import datetime, timezone
 
 
@@ -75,3 +77,41 @@ def canonical_digest(canonical_bytes: bytes) -> str:
         compare by voice to confirm they are signing the same definition.
         Grouped for the screen. """
     return group_hex_for_display(hashlib.sha256(canonical_bytes).hexdigest()[:32])
+
+
+def visible_text(s: str) -> str:
+    """ Coordinator-supplied free text as it must be shown before signing:
+        newlines, tabs, bidi overrides and every other control/format/
+        surrogate/unassigned character become a visible escape (\\n, \\t,
+        \\uXXXX), so no signed character can be hidden or reorder what the
+        operator reads (security review 2026-10-08). """
+    out = []
+    for ch in s:
+        if ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif unicodedata.category(ch)[0] in "CZ" and ch != " ":
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _refuse_constant(name: str):
+    raise ValueError(f"non-standard JSON literal {name}")
+
+
+def _refuse_duplicate_keys(pairs: list) -> dict:
+    keys = [k for k, _ in pairs]
+    duplicates = sorted({k for k in keys if keys.count(k) > 1})
+    if duplicates:
+        raise ValueError(f"duplicate key(s) {duplicates}")
+    return dict(pairs)
+
+
+def strict_json_loads(text: str):
+    """ json.loads refusing what serde_json refuses: NaN/Infinity literals and
+        duplicate keys. Also raises ValueError for integers past Python's
+        digit limit. Callers catch (ValueError, RecursionError). """
+    return json.loads(text, parse_constant=_refuse_constant, object_pairs_hook=_refuse_duplicate_keys)

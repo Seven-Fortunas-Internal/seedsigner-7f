@@ -66,7 +66,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261008h"></script>
+<script src="bbqr-decode.js?v=20261008i"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -301,7 +301,16 @@ async function renderResult(bytes) {
 
 function handleDecodedText(text, now) {
   try {
+    if (session.isComplete) {
+      // Locked until Reset: the next code on screen must not mix with this one.
+      setStatus("Done. Save what you need, then press Reset to scan the next code.", "ok");
+      return;
+    }
     const result = session.addSegment(text);
+    if (result.kind === "conflict") {
+      setStatus("A frame from a different code was seen. Press Reset and scan one code at a time.", "error");
+      return;
+    }
     if (result.kind === "not-bbqr") {
       return; // ignore non-BBQr QR content (e.g. a stray code in frame)
     }

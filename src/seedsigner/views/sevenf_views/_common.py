@@ -66,27 +66,38 @@ _MAX_CHARS_PER_WARNING_PAGE = 75
 
 
 def _paginate_value(value: str, max_chars: int = _MAX_CHARS_PER_REVIEW_PAGE) -> list[str]:
-    """ Splits a field value into screen-sized pages, breaking only on word
-        boundaries. Text already containing "\\n" (only the Timestamp field
-        today, via genesis_config._format_timestamp() -- always short) is
-        returned as a single page unchanged; pagination only kicks in for
-        content that actually needs it and has no embedded hard breaks to
-        preserve. """
-    if len(value) <= max_chars or "\n" in value:
-        return [value]
-
+    """ Splits a field value into screen-sized pages, preferring to break at
+        a space, but never letting a page exceed max_chars -- an unbroken run
+        or embedded newlines must not push signed text off the screen
+        (security review 2026-10-08). """
     pages = []
-    current = ""
-    for word in value.split(" "):
-        candidate = f"{current} {word}".strip() if current else word
-        if len(candidate) > max_chars and current:
-            pages.append(current)
-            current = word
-        else:
-            current = candidate
-    if current:
-        pages.append(current)
-    return pages if pages else [value]
+    rest = value
+    while len(rest) > max_chars:
+        cut = rest.rfind(" ", 0, max_chars + 1)
+        if cut <= 0:
+            cut = max_chars
+        pages.append(rest[:cut].rstrip(" "))
+        rest = rest[cut:].lstrip(" ")
+    pages.append(rest)
+    return pages
+
+
+def refuse_on_unexpected_error(handle_complete_scan):
+    """ For every 7F scan's _handle_complete_scan: any error from decoding or
+        parsing hostile input becomes the normal refusal screen, never the
+        crash screen that clears history (security review 2026-10-08). """
+    import functools
+    import logging
+
+    @functools.wraps(handle_complete_scan)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return handle_complete_scan(self, *args, **kwargs)
+        except Exception as e:  # noqa: BLE001 -- deliberate boundary
+            logging.getLogger(__name__).warning("7F scan refused: %r", e)
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't use this QR: {}").format(e)))
+    return wrapper
 
 
 def _review_pages(review_fields: list[ReviewField]) -> list[ReviewField]:

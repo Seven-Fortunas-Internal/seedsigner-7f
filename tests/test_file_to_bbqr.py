@@ -74,3 +74,13 @@ def test_writes_a_slideshow(tmp_path):
     out = tool.write_bbqr_slideshow(FIXTURES / "sf_wallet_gov_root_cert_abandon_art_testnet.pem", tmp_path)
     assert out.name.endswith("_slideshow.html") and out.exists()
     assert len(list(out.parent.glob("*.png"))) > 1
+
+
+def test_slideshow_escapes_the_file_name(tmp_path):
+    """ The page is built from the file name: a hostile name must not inject markup. """
+    evil = tmp_path / 'x<img src=x onerror=alert(1)><\\script>.json'
+    evil.write_text('{"version": 1}')
+    page = tool.write_bbqr_slideshow(evil, tmp_path).read_text()
+    head, _, script = page.partition("<script>")
+    assert "<img src=x" not in head and "&lt;img src=x" in head  # markup context escaped
+    assert page.count("<script>") == 1 and script.count("</script>") == 1  # no breaking out of the script

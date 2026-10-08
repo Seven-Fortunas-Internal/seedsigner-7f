@@ -807,6 +807,13 @@ class SpecterPsbtQrDecoder(BaseAnimatedQrDecoder):
 
 
 
+# Largest payload a BBQr scan may decompress to. Far above any ceremony file
+# (a Root certificate is ~6 KB) or typical PSBT, but a few hundred KB of
+# frames could otherwise inflate to hundreds of MB and exhaust a Pi Zero's
+# 512 MB (security review 2026-10-08).
+MAX_BBQR_DECODED_BYTES = 1024 * 1024
+
+
 def _bbqr_decode_segments(segments: list, encoding: str) -> bytes | None:
     """
         Shared BBQr payload reconstruction, used by both BBQRPsbtQrDecoder
@@ -830,8 +837,12 @@ def _bbqr_decode_segments(segments: list, encoding: str) -> bytes | None:
     if encoding == 'Z':
         # decompress
         z = zlib.decompressobj(wbits=-10)
-        rv = z.decompress(rv)
-        rv += z.flush()
+        out = z.decompress(rv, MAX_BBQR_DECODED_BYTES + 1)
+        if len(out) > MAX_BBQR_DECODED_BYTES or z.unconsumed_tail:
+            raise ValueError(f"BBQr payload too large (over {MAX_BBQR_DECODED_BYTES} bytes decompressed)")
+        rv = out + z.flush()
+        if len(rv) > MAX_BBQR_DECODED_BYTES:
+            raise ValueError(f"BBQr payload too large (over {MAX_BBQR_DECODED_BYTES} bytes decompressed)")
 
     return rv
 

@@ -30,6 +30,7 @@ distinguishing passphrase, not a second mnemonic to transcribe by hand.
 Neither has ever protected real value.
 """
 import argparse
+from html import escape as htmlescape
 import json
 import sys
 import time
@@ -189,8 +190,11 @@ SLIDESHOW_HTML_TEMPLATE = """<!doctype html>
 
 def write_slideshow(name: str, image_paths: list[Path], out_dir: Path, interval_ms: int = 1200):
     files_json = json.dumps([p.name for p in image_paths])
+    # Names can come from a coordinator-supplied file (file_to_bbqr.py):
+    # escape for HTML, and keep "</" out of the inline script.
     html = SLIDESHOW_HTML_TEMPLATE.format(
-        name=name, first=image_paths[0].name, files_json=files_json, interval_ms=interval_ms,
+        name=htmlescape(name), first=htmlescape(image_paths[0].name),
+        files_json=files_json.replace("</", "<\\/"), interval_ms=interval_ms,
     )
     slideshow_path = out_dir / f"{name}_slideshow.html"
     slideshow_path.write_text(html)

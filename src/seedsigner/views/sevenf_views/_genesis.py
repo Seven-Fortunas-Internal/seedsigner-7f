@@ -43,7 +43,7 @@ from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
-from ._common import SevenFUnsupportedArtefactView, _review_pages
+from ._common import refuse_on_unexpected_error, SevenFUnsupportedArtefactView, _review_pages
 
 
 @dataclass(frozen=True)
@@ -110,6 +110,7 @@ class SevenFScanGenesisConfigView(ScanView):
         return self.decoder.is_sevenf_bbqr
 
 
+    @refuse_on_unexpected_error
     def _handle_complete_scan(self):
         payload = self.decoder.get_sevenf_bbqr_data()
 

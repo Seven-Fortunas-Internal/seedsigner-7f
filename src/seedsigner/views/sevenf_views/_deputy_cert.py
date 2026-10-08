@@ -25,6 +25,7 @@ from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 
 from ._clock import ceremony_now, require_confirmed_clock
 from ._common import (
+    refuse_on_unexpected_error,
     SevenFCertRequestReviewFieldView,
     SevenFConfirmSignRootCertView,
     SevenFSignedCertificate,
@@ -126,6 +127,7 @@ class SevenFScanRootCertificateView(ScanView):
         return self.decoder.is_sevenf_bbqr
 
 
+    @refuse_on_unexpected_error
     def _handle_complete_scan(self):
         data = self.decoder.get_sevenf_bbqr_data()
 
@@ -194,6 +196,7 @@ class SevenFScanDeputyCsrView(ScanView):
         return self.decoder.is_sevenf_bbqr
 
 
+    @refuse_on_unexpected_error
     def _handle_complete_scan(self):
         deputy_csr_der = self.decoder.get_sevenf_bbqr_data()
 

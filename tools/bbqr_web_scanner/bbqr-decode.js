@@ -345,6 +345,8 @@ function concatBytes(chunks) {
 // segment; otherwise base32 per segment, then (for 'Z') raw-deflate
 // inflate of the concatenated bytes -- matching BBQrEncoder's own
 // zlib.compressobj(level=9, wbits=-10) on the encode side.
+const MAX_DECODED_BYTES = 1024 * 1024;  // = decode_qr.MAX_BBQR_DECODED_BYTES
+
 function reconstructPayload(segmentsByIndex, encoding) {
   const ordered = [];
   for (let i = 0; i < segmentsByIndex.size; i++) {
@@ -357,7 +359,19 @@ function reconstructPayload(segmentsByIndex, encoding) {
     raw = concatBytes(ordered.map(base32Decode));
   }
   if (encoding === "Z") {
-    return pako.inflateRaw(raw);
+    // Bounded, like the device's decoder: a few hundred KB of frames could
+    // otherwise inflate to hundreds of MB and crash the tab.
+    const inflator = new pako.Inflate({ raw: true, chunkSize: 64 * 1024 });
+    const chunks = [];
+    let total = 0;
+    inflator.onData = (chunk) => {
+      total += chunk.length;
+      if (total > MAX_DECODED_BYTES) throw new Error(`BBQr payload too large (over ${MAX_DECODED_BYTES} bytes decompressed)`);
+      chunks.push(chunk);
+    };
+    inflator.push(raw, true);
+    if (inflator.err) throw new Error(`BBQr decompression failed: ${inflator.msg}`);
+    return concatBytes(chunks);
   }
   return raw;
 }
@@ -398,6 +412,11 @@ class BBQrSession {
     this.fileType = fileType;
     this.total = total;
     const isNew = !this.segments.has(index);
+    if (!isNew && this.segments.get(index) !== payload) {
+      // First wins, like the device's decoder: a frame from a different code
+      // must never splice into a payload already being collected.
+      return { kind: "conflict", index, total };
+    }
     this.segments.set(index, payload);
     return { kind: "segment", index, total, isNew };
   }
