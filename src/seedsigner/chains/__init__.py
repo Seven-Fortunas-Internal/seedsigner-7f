@@ -6,7 +6,7 @@
     Plugins register themselves via `ChainRegistry.register()`. `ChainRegistry.all()`
     has no current caller (the old multi-chain-picker view that used it was retired
     along with SETTING__MULTICHAIN_ENABLED -- see
-    docs/multi-chain/boot-chain-selection-plan.md in the diy-seedsigner repo) but
+    docs/multi-chain/archive/boot-chain-selection-plan.md in the diy-seedsigner repo) but
     stays as a reasonable public surface for a future multi-chain UI (e.g. a settings
     diagnostics screen, or a menu once a 3rd chain makes per-chain-option-block
     hardcoding in ChainChooserView too repetitive) -- adding a chain via

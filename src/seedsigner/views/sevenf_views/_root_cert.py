@@ -32,7 +32,7 @@ from ._common import (
 class SevenFSelectChainKindForRootSelfCertView(View):
     """ Entry point for Root self-certification's PKCS#10-era rework (see
         cert_request.py's own "ROOT SELF-CERT PKCS#10 REWORK" docstring
-        note, and docs/7f-integration/root-self-cert-pkcs10-rework-plan.md).
+        note, and docs/7f-integration/archive/root-self-cert-pkcs10-rework-plan.md).
         7fchain's real `sign-root-cert` has no external input at all -- the
         Root derives its own key, builds its own TBS, signs, and assembles
         a complete certificate, all locally. This device mirrors that: no
@@ -332,7 +332,7 @@ class SevenFExportRootVkQRView(View):
 class SevenFExportRootCertQRView(View):
     """ Exports the complete, assembled Root self-certification certificate
         as BBQr-encoded binary -- the Root self-cert PKCS#10-era rework's
-        fix (docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3-§4)
+        fix (docs/7f-integration/archive/root-self-cert-pkcs10-rework-plan.md §3-§4)
         for the detached-signature-export bug: the real ceremony's
         `sign-root-cert` exports a complete certificate, and this device's
         prior detached-signature export (D11's RootSig shape) is

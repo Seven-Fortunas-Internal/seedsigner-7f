@@ -36,7 +36,7 @@ from ._common import (
 class SevenFSelectChainKindForDeputyCrossCertView(View):
     """ First step of the PKCS#10-based Deputy cross-certification flow
         (see cert_request.py's own "PKCS#10 REWORK" docstring note, and
-        docs/7f-integration/deputy-cross-cert-pkcs10-rework-plan.md). A real
+        docs/7f-integration/archive/deputy-cross-cert-pkcs10-rework-plan.md). A real
         signed X.509 certificate carries no separate "which 7F network"
         signal of its own distinct from its embedded chain_kind extension
         (plan §3.4) -- so, unlike the retired JSON-CertRequest flow, the
@@ -252,7 +252,7 @@ class SevenFExportDeputyCertQRView(View):
     """ Exports the complete, assembled Deputy cross-certification
         certificate as BBQr-encoded binary -- the Deputy half of
         7f-signing-support-detached-sig-export-unreconstructable's fix
-        (docs/7f-integration/deputy-cross-cert-detached-sig-export-fix-plan.md),
+        (docs/7f-integration/archive/deputy-cross-cert-detached-sig-export-fix-plan.md),
         mirroring _root_cert.SevenFExportRootCertQRView exactly except for
         the one real design difference: assemble_deputy_cert_der() verifies
         the signature against the ISSUING ROOT's real key (re-parsed from

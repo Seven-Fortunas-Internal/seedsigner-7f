@@ -250,7 +250,7 @@ class ChainChooserView(View):
         Boot-time-only chain selector -- the operator picks one blockchain per
         power-on session, and Controller.active_chain_id then narrows every other
         View's menu construction to just that chain for the rest of the session
-        (see docs/multi-chain/boot-chain-selection-plan.md in the diy-seedsigner
+        (see docs/multi-chain/archive/boot-chain-selection-plan.md in the diy-seedsigner
         repo for the full design and the adversarial review that shaped it).
 
         Deliberately hardcodes its options rather than importing ChainRegistry:
@@ -261,7 +261,7 @@ class ChainChooserView(View):
         flagged as unacceptable for settings_definition.py's selection_options. Each
         non-Bitcoin chain means adding its option here too, a small, accepted cost
         against that per-boot latency hit for everyone today -- 7F Chain is the
-        second one added this way (docs/multi-chain/boot-chain-selection-plan.md
+        second one added this way (docs/multi-chain/archive/boot-chain-selection-plan.md
         named it as an anticipated third chain before any of it was built).
 
         No back button: chain selection isn't optional at this point in the boot

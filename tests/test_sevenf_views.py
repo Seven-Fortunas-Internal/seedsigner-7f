@@ -420,7 +420,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
     """ The Root self-certification flow's PKCS#10-era rework
         (7f-signing-support-root-self-certification-pkcs10-rework; see
         cert_request.py's own "ROOT SELF-CERT PKCS#10 REWORK" docstring
-        note and docs/7f-integration/root-self-cert-pkcs10-rework-plan.md):
+        note and docs/7f-integration/archive/root-self-cert-pkcs10-rework-plan.md):
         SeedOptionsView's "7F: Self-Certify Root" button ->
         SevenFSelectChainKindForRootSelfCertView (no scan at all -- the
         device derives its own key, builds its own TBS with a fresh
@@ -993,7 +993,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
     """ The PKCS#10-based Deputy cross-certification flow
         (7f-signing-support-deputy-cross-certification-pkcs10-rework; see
         cert_request.py's own "PKCS#10 REWORK" docstring note and
-        docs/7f-integration/deputy-cross-cert-pkcs10-rework-plan.md):
+        docs/7f-integration/archive/deputy-cross-cert-pkcs10-rework-plan.md):
         SeedOptionsView's "7F: Cross-Certify Deputy" button ->
         SevenFSelectChainKindForDeputyCrossCertView (operator picks the
         chain explicitly -- a certificate carries no separate network

@@ -23,9 +23,9 @@
       _genesis.py       Genesis-config signing
                         (7f-signing-support-root-ceremony-ui-wizard).
       _root_cert.py     Root self-certification
-                        (docs/7f-integration/root-self-cert-pkcs10-rework-plan.md).
+                        (docs/7f-integration/archive/root-self-cert-pkcs10-rework-plan.md).
       _deputy_cert.py   Deputy cross-certification
-                        (docs/7f-integration/deputy-cross-cert-pkcs10-rework-plan.md).
+                        (docs/7f-integration/archive/deputy-cross-cert-pkcs10-rework-plan.md).
       _devfund.py       Devfund-config signing (R11).
 
     tests/test_sevenf_views.py's own 8 test classes already map 1:1 onto

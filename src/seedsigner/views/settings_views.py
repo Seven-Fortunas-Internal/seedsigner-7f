@@ -37,7 +37,7 @@ class SettingsMenuView(View):
         # Bitcoin/EVM-scoped entries are UI-visibility-only (see SettingsEntry.chain_scope's
         # own docstring in settings_definition.py) -- filtered here, the one real call
         # site of get_settings_entries(), rather than at each of the 8 entries
-        # individually (see docs/multi-chain/boot-chain-selection-plan.md).
+        # individually (see docs/multi-chain/archive/boot-chain-selection-plan.md).
         settings_entries = [
             e for e in settings_entries
             if e.chain_scope is None or e.chain_scope == self.controller.active_chain_id

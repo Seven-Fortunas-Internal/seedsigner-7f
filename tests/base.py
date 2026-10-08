@@ -111,7 +111,7 @@ class BaseTest:
         Controller.configure_instance()
 
         # Default every fresh Controller to Bitcoin mode (see
-        # docs/multi-chain/boot-chain-selection-plan.md): 52 of 81 existing
+        # docs/multi-chain/archive/boot-chain-selection-plan.md): 52 of 81 existing
         # run_sequence() calls start at MainMenuView with initial_destination=None,
         # which would otherwise route to the new ChainChooserView instead of the
         # expected first FlowStep. Set here (not just in setup_method()) because

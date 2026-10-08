@@ -49,7 +49,7 @@ class PSBTSelectSeedView(View):
         # Electrum seeds are Native Segwit only, a Bitcoin-specific concept -- AND with
         # (not replaced by) active_chain_id (see seed_views.py's SeedSelectSeedView/
         # LoadSeedView for the same pattern, and
-        # docs/multi-chain/boot-chain-selection-plan.md for why this view is reachable
+        # docs/multi-chain/archive/boot-chain-selection-plan.md for why this view is reachable
         # in EVM mode today despite being PSBT/Bitcoin-specific itself: ScanView's
         # dispatcher isn't yet chain-gated).
         if self.settings.get_value(SettingsConstants.SETTING__ELECTRUM_SEEDS) == SettingsConstants.OPTION__ENABLED \

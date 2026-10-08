@@ -564,7 +564,7 @@ class SeedOptionsView(View):
     EXPLORER = ButtonOption("Address explorer")
     SIGN_MESSAGE = ButtonOption("Sign message")
     # EVM-mode actions, flattened in directly from the now-retired EvmOptionsView (see
-    # docs/multi-chain/boot-chain-selection-plan.md) -- never shown at the same time as
+    # docs/multi-chain/archive/boot-chain-selection-plan.md) -- never shown at the same time as
     # the Bitcoin-specific buttons above, since exactly one of active_chain_id ==
     # "bitcoin"/"evm" gates each group. EVM_SIGN is deliberately labeled "Sign request",
     # NOT "Sign message": ButtonOption is a plain @dataclass with value-based equality,
@@ -642,7 +642,7 @@ class SeedOptionsView(View):
             if self.controller.resume_main_flow == Controller.FLOW__EVM_SIGN:
                 # EvmSelectSeedView sent us here to scan/type a new seed; now that one
                 # is ready, resume straight into the real (second) scan -- see
-                # docs/multi-chain/scan-recognizes-eth-sign-request-plan.md.
+                # docs/multi-chain/archive/scan-recognizes-eth-sign-request-plan.md.
                 self.controller.resume_main_flow = None
                 from seedsigner.views.evm_views import EvmScanSignRequestView
                 return Destination(EvmScanSignRequestView, view_args=dict(seed=self.seed), skip_current_view=True)
@@ -2201,7 +2201,7 @@ class AddressVerificationStartView(View):
         # SeedOptionsView's own active_chain_id=="bitcoin" gate depends on never being
         # set in EVM mode. Guarding here closes the gap regardless of which
         # (potentially still chain-ungated) menu reached this view -- see
-        # docs/multi-chain/boot-chain-selection-plan.md.
+        # docs/multi-chain/archive/boot-chain-selection-plan.md.
         if guard_active_chain(self, "bitcoin"):
             return
 
@@ -2601,7 +2601,7 @@ class SeedSignMessageStartView(View):
         # guard above -- ScanView.is_sign_message dispatches directly here,
         # bypassing SeedOptionsView's own active_chain_id=="bitcoin" gate on its
         # SIGN_MESSAGE button entirely. See
-        # docs/multi-chain/boot-chain-selection-plan.md.
+        # docs/multi-chain/archive/boot-chain-selection-plan.md.
         if guard_active_chain(self, "bitcoin"):
             return
 

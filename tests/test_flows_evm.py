@@ -41,7 +41,7 @@ class TestEvmFlows(FlowTest):
 
     def setup_method(self):
         super().setup_method()
-        # Override BaseTest's "bitcoin" default (see docs/multi-chain/boot-chain-selection-plan.md) --
+        # Override BaseTest's "bitcoin" default (see docs/multi-chain/archive/boot-chain-selection-plan.md) --
         # this is what actually gates every EVM view/button now that
         # SETTING__MULTICHAIN_ENABLED has been retired in its favor.
         self.controller.active_chain_id = "evm"
@@ -69,7 +69,7 @@ class TestEvmFlows(FlowTest):
             value actually flows through to derivation, not just that the screen
             appears. EvmOptionsView/MultiChainOptionsView are retired --
             SeedOptionsView routes directly (see
-            docs/multi-chain/boot-chain-selection-plan.md). The verify-prompt step
+            docs/multi-chain/archive/boot-chain-selection-plan.md). The verify-prompt step
             was added 2026-10-04 (multi-chain-ux-verify-after-address-export).
         """
         self.run_sequence(ENTER_SEED_OPTIONS_STEPS + [
@@ -898,7 +898,7 @@ class TestEvmFlows(FlowTest):
 
     def test_evm_views_refuse_to_run_outside_evm_mode(self):
         """ Direct-construction guard: each of the 4 EVM entry-point views (now that
-            EvmOptionsView is retired -- see docs/multi-chain/boot-chain-selection-plan.md)
+            EvmOptionsView is retired -- see docs/multi-chain/archive/boot-chain-selection-plan.md)
             refuses to run itself with active_chain_id != "evm", not just relying on
             SeedOptionsView hiding its button. Checks both the wrong-chain case
             (Bitcoin) and the fail-closed None case (chooser not yet completed). """
@@ -1027,7 +1027,7 @@ class TestEvmFlows(FlowTest):
 """********************************************************************************
     multi-chain-ux-scan-recognizes-eth-sign-request: Home's catch-all Scan button
     recognizes eth-sign-request QRs (double-scan design -- see
-    docs/multi-chain/scan-recognizes-eth-sign-request-plan.md).
+    docs/multi-chain/archive/scan-recognizes-eth-sign-request-plan.md).
 ********************************************************************************"""
 def _eth_sign_request_qr_string(derivation_path="m/44'/60'/0'/0/0", address=None):
     """ Builds a real single-frame UR-encoded eth-sign-request QR string, the same

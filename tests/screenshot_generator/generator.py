@@ -180,7 +180,7 @@ def generate_screenshots(locale):
         # Controller.reset_instance() bootstrap above), so it needs the same
         # active_chain_id default applied there. Without it, active_chain_id stays
         # None and SeedOptionsView (etc.) would render with neither its Bitcoin nor
-        # its EVM buttons -- see docs/multi-chain/boot-chain-selection-plan.md.
+        # its EVM buttons -- see docs/multi-chain/archive/boot-chain-selection-plan.md.
         controller.active_chain_id = "bitcoin"
 
         controller.settings.set_value(SettingsConstants.SETTING__SIG_TYPES, [attr for attr, name in SettingsConstants.ALL_SIG_TYPES])

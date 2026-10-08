@@ -111,7 +111,7 @@ class TestController(BaseTest):
         """
             A fresh boot (active_chain_id unset, no test-only initial_destination
             override) must route to ChainChooserView, not straight to MainMenuView --
-            see docs/multi-chain/boot-chain-selection-plan.md.
+            see docs/multi-chain/archive/boot-chain-selection-plan.md.
         """
         controller = Controller.get_instance()
         controller.active_chain_id = None

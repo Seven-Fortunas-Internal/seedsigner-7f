@@ -13,7 +13,7 @@
     Screen classes. Reached directly from SeedOptionsView's flattened EVM actions
     (Address/Connect, Scan sign request, Sign request) once the operator has chosen
     "Ethereum / EVM" at boot (see ChainChooserView in view.py and
-    docs/multi-chain/boot-chain-selection-plan.md) -- there is no longer an
+    docs/multi-chain/archive/boot-chain-selection-plan.md) -- there is no longer an
     intermediate chain-picker or per-plugin options submenu (both retired along with
     SETTING__MULTICHAIN_ENABLED; see that same plan doc's adversarial review findings).
 
@@ -292,7 +292,7 @@ class EvmVerifyAddressStartView(View):
         derivations complete synchronously, well within one screen render, so no
         background thread/live-progress/skip-10/cancel UI is needed -- and an
         unbounded loop with none of that UI would have no way to ever terminate on a
-        genuine non-match. See docs/multi-chain/tools-evm-address-explorer-and-verify-address-plan.md
+        genuine non-match. See docs/multi-chain/archive/tools-evm-address-explorer-and-verify-address-plan.md
         for the "how far do we search" decision this bound represents. """
     # Matches the common BIP-44 gap-limit convention most wallets already use as a
     # default for when to stop looking for used receive addresses -- not tied to any
@@ -355,7 +355,7 @@ class EvmSelectSeedView(View):
         ScanView._handle_complete_scan(), is_eth_sign_request branch) when no seed
         context is known yet -- the EVM-side twin of PSBTSelectSeedView
         (psbt_views.py). Double-scan design (see
-        docs/multi-chain/scan-recognizes-eth-sign-request-plan.md): this view only
+        docs/multi-chain/archive/scan-recognizes-eth-sign-request-plan.md): this view only
         ever uses the decoded `eth_sign_request` to build a seed-selection hint, then
         discards it -- the operator scans the same QR again inside
         EvmScanSignRequestView below for the real, fully-validated review. No new

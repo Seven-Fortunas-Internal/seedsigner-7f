@@ -441,7 +441,7 @@ class SettingsEntry:
 
     # None = always visible regardless of Controller.active_chain_id; "bitcoin"/"evm" =
     # only shown while that chain mode is active (see
-    # docs/multi-chain/boot-chain-selection-plan.md). Filtered centrally in
+    # docs/multi-chain/archive/boot-chain-selection-plan.md). Filtered centrally in
     # SettingsMenuView.run() (settings_views.py), the one real call site of
     # get_settings_entries() -- not per-entry. UI-VISIBILITY-ONLY, not an enforcement
     # boundary: SettingsIngestSettingsQRView (settings_views.py) writes directly to
@@ -714,7 +714,7 @@ class SettingsDefinition:
 
         # Multi-chain (EVM today; Tron/7Fchain planned) is no longer a Settings toggle --
         # retired in favor of Controller.active_chain_id, set once per power-on session
-        # by ChainChooserView (see docs/multi-chain/boot-chain-selection-plan.md).
+        # by ChainChooserView (see docs/multi-chain/archive/boot-chain-selection-plan.md).
 
         SettingsEntry(category=SettingsConstants.CATEGORY__FEATURES,
                       attr_name=SettingsConstants.SETTING__PRIVACY_WARNINGS,

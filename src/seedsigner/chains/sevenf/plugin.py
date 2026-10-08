@@ -5,7 +5,7 @@
     models/sevenf/* -- no new crypto or canonical-bytes logic lives here.
 
     Named as a plugin candidate before any of this existed
-    (docs/multi-chain/boot-chain-selection-plan.md: "a third chain (Tron,
+    (docs/multi-chain/archive/boot-chain-selection-plan.md: "a third chain (Tron,
     7Fchain)"), and now built as one for the same reason EVM was: its
     signing pipeline is stateless (explicit args in, explicit results out,
     no ambient Controller reads), the same property that made EVM a clean

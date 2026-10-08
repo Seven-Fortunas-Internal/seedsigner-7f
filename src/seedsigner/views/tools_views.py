@@ -578,7 +578,7 @@ class ToolsAddressExplorerSelectSourceView(View):
         # knows to re-route us once the side flow is complete -- a different resume
         # constant per chain mode, each handled at its own call site (Bitcoin:
         # SeedExportXpubScriptTypeView and friends, unchanged; EVM: the new branch in
-        # SeedOptionsView.run(), see docs/multi-chain/tools-evm-address-explorer-and-verify-address-plan.md).
+        # SeedOptionsView.run(), see docs/multi-chain/archive/tools-evm-address-explorer-and-verify-address-plan.md).
         self.controller.resume_main_flow = Controller.FLOW__ADDRESS_EXPLORER if self.controller.active_chain_id == "bitcoin" else Controller.FLOW__EVM_ADDRESS_EXPLORER
 
         if len(seeds) > 0 and selected_menu_num < len(seeds):

@@ -220,7 +220,7 @@ class ScanView(View):
             # No Controller state is touched here beyond the check above: the decoded
             # request is used only to build EvmSelectSeedView's seed-selection hint and
             # then discarded (double-scan design -- see
-            # docs/multi-chain/scan-recognizes-eth-sign-request-plan.md). The operator
+            # docs/multi-chain/archive/scan-recognizes-eth-sign-request-plan.md). The operator
             # scans the same QR again inside EvmScanSignRequestView for the real,
             # fully-validated review.
             from seedsigner.views.evm_views import EvmSelectSeedView, EvmUnsupportedSignRequestView

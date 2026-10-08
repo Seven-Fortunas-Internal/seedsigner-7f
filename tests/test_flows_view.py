@@ -88,7 +88,7 @@ class TestViewFlows(FlowTest):
     def test_chain_chooser_bitcoin_selection_flow(self):
         """
         Selecting "Bitcoin" on ChainChooserView sets active_chain_id and lands on
-        MainMenuView -- see docs/multi-chain/boot-chain-selection-plan.md.
+        MainMenuView -- see docs/multi-chain/archive/boot-chain-selection-plan.md.
         """
         self.controller.active_chain_id = None
         self.run_sequence([

@@ -130,7 +130,7 @@ class Controller(Singleton):
 
     # TODO: end refactor section
 
-    # Boot-time chain selection (see docs/multi-chain/boot-chain-selection-plan.md):
+    # Boot-time chain selection (see docs/multi-chain/archive/boot-chain-selection-plan.md):
     # "bitcoin" or "evm", set once per power-on session by ChainChooserView.
     # Deliberately declared OUTSIDE the flow-scoped attrs above -- MainMenuView's own
     # reset block (below, in start()) wipes those on every Home visit, but this one
@@ -321,7 +321,7 @@ class Controller(Singleton):
             # unconditionally overwrites next_destination, so checking active_chain_id
             # first would let a device with MICROSD_TOAST_TIMER_FOREVER set silently
             # skip the chooser for the entire session (found by adversarial review,
-            # see docs/multi-chain/boot-chain-selection-plan.md). Only fires on a true
+            # see docs/multi-chain/archive/boot-chain-selection-plan.md). Only fires on a true
             # fresh boot (initial_destination is the test-suite-only override).
             if self.active_chain_id is None and not initial_destination:
                 next_destination = Destination(ChainChooserView)

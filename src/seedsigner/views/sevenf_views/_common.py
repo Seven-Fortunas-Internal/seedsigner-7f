@@ -239,7 +239,7 @@ class SevenFConfirmSignRootCertView(View):
         needs no new signing primitive, only a new caller. Builds a
         SevenFSignedCertificate on success, now including `tbs_bytes`
         itself (previously discarded here -- see
-        docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3 for why
+        docs/7f-integration/archive/root-self-cert-pkcs10-rework-plan.md §3 for why
         that was a real, already-shipped bug: a TBS whose serial/not_before
         are device-chosen can never be reconstructed downstream from a
         detached signature alone). `root_cert_der` is the Deputy flow's own

@@ -58,7 +58,7 @@
     `{signer_vk, sig}`, no TBS) turns out to be unreconstructable downstream
     for any artifact whose TBS carries device-chosen fields (the CSPRNG
     serial, the wall-clock `not_before`) -- see
-    docs/7f-integration/root-self-cert-pkcs10-rework-plan.md §3 for the full
+    docs/7f-integration/archive/root-self-cert-pkcs10-rework-plan.md §3 for the full
     finding (filed as its own bug, `7f-signing-support-detached-sig-
     export-unreconstructable`, since it also affects the Deputy flow above).
     `assemble_root_cert_der`/`root_self_cert_review_fields` below implement
