@@ -186,3 +186,21 @@ def test_scanner_page_explains_how_ski_and_pin_are_derived():
     assert "SHA-256" in note
     assert "first 20 bytes" in note
     assert "RFC 7093" in note
+
+
+@pytest.mark.parametrize("env, expected", [
+    ("{hasSavePicker: true, canShareFiles: true}", "picker"),    # desktop Chrome/Edge: choose the folder
+    ("{hasSavePicker: false, canShareFiles: true}", "share"),    # iPhone Safari: share sheet -> Save to Files / AirDrop
+    ("{hasSavePicker: false, canShareFiles: false}", "download"),
+])
+def test_save_method_prefers_folder_picker_then_share_sheet_then_download(env, expected):
+    out = _node(f"process.stdout.write(require('./bbqr-decode.js').saveMethod({env}));")
+    assert out == expected
+
+
+def test_scanner_page_offers_save_for_vk_results():
+    from pathlib import Path
+    html = (Path(TOOL_DIR) / "index.html").read_text()
+    assert 'id="saveVk"' in html
+    assert "BBQrDecode.saveMethod(" in html
+    assert "application/octet-stream" in html  # iOS Safari appends .txt to text/plain downloads

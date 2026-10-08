@@ -53,6 +53,7 @@
   <button id="torch" class="secondary" hidden>Torch: off</button>
   <button id="copy" class="secondary" hidden>Copy result</button>
   <button id="copyVk" class="secondary" hidden>Copy VK</button>
+  <button id="saveVk" hidden>Save .vk</button>
   <button id="copyAll" class="secondary" hidden>Copy all</button>
   <button id="copyId" class="secondary" hidden>Copy ID</button>
 </div>
@@ -63,7 +64,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261007c"></script>
+<script src="bbqr-decode.js?v=20261008a"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -76,6 +77,7 @@ const copyBtn = document.getElementById("copy");
 const copyVkBtn = document.getElementById("copyVk");
 const copyIdBtn = document.getElementById("copyId");
 const copyAllBtn = document.getElementById("copyAll");
+const saveVkBtn = document.getElementById("saveVk");
 const vkNoteEl = document.getElementById("vkNote");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
@@ -96,6 +98,7 @@ let lastResult = null; // { index, isNew, at }
 let lastVkText = null;
 let lastIdText = null;
 let lastBundleText = null;
+let lastFileName = null;
 
 function recordDetection(found, now) {
   if (found) detectionTimestamps.push(now);
@@ -239,6 +242,9 @@ async function renderResult(bytes) {
     lastBundleText = vkInfo.bundle;
     copyBtn.hidden = true;
     vkNoteEl.hidden = false;
+    lastFileName = `${vkInfo.id}.vk`;
+    saveVkBtn.hidden = false;
+    saveVkBtn.textContent = `Save ${lastFileName}`;
     copyAllBtn.hidden = false;
     copyAllBtn.textContent = "Copy all";
     copyVkBtn.hidden = false;
@@ -250,6 +256,7 @@ async function renderResult(bytes) {
     copyBtn.textContent = "Copy result";
     vkNoteEl.hidden = true;
     copyAllBtn.hidden = true;
+    saveVkBtn.hidden = true;
     copyVkBtn.hidden = true;
     copyIdBtn.hidden = true;
   }
@@ -288,10 +295,12 @@ document.getElementById("reset").addEventListener("click", () => {
   copyVkBtn.hidden = true;
   copyIdBtn.hidden = true;
   copyAllBtn.hidden = true;
+  saveVkBtn.hidden = true;
   vkNoteEl.hidden = true;
   lastVkText = null;
   lastIdText = null;
   lastBundleText = null;
+  lastFileName = null;
 });
 
 // For a long hex value (e.g. a 1952-byte ML-DSA-65 verification key, 3904 hex
@@ -322,6 +331,46 @@ wireCopyButton(copyBtn, "Copy result", () => resultEl.textContent);
 wireCopyButton(copyVkBtn, "Copy VK", () => lastVkText);
 wireCopyButton(copyIdBtn, "Copy ID", () => lastIdText);
 wireCopyButton(copyAllBtn, "Copy all", () => lastBundleText);
+
+// Saves exactly the bytes sf-wallet-gov would write (Copy VK's text) under
+// the name the coordinator pairs by. application/octet-stream, not
+// text/plain: iOS Safari appends ".txt" to text downloads.
+async function saveFile(name, text) {
+  const blob = new Blob([text], { type: "application/octet-stream" });
+  const method = BBQrDecode.saveMethod({
+    hasSavePicker: typeof window.showSaveFilePicker === "function",
+    canShareFiles: !!(navigator.canShare && navigator.canShare({ files: [new File([blob], name, { type: blob.type })] })),
+  });
+  if (method === "picker") {
+    const handle = await window.showSaveFilePicker({ suggestedName: name });
+    const out = await handle.createWritable();
+    await out.write(blob);
+    await out.close();
+  } else if (method === "share") {
+    await navigator.share({ files: [new File([blob], name, { type: blob.type })], title: name });
+  } else {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  return method;
+}
+
+saveVkBtn.addEventListener("click", async () => {
+  const label = `Save ${lastFileName}`;
+  try {
+    const method = await saveFile(lastFileName, lastVkText);
+    saveVkBtn.textContent = method === "share" ? "Shared" : "Saved";
+  } catch (e) {
+    // AbortError: the person closed the picker or share sheet -- not a failure.
+    saveVkBtn.textContent = e.name === "AbortError" ? label : "Save failed";
+  }
+  setTimeout(() => { saveVkBtn.textContent = label; }, 1500);
+});
 
 // Continuous autofocus and torch are both device-gated (iPhones and most
 // laptop webcams expose neither) -- every call here is guarded by a real

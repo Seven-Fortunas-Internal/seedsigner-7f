@@ -59,6 +59,16 @@ async function pin(hexText) {
   return sha256OfHex(hexText);
 }
 
+// saveMethod(): how the page saves a file under the name it computed.
+// Desktop Chrome/Edge have a folder picker (save straight into
+// governance/<role>/outbox); iPhone Safari has none but can share a named
+// file (Save to Files, AirDrop, Mail); anything else gets a plain download.
+function saveMethod({ hasSavePicker, canShareFiles }) {
+  if (hasSavePicker) return "picker";
+  if (canShareFiles) return "share";
+  return "download";
+}
+
 // vkBundle(): everything a member hands the coordinator for one key, in one
 // paste, labelled the way sf-wallet-gov prints it. null for non-hex input.
 async function vkBundle(hexText) {
@@ -185,6 +195,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, saveMethod };
 
 });
