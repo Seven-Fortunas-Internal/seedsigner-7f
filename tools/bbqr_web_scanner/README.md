@@ -59,6 +59,18 @@ The current URL is `https://bbqr.tail25f985.ts.net`. Camera access needs HTTPS o
 
 **Pin a revision for a ceremony.** The unit serves this directory from the working tree, so any edit or checkout changes what the page does mid-ceremony. Before a ceremony, check out a known commit of `firmware/seedsigner-7f`, record its hash in the ceremony notes, and do not change the tree until the ceremony ends.
 
+## Publishing
+
+Public copy: https://seven-fortunas.github.io/7f-signer/ (repo `Seven-Fortunas/7f-signer`, folder `html/`, deployed by `.github/workflows/pages.yml`). Push to that repo as `mateo-7f`.
+
+```bash
+git clone https://github.com/Seven-Fortunas/7f-signer.git /tmp/7f-signer
+tools/bbqr_web_scanner/publish/publish.sh /tmp/7f-signer   # refuses uncommitted changes
+# review, commit and push /tmp/7f-signer as mateo-7f
+```
+
+The script copies only the page's files (no README, CLIs or tests), stamps `version.js` with this repo's commit, and adds `LICENSES/` and the workflow. The footer shows that commit; compare it with the one you expect before a ceremony.
+
 ## Tests
 
 `tests/test_bbqr_web_scanner.py` and `tests/test_bbqr_web_encoder.py` (require Node; skipped if Node is absent).
@@ -74,7 +86,9 @@ The current URL is `https://bbqr.tail25f985.ts.net`. Camera access needs HTTPS o
 | `bbqr-decode.js` | Decoding and envelope checks (shared with `decode_cli.js`) |
 | `bbqr-encode.js` | File checks and BBQr encoding (shared with `encode_cli.js`) |
 | `decode_cli.js`, `encode_cli.js` | Node command-line wrappers for tests |
-| `version.js` | The version shown in the footer |
+| `version.js` | The version shown in the footer (stamped by `publish/publish.sh`) |
+| `LICENSES/` | Our MIT license and the bundled libraries' licenses |
+| `publish/` | `publish.sh` and the Pages workflow for the public repo |
 | `jsQR.min.js` | Vendored QR decoder (jsQR 1.4.0) |
 | `pako.min.js` | Vendored zlib (pako 2.1.0) |
 | `qrcode-generator.js` | Vendored QR encoder (qrcode-generator 2.0.4, MIT, npm tarball sha256 `02e2e18a…8159`) |
