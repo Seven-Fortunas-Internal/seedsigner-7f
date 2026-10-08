@@ -27,9 +27,9 @@ from seedsigner.models.sevenf.genesis_config import (
     parse_canonical_bytes,
     parse_genesis_config_json,
     review_fields,
-    root_id,
     root_sig_filename,
 )
+from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
 
 
 def _lib_available() -> bool:
@@ -467,32 +467,42 @@ def test_build_root_sig_json_with_vk_includes_the_hex_key():
     assert doc["sig"] == "1234" * 8
 
 
-def test_root_id_matches_real_sf_core_convention():
-    """ Pinned against crates/sf-core/src/genesis_config.rs::root_id()'s own
-        `hex::encode(&Sha256::digest(&vk)[..10])` -- SHA-256 of the raw key,
-        truncated to 10 bytes, hex-encoded. Re-confirmed directly against
-        that real, current source 2026-09-30 after this test's PREVIOUS
-        version pinned a plain-truncation value that had no relationship to
-        the real function at all -- this module's own root_id() had the
-        same bug, found via a 7fchain sync, not by this test (its old
-        fixture value was self-consistently wrong). The expected value
-        below is computed with Python's own hashlib directly against the
-        input, not copied from the implementation under test. """
+def test_ski_matches_real_x509_key_id_convention():
+    """ Pinned against 7fchain's shared-crypto x509::key_id()
+        (`Sha256::digest(vk)[..20]`, RFC 7093 method 1) -- the Subject Key
+        Identifier 7fchain made the single human-facing key id and the name of
+        every governance file in ce04ae9/416f576 (2026-10-07). The expected
+        value is computed with hashlib directly, not by the code under test. """
     vk_hex = "AB" * 976  # exercises uppercase-input handling
     import hashlib
-    expected = hashlib.sha256(bytes.fromhex(vk_hex)).digest()[:10].hex()
-    assert root_id(vk_hex) == expected
-    assert root_id(vk_hex) == "0377200d0972f6389d22"  # pinned, not just self-referential
+    expected = hashlib.sha256(bytes.fromhex(vk_hex)).digest()[:20].hex()
+    assert ski(vk_hex) == expected
+    assert len(ski(vk_hex)) == 40
 
 
-def test_root_sig_filename_matches_real_sf_root_convention():
-    """ Pinned against crates/sf-keytree/src/bin/sf-root.rs's own
-        `cmd_sign_genesis` outbox naming: `{id}.genesis` where
-        `id = root_id(vk_hex)` -- confirmed against that real, current
-        source (commit 3bb5da3). Expected id recomputed 2026-09-30 after
-        root_id()'s own bug fix (see test_root_id_matches_real_sf_core_convention). """
+def test_format_ski_for_display_groups_in_fours_and_loses_nothing():
+    """ 40 unbroken hex chars can't line-wrap on the 240px screen -- they ran
+        off both edges. Groups of four wrap into two lines and are easier to
+        read aloud; stripping the spaces must give back the exact ski. """
+    value = "591c511984a2d73c6bee1f4dc149d48f7f97fc55"
+    shown = format_ski_for_display(value)
+    assert shown == "591c 5119 84a2 d73c 6bee 1f4d c149 d48f 7f97 fc55"
+    assert shown.replace(" ", "") == value
+
+
+def test_root_sig_filename_matches_real_sf_wallet_gov_convention():
+    """ Pinned against crates/sf-wallet-gov/src/sign_ops.rs's sign-genesis
+        output naming, `<ski>.genesis` (7fchain ce04ae9). The coordinator pairs
+        a signature carrying no key with `<ski>.vk` by this stem, so a
+        20-hex-named file is refused at assembly. """
     signer_vk = bytes.fromhex("ab" * 1952)  # ML_DSA_PK_LEN
-    assert root_sig_filename(signer_vk) == "f818b47b772449955fed.genesis"
+    import hashlib
+    expected = hashlib.sha256(signer_vk).digest()[:20].hex()
+    assert root_sig_filename(signer_vk) == f"{expected}.genesis"
+    # Pinned literal; its first 20 hex are the old pinned sf-core root_id for
+    # this same key (f818b47b772449955fed), as 416f576 says: the id is the
+    # ski's first half.
+    assert root_sig_filename(signer_vk) == "f818b47b772449955fed6b7652624ca7d298d502.genesis"
 
 
 def test_root_sig_filename_uses_hex_not_raw_bytes():
@@ -502,7 +512,7 @@ def test_root_sig_filename_uses_hex_not_raw_bytes():
     signer_vk = bytes([0x00, 0xff, 0x10] * 20)
     filename = root_sig_filename(signer_vk)
     assert filename.endswith(".genesis")
-    assert filename == f"{root_id(signer_vk.hex())}.genesis"
+    assert filename == f"{ski(signer_vk.hex())}.genesis"
 
 
 def test_format_timestamp_shows_both_raw_value_and_utc_interpretation():

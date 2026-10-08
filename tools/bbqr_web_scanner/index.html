@@ -58,7 +58,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261007a"></script>
+<script src="bbqr-decode.js?v=20261007b"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -162,11 +162,11 @@ function setStatus(text, cls) {
   statusEl.className = cls || "";
 }
 
-// BBQrDecode.rootId() (bbqr-decode.js, shared with decode_cli.js so it's
-// covered by tests/test_bbqr_web_scanner.py) -- same fingerprint the device
-// itself shows on its "Subject key id" screen before export, and the same
-// one sf-root-coordinator's `status` command uses to identify a key, so
-// this is a genuine independent cross-check, not just redisplaying the input.
+// BBQrDecode.ski() (bbqr-decode.js, shared with decode_cli.js so it's
+// covered by tests/test_bbqr_web_scanner.py) -- the same subject key id the
+// device itself shows on its "Subject key id" screen before export, and the
+// one sf-wallet-gov prints and names `<ski>.vk` by, so this is a genuine
+// independent cross-check, not just redisplaying the input.
 
 // A 1952-byte ML-DSA-65 verification key is the only payload this project's
 // device ever exports as BBQr file_type 'U' (confirmed: the device's own
@@ -190,7 +190,7 @@ async function renderResult(bytes) {
     text = new TextDecoder().decode(bytes);
     if (text.trim().length === VK_HEX_LEN) {
       // A failure here (e.g. a stale cached bbqr-decode.js from before
-      // rootId() existed, or an unsupported crypto.subtle) must never
+      // ski() existed, or an unsupported crypto.subtle) must never
       // prevent the actual decoded result below from displaying -- that's
       // the primary thing this page exists to show. Found live 2026-10-07:
       // this was previously unguarded, and because renderResult() is
@@ -198,21 +198,21 @@ async function renderResult(bytes) {
       // resultEl.textContent was ever set, with no visible error at all --
       // the scan looked complete but nothing displayed.
       try {
-        fingerprint = await BBQrDecode.rootId(text);
+        fingerprint = await BBQrDecode.ski(text);
       } catch (e) {
-        console.warn("root_id computation failed:", e.message);
+        console.warn("subject key id computation failed:", e.message);
         fingerprint = `(unavailable: ${e.message} -- try a hard refresh)`;
       }
     }
   } else {
     text = `file_type=${session.fileType}, ${bytes.length} bytes\n\nhex:\n${bytesToHex(bytes)}`;
   }
-  resultEl.textContent = fingerprint ? `Subject key id (root_id): ${fingerprint}\n\n${text}` : text;
+  resultEl.textContent = fingerprint ? `Subject key id: ${fingerprint}\n\n${text}` : text;
   setStatus(`Complete -- ${bytes.length} bytes decoded.`, "ok");
 
   // A vk result has two genuinely separate things worth copying on their
   // own -- the full 3904-char hex to send/import somewhere, and the short
-  // 20-char id to read aloud or paste into a message confirming a match --
+  // 40-char id to read aloud or paste into a message confirming a match --
   // so it gets its own pair of buttons instead of the generic "copy
   // everything" one, which would otherwise copy both concatenated together.
   if (fingerprint) {

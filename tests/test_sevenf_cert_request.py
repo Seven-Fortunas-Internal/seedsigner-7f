@@ -651,15 +651,29 @@ def test_deputy_cross_cert_v2_review_fields_valid_until_is_clamped_to_the_roots_
     assert by_label["Deputy: Valid until"] == by_label["Issuing Root: Valid until"]
 
 
-def test_deputy_cross_cert_v2_review_fields_key_ids_use_the_root_id_convention():
-    from seedsigner.models.sevenf.genesis_config import root_id
+def test_deputy_cross_cert_v2_review_fields_key_ids_use_the_ski_convention():
+    from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
     root_cert = parse_root_certificate_der(ROOT_CERT_DER)
     csr = verify_and_parse_csr_der(DEPUTY_CSR_DER)
     serial = bytes([0x99]) * 16
     fields = deputy_cross_cert_v2_review_fields(root_cert, csr, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, serial)
     by_label = {f.label: f.value for f in fields}
-    assert by_label["Issuing Root: Subject key id"] == root_id(root_cert.subject_vk.hex())
-    assert by_label["Deputy: Subject key id"] == root_id(csr.subject_vk.hex())
+    assert by_label["Issuing Root: Subject key id"] == format_ski_for_display(ski(root_cert.subject_vk.hex()))
+    assert by_label["Deputy: Subject key id"] == format_ski_for_display(ski(csr.subject_vk.hex()))
+
+
+def test_deputy_cross_cert_v2_review_fields_warnings_name_the_subject_key_id_not_a_fingerprint():
+    """ 7fchain 3b39588/ce04ae9: what a holder reports by voice is the subject
+        key id; "fingerprint" now names only the 8-hex transport-blob check, so
+        telling the operator to compare against a "fingerprint" points them at
+        the wrong value. """
+    root_cert = parse_root_certificate_der(ROOT_CERT_DER)
+    csr = verify_and_parse_csr_der(DEPUTY_CSR_DER)
+    fields = deputy_cross_cert_v2_review_fields(root_cert, csr, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, bytes([0x99]) * 16)
+    for f in fields:
+        if f.is_warning:
+            assert "fingerprint" not in f.warning_detail.lower()
+            assert "subject key id" in f.warning_detail.lower()
 
 
 def test_deputy_cross_cert_v2_review_fields_subject_key_id_fields_are_flagged_as_warning_fields():
@@ -779,12 +793,19 @@ def test_root_self_cert_review_fields_includes_subject_chain_dates_and_serial():
     assert str(not_after) in by_label["Valid until"]
 
 
-def test_root_self_cert_review_fields_key_id_uses_the_root_id_convention():
-    from seedsigner.models.sevenf.genesis_config import root_id
+def test_root_self_cert_review_fields_key_id_uses_the_ski_convention():
+    from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
     vk = bytes([0xCD]) * 1952
     fields = root_self_cert_review_fields(vk, ChainKind.MAINNET, 1_700_000_000, 1_900_000_000, bytes([0x22]) * 16)
     by_label = {f.label: f.value for f in fields}
-    assert by_label["Subject key id"] == root_id(vk.hex())
+    assert by_label["Subject key id"] == format_ski_for_display(ski(vk.hex()))
+
+
+def test_root_self_cert_review_fields_warning_names_the_subject_key_id_not_a_fingerprint():
+    fields = root_self_cert_review_fields(bytes([0xCD]) * 1952, ChainKind.MAINNET, 1_700_000_000, 1_900_000_000, bytes([0x22]) * 16)
+    warning = next(f for f in fields if f.is_warning)
+    assert "fingerprint" not in warning.warning_detail.lower()
+    assert "subject key id" in warning.warning_detail.lower()
 
 
 def test_root_self_cert_review_fields_subject_key_id_is_flagged_as_a_warning_field():

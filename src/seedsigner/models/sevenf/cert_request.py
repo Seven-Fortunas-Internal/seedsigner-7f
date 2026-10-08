@@ -73,7 +73,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
-from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, root_id
+from seedsigner.models.sevenf.review_format import format_ski_for_display, format_timestamp as _format_timestamp, ski
 
 # Must match firmware/mldsa7f/src/ffi.rs's CERT_TBS_MAX_LEN exactly --
 # display/sizing-only here (the FFI call itself fails loudly with a
@@ -429,15 +429,15 @@ def deputy_cross_cert_v2_review_fields(
     not_after = min(now + days * 86_400, root_cert.not_after)
     return [
         ReviewField(
-            label="Issuing Root: Subject key id", value=root_id(root_cert.subject_vk.hex()), is_warning=True,
-            warning_detail="Compare this against the Root's recorded enrollment fingerprint before continuing.",
+            label="Issuing Root: Subject key id", value=format_ski_for_display(ski(root_cert.subject_vk.hex())), is_warning=True,
+            warning_detail="Compare against the subject key id the Root's holder reported.",
         ),
         ReviewField(label="Issuing Root: Valid from", value=_format_timestamp(root_cert.not_before)),
         ReviewField(label="Issuing Root: Valid until", value=_format_timestamp(root_cert.not_after)),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
         ReviewField(
-            label="Deputy: Subject key id", value=root_id(csr.subject_vk.hex()), is_warning=True,
-            warning_detail="Compare this against the Deputy's recorded enrollment fingerprint before continuing.",
+            label="Deputy: Subject key id", value=format_ski_for_display(ski(csr.subject_vk.hex())), is_warning=True,
+            warning_detail="Compare against the subject key id the Deputy's holder reported.",
         ),
         ReviewField(label="Deputy: Valid from", value=_format_timestamp(now)),
         ReviewField(label="Deputy: Valid for", value=f"{days} days"),
@@ -522,8 +522,8 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
         in place of a compiled-in pin allowlist (§5.1). """
     return [
         ReviewField(
-            label="Subject key id", value=root_id(subject_vk.hex()), is_warning=True,
-            warning_detail="Compare this against your recorded enrollment fingerprint before continuing.",
+            label="Subject key id", value=format_ski_for_display(ski(subject_vk.hex())), is_warning=True,
+            warning_detail="Compare against your recorded subject key id.",
         ),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
         ReviewField(label="Valid from", value=_format_timestamp(not_before)),

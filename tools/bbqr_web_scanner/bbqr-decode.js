@@ -25,14 +25,15 @@ function fromBase36Pair(pair) {
   return BASE36.indexOf(pair[0]) * 36 + BASE36.indexOf(pair[1]);
 }
 
-// root_id(): SHA-256 of the RAW key bytes (not the hex string's own UTF-8
-// bytes), truncated to the first 10 bytes, hex-encoded -- byte-for-byte port
-// of sf-core::genesis_config::root_id() (7fchain) / review_format.root_id()
-// (this device's own Python port). Uses the Web Crypto API (crypto.subtle),
+// ski(): the Subject Key Identifier -- SHA-256 of the RAW key bytes (not the
+// hex string's own UTF-8 bytes), truncated to the first 20 bytes, hex-encoded
+// (40 chars). Byte-for-byte port of 7fchain's x509::key_id() (RFC 7093
+// method 1) / review_format.ski() (this device's own Python port): the id
+// sf-wallet-gov prints and names every governance file by (7fchain ce04ae9). Uses the Web Crypto API (crypto.subtle),
 // present natively in both browsers (secure context -- same requirement
 // this page's camera access already has) and Node 19+, so no new
 // dependency. Returns null for input that isn't well-formed hex.
-async function rootId(hexText) {
+async function ski(hexText) {
   const clean = String(hexText).trim().toLowerCase();
   if (!/^[0-9a-f]+$/.test(clean) || clean.length % 2 !== 0) return null;
   const bytes = new Uint8Array(clean.length / 2);
@@ -40,7 +41,7 @@ async function rootId(hexText) {
     bytes[i] = parseInt(clean.substr(i * 2, 2), 16);
   }
   const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest).slice(0, 10))
+  return Array.from(new Uint8Array(digest).slice(0, 20))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
@@ -162,6 +163,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, rootId };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski };
 
 });

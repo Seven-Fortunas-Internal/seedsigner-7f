@@ -162,16 +162,16 @@ class SevenFSelectChainKindForRootEnrollmentView(View):
 
 
 class SevenFRootVkFingerprintView(View):
-    """ Shows the enrollment vk's short fingerprint (root_id -- the same
-        SHA-256-truncated id 7fchain's own sf-root-coordinator `status`
-        command uses to identify a key, per decision C17) directly on the
+    """ Shows the enrollment vk's subject key id (ski -- the 40-hex id
+        sf-wallet-gov prints and names the holder's `<ski>.vk` by, 7fchain
+        ce04ae9/416f576) directly on the
         device screen before the QR export, so the operator has an
         authoritative value read with their own eyes to compare against
         whatever a phone scanner later decodes from the QR -- catching a
         transport/encoding bug the QR round-trip alone couldn't surface.
         Found live 2026-10-07, asked for mid-ceremony during the first real
         testnet Root VK enrollment ("how can I verify it? -- can I display
-        it on the seedsigner screen?"). Same fingerprint convention as
+        it on the seedsigner screen?"). Same subject key id as
         root_self_cert_review_fields's "Subject key id" field, but this
         operation has no review-fields flow of its own to attach it to
         (derive-vk makes no claim beyond "here is a public key" -- nothing
@@ -183,13 +183,13 @@ class SevenFRootVkFingerprintView(View):
 
     def run(self):
         from seedsigner.gui.screens.screen import LargeIconStatusScreen
-        from seedsigner.models.sevenf.review_format import root_id
+        from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
 
         selected_menu_num = self.run_screen(
             LargeIconStatusScreen,
             title=_("Root VK"),
             status_headline=_("Subject key id"),
-            text=root_id(self.public_key.hex()),
+            text=format_ski_for_display(ski(self.public_key.hex())),
             button_data=[ButtonOption("Continue to QR")],
         )
 
@@ -207,8 +207,8 @@ class SevenFExportRootVkQRView(View):
     """ Exports the Root CA verification key as bare hex, BBQr-encoded ('U':
         unicode/plain-text) -- the real enrollment artifact. No signature, no
         certificate, no path, no fingerprint: matches 7fchain's own
-        sf-wallet-gov `derive-vk --out` exactly (bare hex vk written to a
-        `<id>.vk` file; see sf-root-coordinator.rs's decision C17). Reuses
+        sf-wallet-gov's `<ski>.vk` exactly (bare hex vk; see
+        sf-root-coordinator.rs's decision C17). Reuses
         the identical export mechanic as _genesis.SevenFExportPubkeyQRView,
         kept as its own small view rather than shared because the two have
         different next destinations (that one returns to its own genesis

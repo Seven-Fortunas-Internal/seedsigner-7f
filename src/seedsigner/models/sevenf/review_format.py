@@ -36,21 +36,25 @@ def format_timestamp(timestamp: int) -> str:
     return f"{timestamp}\n({utc_str})"
 
 
-def root_id(vk_hex: str) -> str:
-    """ Ports 7fchain's crates/sf-core/src/genesis_config.rs::root_id()
-        exactly: `hex::encode(&Sha256::digest(&vk)[..10])` -- SHA-256 of the
-        raw key, truncated to 10 bytes, hex-encoded (20 characters).
-        Re-confirmed directly against that real, current source 2026-09-30
-        after finding this function's PREVIOUS implementation here
-        (`vk_hex[:20].lower()`, a bare string truncation with no hashing at
-        all) computed a value with zero relationship to the real one --
-        found via a 7fchain sync, not by this module's own test suite,
-        since that suite's own fixture values encoded the same wrong
-        assumption rather than a real reference vector. Used to name a
-        signature file the same way sf-root.rs's own outbox does
-        (`<id>.genesis`, `<id>.rootcert`, `<id>.deputy`) and to show the
-        operator a verifiable identity fingerprint on the review screen
-        before signing (D11) -- both uses depend on this matching the real
-        function exactly, not just being *a* fingerprint. """
+def ski(vk_hex: str) -> str:
+    """ The Subject Key Identifier: SHA-256 of the raw key truncated to 20
+        bytes, hex-encoded (40 characters) -- RFC 7093 method 1, ported from
+        7fchain's shared-crypto x509::key_id(). Since 7fchain ce04ae9/416f576
+        (2026-10-07) it is the ONE key id a person reads: sf-wallet-gov prints
+        it as "subject key id", an issued certificate carries it (so
+        `openssl x509 -text` reads it back), and every governance file is named
+        by it (`<ski>.vk`, `<ski>.genesis`, `<ski>.devfund`, `root-<ski>.pem`).
+        The coordinator pairs a keyless signature with its `.vk` by that stem.
+        Replaces the 20-hex sf-core root_id() this module used to port, which
+        is now internal to 7fchain (ledger, CSR common name) and shown to no
+        one. """
     vk = bytes.fromhex(vk_hex)
-    return hashlib.sha256(vk).digest()[:10].hex()
+    return hashlib.sha256(vk).digest()[:20].hex()
+
+
+def format_ski_for_display(ski_hex: str) -> str:
+    """ The ski in groups of four for the 240px screen: 40 unbroken hex
+        characters can't line-wrap and ran off both edges, while ten groups
+        wrap into two lines and are easier to read aloud and compare. Display
+        only -- filenames and anything copied use the plain ski. """
+    return " ".join(ski_hex[i:i + 4] for i in range(0, len(ski_hex), 4))

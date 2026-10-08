@@ -96,6 +96,23 @@ def test_root_ca_matches_7fchains_real_canonical_vector():
     )
 
 
+def test_root_ca_ski_matches_real_sf_wallet_gov_sign_root_cert():
+    """ End-to-end against the real federation binary, not our own port:
+        `sf-wallet-gov sign-root-cert --index 0` (7fchain 416f576, run
+        2026-10-07 in a sandboxed HOME from a testnet directory) on the
+        canonical "abandon ... art" phrase, empty BIP-39 passphrase, printed
+        `subject key id: 591c511984a2d73c6bee1f4dc149d48f7f97fc55` and wrote
+        `591c...fc55.vk` byte-identical to this device's derived key. This is
+        the id the device must show and the stem the coordinator pairs
+        signatures by. """
+    from seedsigner.models.sevenf.review_format import ski
+
+    canonical_phrase = " ".join(["abandon"] * 23 + ["art"])
+    keys = derive_root_ceremony_keys(mnemonic_to_seed(canonical_phrase, password=""), ChainKind.TESTNET)
+
+    assert ski(keys.root_ca.public_key.hex()) == "591c511984a2d73c6bee1f4dc149d48f7f97fc55"
+
+
 def test_root_ca_and_devfund_are_the_same_key():
     """ BUG FIX, 2026-10-03 (R27 re-port): this used to assert root_ca and
         devfund differ -- that was the bug. Direct reading of 7fchain's

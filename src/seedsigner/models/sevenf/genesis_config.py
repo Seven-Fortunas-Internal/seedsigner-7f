@@ -40,7 +40,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, root_id
+from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, ski
 
 # Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
 # exactly -- display-only here (parse_canonical_bytes already enforces the
@@ -381,11 +381,10 @@ def build_root_sig_json(signer_vk: bytes, sig: bytes, *, with_vk: bool = False) 
 
 
 def root_sig_filename(signer_vk: bytes) -> str:
-    """ Matches 7fchain's own sf-root binary filename convention exactly
-        (crates/sf-keytree/src/bin/sf-root.rs's `cmd_sign_genesis`:
-        `{id}.genesis` where `id = root_id(vk_hex)`) -- confirmed against
-        that real, current source, not guessed. Display-only here (this
-        device exports over QR per R16, not to a filesystem) but kept so an
-        operator naming a manually-saved copy on the receiving end uses the
-        same convention sf-root itself would have. """
-    return f"{root_id(signer_vk.hex())}.genesis"
+    """ Matches sf-wallet-gov's sign-genesis output name, `<ski>.genesis`
+        (crates/sf-wallet-gov/src/sign_ops.rs, 7fchain ce04ae9) -- the stem
+        sf-root-coordinator pairs a keyless signature with `<ski>.vk` by.
+        Display-only here (this device exports over QR per R16, not to a
+        filesystem) but kept so an operator naming a manually-saved copy on
+        the receiving end uses the same convention. """
+    return f"{ski(signer_vk.hex())}.genesis"

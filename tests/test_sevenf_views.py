@@ -451,7 +451,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             vk a seed implies depends on a ceremony role and chain_kind not yet
             chosen on this screen (found 2026-10-06 comparing SeedSigner's
             fields against sf-wallet-gov's "fingerprint" vs. "id" output;
-            root_id/"Subject key id" already matched -- this generic header is
+            the 7F "Subject key id" already matched -- this generic header is
             the unrelated, genuinely-meaningless-here value). SeedOptionsScreen
             falls back to a generic title when fingerprint is None. """
         seed = self.seed_fixture()
@@ -503,14 +503,13 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         assert destination.view_args["public_key"] == keys.root_ca.public_key
 
 
-    def test_fingerprint_view_shows_the_real_root_id_and_routes_to_export(self):
-        """ Confirms the on-screen fingerprint is the REAL root_id() of this
-            seed's own key (not a placeholder), matching 7fchain's own
-            sf-root-coordinator `status` id exactly -- the whole point is
-            that Patrick can independently recompute this same short value
-            from whatever vk Jorge sends and confirm it matches what was
-            read off the device screen. """
-        from seedsigner.models.sevenf.review_format import root_id
+    def test_fingerprint_view_shows_the_real_ski_and_routes_to_export(self):
+        """ Confirms the on-screen id is the REAL subject key id (ski) of this
+            seed's own key (not a placeholder) -- the 40-hex value
+            sf-wallet-gov prints and names the holder's `<ski>.vk` by
+            (7fchain ce04ae9/416f576), so the operator can name the scanned
+            file and Patrick can recompute the same value from the vk. """
+        from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
 
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
@@ -528,8 +527,8 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             destination = view.run()
 
         assert captured["status_headline"] == "Subject key id"
-        assert captured["text"] == root_id(keys.root_ca.public_key.hex())
-        assert len(captured["text"]) == 20  # 10 bytes, hex-encoded
+        assert captured["text"] == format_ski_for_display(ski(keys.root_ca.public_key.hex()))
+        assert len(captured["text"].replace(" ", "")) == 40  # 20 bytes, hex-encoded
 
         assert destination.View_cls == sevenf_views.SevenFExportRootVkQRView
         assert destination.view_args["public_key"] == keys.root_ca.public_key
