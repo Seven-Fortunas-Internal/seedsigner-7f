@@ -166,7 +166,7 @@ class SevenFSelectChainKindForRootEnrollmentView(View):
 
         return Destination(
             SevenFRootVkFingerprintView,
-            view_args=dict(public_key=keys.root_ca.public_key, title=_("Root VK")),
+            view_args=dict(public_key=keys.root_ca.public_key, title=_("Root VK"), role="root"),
         )
 
 
@@ -206,7 +206,7 @@ class SevenFSelectChainKindForDevfundEnrollmentView(View):
 
         return Destination(
             SevenFRootVkFingerprintView,
-            view_args=dict(public_key=devfund.public_key, title=_("Dev-fund VK")),
+            view_args=dict(public_key=devfund.public_key, title=_("Dev-fund VK"), role="devfund"),
         )
 
 
@@ -227,10 +227,11 @@ class SevenFRootVkFingerprintView(View):
         (derive-vk makes no claim beyond "here is a public key" -- nothing
         else to review), so it gets this one small dedicated screen. Shared
         by Root and dev-fund enrollment; `title` says which key this is. """
-    def __init__(self, public_key: bytes, title: str):
+    def __init__(self, public_key: bytes, title: str, role: str = "root"):
         super().__init__()
         self.public_key = public_key
         self.title = title
+        self.role = role
 
 
     def run(self):
@@ -250,7 +251,7 @@ class SevenFRootVkFingerprintView(View):
 
         return Destination(
             SevenFVkPinView,
-            view_args=dict(public_key=self.public_key, title=self.title),
+            view_args=dict(public_key=self.public_key, title=self.title, role=self.role),
         )
 
 
@@ -264,10 +265,11 @@ class SevenFVkPinView(View):
         the phone scanner computes it from whatever it scanned, so it would
         agree with a bad scan. Own screen because 64 hex (16 groups) doesn't
         fit beside the subject key id. """
-    def __init__(self, public_key: bytes, title: str):
+    def __init__(self, public_key: bytes, title: str, role: str = "root"):
         super().__init__()
         self.public_key = public_key
         self.title = title
+        self.role = role
 
 
     def run(self):
@@ -287,7 +289,7 @@ class SevenFVkPinView(View):
 
         return Destination(
             SevenFExportRootVkQRView,
-            view_args=dict(public_key=self.public_key),
+            view_args=dict(public_key=self.public_key, role=self.role),
         )
 
 
@@ -306,19 +308,22 @@ class SevenFExportRootVkQRView(View):
         export menu; this one, like SevenFExportRootCertQRView, returns
         straight to MainMenuView -- there's nothing else to do after a
         standalone enrollment export). """
-    def __init__(self, public_key: bytes):
+    def __init__(self, public_key: bytes, role: str = "root"):
         super().__init__()
         self.public_key = public_key
+        self.role = role
 
 
     def run(self):
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        pubkey_hex = self.public_key.hex().encode("utf-8")
+        from seedsigner.models.sevenf.export_envelope import vk_export
 
+        # <ski>.vk exactly as sf-wallet-gov writes it, tagged root/devfund so
+        # the host page says which inbox it belongs in.
         self.run_screen(
             QRDisplayScreen,
-            qr_encoder=BBQrEncoder(data=pubkey_hex, file_type="U"),  # 'U': BBQr unicode/plain-text
+            qr_encoder=BBQrEncoder(data=vk_export(self.role, self.public_key), file_type="J"),
         )
         return Destination(MainMenuView, skip_current_view=True)
 
@@ -367,6 +372,6 @@ class SevenFExportRootCertQRView(View):
         # to the Root VK (ski -> pin -> QR) in the same sitting.
         return Destination(
             SevenFRootVkFingerprintView,
-            view_args=dict(public_key=self.certificate.public_key, title=_("Root VK")),
+            view_args=dict(public_key=self.certificate.public_key, title=_("Root VK"), role="root"),
             skip_current_view=True,
         )

@@ -97,3 +97,22 @@ def test_deputy_cert_export_is_named_for_the_issuing_root():
     assert env["kind"] == "deputy-cert"
     assert env["file"] == f"deputy-{hashlib.sha256(issuer_vk).hexdigest()[:40]}.pem"
     assert env["body"] == GOV_DEPUTY
+
+
+@pytest.mark.parametrize("role", ["root", "devfund"])
+def test_vk_export_is_tagged_with_its_role(role):
+    """ The runbook warns a Root vk was once sent as the dev-fund vk; both are
+        <ski>.vk, so the export says which key it is. Body exactly as
+        sf-wallet-gov writes a .vk: lowercase hex plus a newline. """
+    from seedsigner.models.sevenf.export_envelope import vk_export
+    vk = b"\x0b" * 1952
+    env = json.loads(vk_export(role, vk))
+    assert env["kind"] == f"{role}-vk"
+    assert env["file"] == f"{hashlib.sha256(vk).hexdigest()[:40]}.vk"
+    assert env["body"] == vk.hex() + "\n"
+
+
+def test_vk_export_refuses_an_unknown_role():
+    from seedsigner.models.sevenf.export_envelope import vk_export
+    with pytest.raises(ValueError):
+        vk_export("treasury", b"\x0b" * 1952)

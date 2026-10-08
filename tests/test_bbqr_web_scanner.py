@@ -426,3 +426,36 @@ def test_inspect_export_accepts_a_deputy_cert_named_for_its_issuer():
 def test_inspect_export_refuses_a_deputy_cert_named_for_another_root():
     r = _inspect(_deputy_envelope(file="deputy-" + "0" * 40 + ".pem"))
     assert r["error"] and "does not match" in r["error"]
+
+
+@pytest.mark.parametrize("role, folder", [("root", "governance/root/outbox"), ("devfund", "governance/devfund/outbox")])
+def test_inspect_export_accepts_role_tagged_vks_and_names_the_folder(role, folder):
+    import hashlib, json
+    from seedsigner.models.sevenf.export_envelope import vk_export
+    vk = b"\x0b" * 1952
+    r = _inspect(vk_export(role, vk).decode())
+    assert r["error"] is None
+    assert r["kind"] == f"{role}-vk"
+    assert r["ski"] == hashlib.sha256(vk).hexdigest()[:40]
+    assert r["pin"] == hashlib.sha256(vk).hexdigest()
+    assert r["folder"] == folder
+
+
+@pytest.mark.parametrize("change, needle", [
+    (lambda e: {**e, "file": "0" * 40 + ".vk"}, "does not match"),
+    (lambda e: {**e, "body": e["body"].rstrip("\n")}, "verification key"),
+    (lambda e: {**e, "body": e["body"].upper()}, "verification key"),
+])
+def test_inspect_export_refuses_bad_vk_envelopes(change, needle):
+    import json
+    from seedsigner.models.sevenf.export_envelope import vk_export
+    env = json.loads(vk_export("root", b"\x0b" * 1952))
+    r = _inspect(json.dumps(change(env)))
+    assert r["error"] and needle in r["error"]
+
+
+def test_summary_records_the_role_when_known():
+    import json
+    vk = (b"\x0b" * 1952).hex()
+    out = _node(f"require('./bbqr-decode.js').vkSummary('{vk}', 'devfund').then(r => process.stdout.write(JSON.stringify(r)));")
+    assert "role: devfund" in json.loads(out)["text"]

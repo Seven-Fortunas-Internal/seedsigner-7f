@@ -75,3 +75,15 @@ def deputy_cert_export(cert_der: bytes, issuer_vk: bytes) -> bytes:
         deputy-<issuing Root ski>.pem -- named for the issuer, since six Roots
         certify one Deputy and naming by subject would collide. """
     return envelope("deputy-cert", f"deputy-{ski(issuer_vk.hex())}.pem", der_to_pem(cert_der))
+
+
+_VK_ROLES = ("root", "devfund")
+
+
+def vk_export(role: str, vk: bytes) -> bytes:
+    """ A verification key as sf-wallet-gov writes a .vk (lowercase hex plus a
+        newline), tagged with its role: Root and dev-fund keys are both
+        <ski>.vk, and the runbook warns one was already sent as the other. """
+    if role not in _VK_ROLES:
+        raise ValueError(f"unknown vk role {role!r}")
+    return envelope(f"{role}-vk", f"{ski(vk.hex())}.vk", vk.hex() + "\n")

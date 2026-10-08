@@ -62,13 +62,14 @@ async function pin(hexText) {
 // vkSummary(): a <ski>.txt record of one key for the holder -- the bundle
 // above with a reminder that the pin is only a check when confirmed over a
 // second channel (the .vk itself must stay bare hex for 7fchain's tools).
-async function vkSummary(hexText) {
+async function vkSummary(hexText, role) {
   const bundle = await vkBundle(hexText);
   if (bundle === null) return null;
   const id = bundle.split("\n")[0].slice("subject key id: ".length);
+  const roleLine = role ? `role: ${role}\n` : "";
   return {
     name: `${id}.txt`,
-    text: "# Record only. Send the .vk file; confirm the pin by phone -- a pin in a file proves nothing.\n" + bundle,
+    text: "# Record only. Send the .vk file; confirm the pin by phone -- a pin in a file proves nothing.\n" + roleLine + bundle,
   };
 }
 
@@ -194,6 +195,9 @@ function certSubjectVk(der) {
   return der.slice(bits.start + 1, bits.end);
 }
 
+// Root and dev-fund keys are both <ski>.vk; the role says which outbox
+// (and which coordinator inbox) a file belongs in.
+const VK_KINDS = new Map([["root-vk", "governance/root/outbox"], ["devfund-vk", "governance/devfund/outbox"]]);
 const SIGNATURE_KINDS = new Map([["genesis-sig", "genesis"], ["devfund-sig", "devfund"]]);
 
 async function inspectExport(jsonText) {
@@ -237,6 +241,16 @@ async function inspectExport(jsonText) {
       expected = `deputy-${out.issuer_ski}.pem`;
     }
     if (obj.file !== expected) return fail(`file name ${obj.file} does not match the certificate (expected ${expected})`);
+    return out;
+  }
+  const vkFolder = VK_KINDS.get(obj.kind);
+  if (vkFolder) {
+    // A role-tagged verification key: exactly sf-wallet-gov's .vk bytes.
+    if (!/^[0-9a-f]{3904}\n$/.test(obj.body)) return fail("body is not a verification key (3904 lowercase hex + newline)");
+    out.pin = await pin(obj.body.trim());
+    out.ski = out.pin.slice(0, 40);
+    out.folder = vkFolder;
+    if (obj.file !== `${out.ski}.vk`) return fail(`file name ${obj.file} does not match the key (expected ${out.ski}.vk)`);
     return out;
   }
   const sigExt = SIGNATURE_KINDS.get(obj.kind);  // a Map: no inherited names

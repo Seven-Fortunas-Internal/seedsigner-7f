@@ -66,7 +66,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261008g"></script>
+<script src="bbqr-decode.js?v=20261008h"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -238,6 +238,8 @@ async function renderResult(bytes) {
     resultEl.textContent = `NOT SAVED -- this export failed its check: ${exportInfo.error}\n\n${text}`;
   } else if (exportInfo) {
     const label = {
+      "root-vk": "ROOT verification key",
+      "devfund-vk": "DEV-FUND verification key",
       "root-cert": "Root certificate",
       "deputy-cert": "Deputy certificate",
       "genesis-sig": "Genesis signature (Root key)",
@@ -247,8 +249,9 @@ async function renderResult(bytes) {
     const keyNote = exportInfo.kind.endsWith("-sig") && !exportInfo.pin
       ? "\nKey not embedded: the coordinator pairs this with <subject key id>.vk." : "";
     const idLabel = exportInfo.kind.endsWith("-sig") ? "Signed by subject key id" : "Subject key id";
+    const folderLine = exportInfo.folder ? `\nBelongs in: ${exportInfo.folder} (not the other role's folder)` : "";
     const issuerLine = exportInfo.issuer_ski ? `\nIssued by Root subject key id: ${exportInfo.issuer_ski}` : "";
-    resultEl.textContent = `${label}\nFile: ${exportInfo.file}\n${idLabel}: ${exportInfo.ski}${issuerLine}${pinLine}${keyNote}\n\n${text}`;
+    resultEl.textContent = `${label}\nFile: ${exportInfo.file}\n${idLabel}: ${exportInfo.ski}${folderLine}${issuerLine}${pinLine}${keyNote}\n\n${text}`;
   } else if (vkInfo) {
     resultEl.textContent = `Subject key id: ${vkInfo.id}\nPin: ${vkInfo.pin}\nFile: ${vkInfo.id}.vk\n\n${text}`;
   } else {
@@ -292,6 +295,8 @@ async function renderResult(bytes) {
     copyVkBtn.hidden = true;
     copyIdBtn.hidden = true;
   }
+  // A role-tagged vk also offers the summary record, with its role.
+  if (lastExport && lastExport.folder) saveSummaryBtn.hidden = false;
 }
 
 function handleDecodedText(text, now) {
@@ -413,7 +418,10 @@ function wireSaveButton(btn, getLabel, getFile) {
 
 wireSaveButton(saveVkBtn, () => (lastFileName ? `Save ${lastFileName}` : "Save .vk"), async () => ({ name: lastFileName, text: lastVkText }));
 wireSaveButton(saveExportBtn, () => (lastExport ? `Save ${lastExport.file}` : "Save"), async () => ({ name: lastExport.file, text: lastExport.body }));
-wireSaveButton(saveSummaryBtn, () => "Save summary", () => BBQrDecode.vkSummary(lastVkText));
+wireSaveButton(saveSummaryBtn, () => "Save summary", () => (
+  lastExport && lastExport.folder
+    ? BBQrDecode.vkSummary(lastExport.body, lastExport.kind.replace("-vk", ""))
+    : BBQrDecode.vkSummary(lastVkText)));
 
 // Continuous autofocus and torch are both device-gated (iPhones and most
 // laptop webcams expose neither) -- every call here is guarded by a real

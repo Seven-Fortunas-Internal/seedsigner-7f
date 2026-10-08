@@ -684,16 +684,53 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             destination = view.run()
 
         encoder = captured["qr_encoder"]
-        assert encoder.file_type == "U"
+        assert encoder.file_type == "J"  # role-tagged export envelope
 
         d = DecodeQR()
         while True:
             status = d.add_data(encoder.next_part())
             if status == DecodeQRStatus.COMPLETE:
                 break
-        assert d.decoder.get_data() == keys.root_ca.public_key.hex().encode("utf-8")
+        envelope = json.loads(d.decoder.get_data())
+        assert envelope["kind"] == "root-vk"
+        assert envelope["body"] == keys.root_ca.public_key.hex() + "\n"
 
         assert destination.View_cls == MainMenuView
+
+
+    def test_devfund_enrollment_exports_a_devfund_tagged_vk(self):
+        """ Root and dev-fund vks are both <ski>.vk; the export names the role
+            so the host page can say which inbox it belongs in. """
+        from seedsigner.models.sevenf.root_ceremony import derive_devfund_key
+        seed = self.seed_fixture()
+        devfund = derive_devfund_key(seed.seed_bytes, ChainKind.TESTNET)
+
+        view = sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView(seed=seed)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 1)
+            dest = view.run()
+        assert dest.view_args["role"] == "devfund"
+        ski_view = dest.View_cls(**dest.view_args)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(ski_view, "run_screen", lambda *a, **kw: 0)
+            dest = ski_view.run()
+        pin_view = dest.View_cls(**dest.view_args)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(pin_view, "run_screen", lambda *a, **kw: 0)
+            dest = pin_view.run()
+        assert dest.View_cls == sevenf_views.SevenFExportRootVkQRView
+        export_view = dest.View_cls(**dest.view_args)
+        captured = {}
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(export_view, "run_screen", lambda screen_cls, **kw: captured.update(kw))
+            export_view.run()
+        d = DecodeQR()
+        encoder = captured["qr_encoder"]
+        while d.add_data(encoder.next_part()) != DecodeQRStatus.COMPLETE:
+            pass
+        envelope = json.loads(d.decoder.get_data())
+        assert envelope["kind"] == "devfund-vk"
+        assert envelope["body"] == devfund.public_key.hex() + "\n"
 
 
     def test_seed_options_view_offers_the_self_certify_button_only_in_sevenf_mode(self):
@@ -863,7 +900,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         # Runbook Step 2 yields root-<ski>.pem AND <ski>.vk: carry straight on
         # to the Root VK (ski -> pin -> QR) in the same sitting.
         assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
-        assert destination.view_args == dict(public_key=keys.root_ca.public_key, title="Root VK")
+        assert destination.view_args == dict(public_key=keys.root_ca.public_key, title="Root VK", role="root")
 
 
     def test_select_chain_kind_fails_closed_if_tbs_building_fails(self):
