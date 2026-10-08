@@ -321,9 +321,9 @@ def parse_root_certificate_der(cert_der: bytes) -> ParsedRootCertificate:
         ctypes.byref(chain_kind_out),
     )
     if rc != 0:
-        _raise_cert_error(rc, "it may not be a well-formed X.509 certificate, may not be a CA "
-                               "certificate, may use the wrong signature algorithm, or may carry "
-                               "a public key of the wrong length")
+        _raise_cert_error(rc, "it may not be a well-formed X.509 Root certificate: wrong signature "
+                               "algorithm or key length, a name or key identifier that isn't the "
+                               "canonical Root's, or a self-signature that doesn't verify")
     return ParsedRootCertificate(
         subject_vk=subject_vk_out.raw[:_CERT_SUBJECT_VK_LEN],
         not_before=not_before_out.value,

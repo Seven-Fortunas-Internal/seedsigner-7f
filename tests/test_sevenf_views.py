@@ -1160,7 +1160,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         cert_der = cert_request_module.assemble_deputy_cert_der(
             captured["tbs_bytes"], captured["signature"], captured["root_cert_der"],
         )
-        parsed = cert_request_module.parse_root_certificate_der(cert_der)
+        parsed = __import__('tools_helpers').parse_issued_cert(cert_der)  # a Deputy cert
         assert parsed.subject_vk == deputy_csr.subject_vk
         assert parsed.chain_kind == ChainKind.TESTNET
 
@@ -1369,7 +1369,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         # sign-deputy-cert names it for the ISSUING Root (six Roots certify one Deputy)
         assert envelope["file"] == f"deputy-{ski(certificate.public_key.hex())}.pem"
         cert_der = pem_to_der(envelope["body"])
-        parsed = cert_request_module.parse_root_certificate_der(cert_der)
+        parsed = __import__("tools_helpers").parse_issued_cert(cert_der)  # a Deputy cert
         assert parsed.subject_vk == deputy_csr.subject_vk
         assert parsed.chain_kind == ChainKind.TESTNET
         assert parsed.not_before == now

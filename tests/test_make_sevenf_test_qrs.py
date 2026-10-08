@@ -109,7 +109,7 @@ def test_root_cert_and_deputy_csr_support_the_real_deputy_cross_cert_flow():
     tbs = cert_request.build_deputy_tbs_v2(root_cert_der, deputy_csr_der, tool.CHAIN_KIND, now, cert_request.DEPUTY_DAYS, cert_request.generate_serial())
     _, signature = tool.root_ceremony.sign_with_root_ca(tool.root_seed().seed_bytes, tool.CHAIN_KIND, tbs, confirmed=True)
     deputy_cert_der = cert_request.assemble_deputy_cert_der(tbs, signature, root_cert_der)
-    parsed = cert_request.parse_root_certificate_der(deputy_cert_der)
+    parsed = __import__('tools_helpers').parse_issued_cert(deputy_cert_der)  # a Deputy cert
     assert parsed.subject_vk == deputy_keys.root_ca.public_key
     assert parsed.chain_kind == tool.CHAIN_KIND
 

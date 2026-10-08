@@ -871,7 +871,7 @@ def test_assemble_deputy_cert_der_full_pipeline_round_trip():
     _, signature = mldsa.derive_and_sign(root_master_seed, root_path(chain_kind), tbs)
 
     cert_der = assemble_deputy_cert_der(tbs, signature, root_cert_der)
-    parsed = parse_root_certificate_der(cert_der)
+    parsed = __import__('tools_helpers').parse_issued_cert(cert_der)  # a Deputy cert
     assert parsed.subject_vk == deputy_csr.subject_vk
     assert parsed.chain_kind == chain_kind
     assert parsed.not_before == now
