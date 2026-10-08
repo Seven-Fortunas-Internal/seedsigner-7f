@@ -1,10 +1,13 @@
-# 7F BBQr web scanner
+# 7F Signer web page
 
-Browser page that scans the device's animated BBQr QR exports, checks them, and saves the files for the ceremony. It is an operator-side tool and never ships on the device.
+Operator-side page that moves ceremony files between a host and the device by animated BBQr QR codes, in both directions. It runs entirely in the browser and never ships on the device.
 
-Why a web page: no phone or wallet app scans multi-part BBQr with the 7F file types, so the page decodes in the browser (`bbqr-decode.js`, ported from the device's `decode_qr.py`).
+- **From device** (`#from-device`): scans the device's exports, checks them, and saves the files.
+- **To device** (`#to-device`): checks a file the device must scan and plays it as a full-screen QR.
 
-## What it does
+Why a web page: no phone or wallet app handles multi-part BBQr with the 7F file types.
+
+## From device
 
 1. Reads camera frames (`getUserMedia`) and decodes each with `jsQR`.
 2. Collects BBQr parts by index (order does not matter) and reassembles the payload.
@@ -14,6 +17,21 @@ Why a web page: no phone or wallet app scans multi-part BBQr with the 7F file ty
    - Shows the **subject key id** (ski), the **pin** (for keys), the role (root or dev-fund), and the folder the file belongs in. Root and dev-fund keys go to separate folders.
    - **Save** writes the exact `body` under `file`. **Save summary** writes `<ski>.txt` as a record.
 5. Other payloads (not envelopes) are shown as text or hex, without saving.
+
+## To device
+
+Accepts exactly what `tools/file_to_bbqr.py` accepts, and produces the same QR parts (`bbqr-encode.js`, tested part-for-part against it):
+
+| File | Sent as | Device menu |
+|---|---|---|
+| `genesis-unsigned.json` | JSON, BBQr `J` | 7F: Sign Genesis Config |
+| `devfund-unsigned.json` | JSON, BBQr `J` | 7F: Sign Devfund Config |
+| `root-<ski>.pem` (a Root self-certificate) | DER, BBQr `B` | 7F: Cross-Certify Deputy, first scan |
+| Deputy CSR `.pem` | DER, BBQr `B` | 7F: Cross-Certify Deputy, second scan |
+
+Anything else is refused, including a Deputy certificate offered as a Root certificate. Before playing, the page shows the fields to expect on the device (the dev-fund recipient, the Root or Deputy ski). The device remains the authority: check every field and the canonical digest on its screen.
+
+**Show QR to the device** opens a full-screen player (1.2 s per part by default; pause, step, slower, faster). It keeps the screen awake where the browser allows.
 
 ## Saving
 
@@ -43,14 +61,20 @@ The current URL is `https://bbqr.tail25f985.ts.net`. Camera access needs HTTPS o
 
 ## Tests
 
-`tests/test_bbqr_web_scanner.py` (requires Node; skipped if Node is absent).
+`tests/test_bbqr_web_scanner.py` and `tests/test_bbqr_web_encoder.py` (require Node; skipped if Node is absent).
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `index.html` | The scanner page |
-| `bbqr-decode.js` | Decoding and envelope checks (shared by the page and `decode_cli.js`) |
-| `decode_cli.js` | Node command-line decoder for tests and manual checks |
+| `index.html`, `style.css` | The page (strict CSP: only its own scripts and styles) |
+| `app.js` | Tab switching; the camera runs only on the From device tab |
+| `app-scan.js` | From device tab |
+| `app-send.js` | To device tab and the QR player |
+| `bbqr-decode.js` | Decoding and envelope checks (shared with `decode_cli.js`) |
+| `bbqr-encode.js` | File checks and BBQr encoding (shared with `encode_cli.js`) |
+| `decode_cli.js`, `encode_cli.js` | Node command-line wrappers for tests |
+| `version.js` | The version shown in the footer |
 | `jsQR.min.js` | Vendored QR decoder (jsQR 1.4.0) |
-| `pako.min.js` | Vendored zlib inflate (pako 2.1.0) for `'Z'`-encoded BBQr |
+| `pako.min.js` | Vendored zlib (pako 2.1.0) |
+| `qrcode-generator.js` | Vendored QR encoder (qrcode-generator 2.0.4, MIT, npm tarball sha256 `02e2e18a…8159`) |

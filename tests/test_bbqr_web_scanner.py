@@ -8,6 +8,7 @@
 import json
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +31,12 @@ pytestmark = pytest.mark.skipif(
     shutil.which("node") is None or not _lib_available(),
     reason="requires both node and a built firmware/mldsa7f (`cargo build --release`)",
 )
+
+
+def _page_source() -> str:
+    """ The page and the scripts it loads: the markup is in index.html, the
+    scanner logic in app-scan.js. """
+    return "\n".join((Path(TOOL_DIR) / name).read_text() for name in ("index.html", "app-scan.js"))
 
 
 def _decode_via_node(segments: list[str], tmp_path) -> bytes:
@@ -93,7 +100,7 @@ ski('{vk_hex}').then(r => process.stdout.write(r));
 def test_scanner_page_labels_the_id_as_subject_key_id_only():
     """ The old "(root_id)" suffix named the retired 20-hex id. """
     from pathlib import Path
-    html = (Path(TOOL_DIR) / "index.html").read_text()
+    html = _page_source()
     assert "root_id" not in html
     assert "rootId" not in html
     assert "Subject key id:" in html
@@ -170,7 +177,7 @@ def test_vk_bundle_rejects_non_hex():
 
 def test_scanner_page_offers_copy_all_and_shows_the_pin():
     from pathlib import Path
-    html = (Path(TOOL_DIR) / "index.html").read_text()
+    html = _page_source()
     assert 'id="copyAll"' in html
     assert "BBQrDecode.vkBundle(" in html
     assert "BBQrDecode.pin(" in html
@@ -180,7 +187,7 @@ def test_scanner_page_explains_how_ski_and_pin_are_derived():
     """ Jorge asked (2026-10-07) for a very brief on-page note on how both
         values come from the vk, so a reader can recompute them. """
     from pathlib import Path
-    html = (Path(TOOL_DIR) / "index.html").read_text()
+    html = _page_source()
     assert 'id="vkNote"' in html
     note = html.split('id="vkNote"', 1)[1].split("</p>", 1)[0]
     assert "SHA-256" in note
@@ -200,7 +207,7 @@ def test_save_method_prefers_folder_picker_then_share_sheet_then_download(env, e
 
 def test_scanner_page_offers_save_for_vk_results():
     from pathlib import Path
-    html = (Path(TOOL_DIR) / "index.html").read_text()
+    html = _page_source()
     assert 'id="saveVk"' in html
     assert "BBQrDecode.saveMethod(" in html
     assert "application/octet-stream" in html  # iOS Safari appends .txt to text/plain downloads
@@ -224,7 +231,7 @@ def test_summary_file_is_the_bundle_with_a_phone_check_reminder():
 
 def test_scanner_page_offers_save_summary():
     from pathlib import Path
-    html = (Path(TOOL_DIR) / "index.html").read_text()
+    html = _page_source()
     assert 'id="saveSummary"' in html
     assert "BBQrDecode.vkSummary(" in html
 
@@ -278,7 +285,7 @@ def test_inspect_export_ignores_non_envelope_json():
 
 def test_scanner_page_handles_export_envelopes():
     from pathlib import Path
-    html = (Path(TOOL_DIR) / "index.html").read_text()
+    html = _page_source()
     assert "BBQrDecode.inspectExport(" in html
     assert 'id="saveExport"' in html
 
@@ -497,5 +504,5 @@ process.stdout.write(JSON.stringify({{ conflict: r.kind, decoded: Buffer.from(s.
 
 def test_scanner_page_locks_after_a_complete_scan():
     from pathlib import Path
-    html = (Path(TOOL_DIR) / "index.html").read_text()
+    html = _page_source()
     assert "press Reset" in html and "session.isComplete" in html

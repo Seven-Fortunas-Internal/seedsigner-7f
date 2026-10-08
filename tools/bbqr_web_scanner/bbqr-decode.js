@@ -181,8 +181,24 @@ function certAuthorityKeyId(der) {
 // key is ML-DSA-65 (OID 2.16.840.1.101.3.4.3.18) and 1952 bytes long.
 function certSubjectVk(der) {
   const tbs = tbsFields(der);
-  if (!tbs) return null;
-  const spki = tbs[5];
+  return tbs ? spkiMlDsa65Key(der, tbs[5]) : null;
+}
+
+// A PKCS#10 CSR's subject key (RFC 2986: CertificationRequest ->
+// certificationRequestInfo -> version subject subjectPKInfo [0]attributes),
+// with the same ML-DSA-65 checks as certSubjectVk. Shown so the Deputy's ski
+// can be confirmed by voice before the file goes to the device.
+function csrSubjectVk(der) {
+  const req = readTlv(der, 0);
+  if (!req || req.tag !== 0x30 || req.end !== der.length) return null;
+  const top = derChildren(der, req);
+  if (!top || top.length !== 3 || top[0].tag !== 0x30) return null;
+  const info = derChildren(der, top[0]);
+  if (!info || info.length < 3 || info[0].tag !== 0x02) return null;
+  return spkiMlDsa65Key(der, info[2]);
+}
+
+function spkiMlDsa65Key(der, spki) {
   if (spki.tag !== 0x30) return null;
   const parts = derChildren(der, spki);
   if (!parts || parts.length !== 2 || parts[0].tag !== 0x30 || parts[1].tag !== 0x03) return null;
@@ -439,6 +455,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, vkSummary, saveMethod, inspectExport, certSubjectVk, certAuthorityKeyId };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, vkSummary, saveMethod, inspectExport, certSubjectVk, csrSubjectVk, certAuthorityKeyId, bytesToHexStr };
 
 });
