@@ -174,3 +174,15 @@ def test_scanner_page_offers_copy_all_and_shows_the_pin():
     assert 'id="copyAll"' in html
     assert "BBQrDecode.vkBundle(" in html
     assert "BBQrDecode.pin(" in html
+
+
+def test_scanner_page_explains_how_ski_and_pin_are_derived():
+    """ Jorge asked (2026-10-07) for a very brief on-page note on how both
+        values come from the vk, so a reader can recompute them. """
+    from pathlib import Path
+    html = (Path(TOOL_DIR) / "index.html").read_text()
+    assert 'id="vkNote"' in html
+    note = html.split('id="vkNote"', 1)[1].split("</p>", 1)[0]
+    assert "SHA-256" in note
+    assert "first 20 bytes" in note
+    assert "RFC 7093" in note

@@ -31,6 +31,7 @@
   button { background: #2a5; color: #fff; border: none; border-radius: 6px; padding: 10px 16px;
            font-size: 1rem; margin: 8px 4px 8px 0; }
   button.secondary { background: #444; }
+  #vkNote { color: #999; font-size: 0.8rem; margin: 8px 0; }
   .error { color: #f66; }
   .ok { color: #6f6; }
 </style>
@@ -55,6 +56,9 @@
   <button id="copyAll" class="secondary" hidden>Copy all</button>
   <button id="copyId" class="secondary" hidden>Copy ID</button>
 </div>
+<p id="vkNote" hidden>How the ids below are derived: pin = SHA-256 of the raw vk bytes
+  (hex-decoded, not the hex text), 64 hex; subject key id = the first 20 bytes of that
+  hash (the pin's first 40 hex), RFC 7093 method 1. Same values sf-wallet-gov prints.</p>
 <div id="result"></div>
 
 <script src="jsQR.min.js"></script>
@@ -72,6 +76,7 @@ const copyBtn = document.getElementById("copy");
 const copyVkBtn = document.getElementById("copyVk");
 const copyIdBtn = document.getElementById("copyId");
 const copyAllBtn = document.getElementById("copyAll");
+const vkNoteEl = document.getElementById("vkNote");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const capture = document.getElementById("capture");
@@ -233,6 +238,7 @@ async function renderResult(bytes) {
     lastIdText = vkInfo.id;
     lastBundleText = vkInfo.bundle;
     copyBtn.hidden = true;
+    vkNoteEl.hidden = false;
     copyAllBtn.hidden = false;
     copyAllBtn.textContent = "Copy all";
     copyVkBtn.hidden = false;
@@ -242,6 +248,7 @@ async function renderResult(bytes) {
   } else {
     copyBtn.hidden = false;
     copyBtn.textContent = "Copy result";
+    vkNoteEl.hidden = true;
     copyAllBtn.hidden = true;
     copyVkBtn.hidden = true;
     copyIdBtn.hidden = true;
@@ -281,6 +288,7 @@ document.getElementById("reset").addEventListener("click", () => {
   copyVkBtn.hidden = true;
   copyIdBtn.hidden = true;
   copyAllBtn.hidden = true;
+  vkNoteEl.hidden = true;
   lastVkText = null;
   lastIdText = null;
   lastBundleText = null;
