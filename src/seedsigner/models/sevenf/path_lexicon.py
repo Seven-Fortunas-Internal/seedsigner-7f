@@ -21,7 +21,7 @@
     is Python-orchestrated; nothing calls Rust's derive_seed directly
     except through that ctypes bridge). Every 7F path this device builds is
     still constructed internally by known-good functions (constants.py's
-    `root_path()`), never taken as a raw string from scanned/external
+    `root_path()` and `devfund_path()`), never taken as a raw string from scanned/external
     input -- so this validator is defense-in-depth against a future
     caller-/scan-supplied path, not a response to a live attack surface
     today. See 7f-signing-support-path-lexicon-validator and
@@ -45,6 +45,9 @@ class Role(Enum):
         `path.rs`'s `Role` enum exactly, including its two feeder
         properties (`is_chain_bound`, `allows_leaf`) used by the parser. """
     ROOT = "root"
+    # Un-retired 2026-10-05 (7fchain 89d3d39): the per-holder dev-fund key.
+    # L1, not chain-bound, no leaf -- the defaults below already say so.
+    DEVFUND = "devfund"
     MINER = "miner"
     WALLET = "wallet"
     DEPUTY = "deputy"
@@ -173,8 +176,8 @@ def parse(path: str) -> dict:
         role, chain_kind, chain_id, index, algorithm, version, leaf --
         mirroring `DerivationPath`'s fields (a dict rather than a dataclass
         since this validator has no building counterpart to round-trip
-        against; `constants.root_path()` is this device's only builder and
-        covers it with a pinned-output test instead). """
+        against; `constants.root_path()`/`devfund_path()` are this device's
+        only builders and each has a pinned-output test instead). """
     if not path:
         raise PathLexiconError("derivation path must not be empty")
     if path.startswith("m/"):

@@ -153,7 +153,8 @@ def test_a_retired_role_is_not_a_role():
         "centcom-ca/testnet/0/ml-dsa/v1",
         "intermediate-ca/testnet/0/ml-dsa/v1",
         "treasury/testnet/0/ml-dsa/v1",
-        "devfund/testnet/0/ml-dsa/v1",
+        # "devfund/..." dropped from this list, matching path.rs at 89d3d39:
+        # the role was un-retired (see test_devfund_is_a_role_and_is_not_the_root_path).
         "value/testnet/1/0/ml-dsa/v1",
         "7fchain/testnet/0/ml-dsa/v1",
         "stablecoin/testnet/0/ml-dsa/v1",
@@ -292,3 +293,20 @@ def test_parse_returns_the_expected_fields():
 
     parsed_leaf = parse("miner/testnet/3/ml-dsa/v1/block-reward")
     assert parsed_leaf["leaf"] is Leaf.BLOCK_REWARD
+
+
+def test_devfund_is_a_role_and_is_not_the_root_path():
+    """ Port of path.rs's devfund_is_a_role_again_and_is_not_the_root_path
+        (7fchain 89d3d39, 2026-10-05): the dev fund is locked by nine
+        devfund keys derived at their own path, not by the Root keys. L1,
+        not chain-bound, no leaf. """
+    from seedsigner.models.sevenf.constants import devfund_path, root_path
+    _ok("devfund/testnet/0/ml-dsa/v1")
+    _ok("devfund/devnet/1/ml-dsa/v1")
+    assert not Role.DEVFUND.is_l2
+    assert not Role.DEVFUND.is_chain_bound
+    assert not Role.DEVFUND.allows_leaf
+    _rejects("devfund/testnet/7/0/ml-dsa/v1")  # no chain-id segment
+    assert devfund_path(ChainKind.TESTNET) == "devfund/testnet/0/ml-dsa/v1"
+    assert devfund_path(ChainKind.TESTNET) != root_path(ChainKind.TESTNET)
+    _ok(devfund_path(ChainKind.MAINNET))

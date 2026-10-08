@@ -19,12 +19,18 @@
     genesis-config and devfund-config are signed by the SAME Root key,
     not two. `RootCeremonyKeys.devfund` is now the same `DerivedKey` as
     `root_ca`, and `sign_with_devfund()` signs with that same key --
-    see that function's own doc comment.
+    see that function's own doc comment. Still true after 7fchain 89d3d39.
+
+    Separately (2026-10-05, 7fchain 89d3d39): each holder also has a
+    dev-fund key at devfund/<chain_kind>/0/ml-dsa/v1 that locks the dev
+    fund's multisig -- derive_devfund_key() below, enrolled and exported
+    only. The Roots DECLARE the recipient (Root-signed devfund-config);
+    those dev-fund keys SPEND from it.
 """
 from dataclasses import dataclass
 
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ChainKind, DerivedKey, Layer, root_path
+from seedsigner.models.sevenf.constants import ChainKind, DerivedKey, Layer, devfund_path, root_path
 
 
 @dataclass(frozen=True)
@@ -32,7 +38,9 @@ class RootCeremonyKeys:
     """ The Root-ceremony key for one chain_kind (no treasury -- see this
         module's own docstring). `devfund` is the SAME key as `root_ca`
         (see the BUG FIX note above), kept as its own field so callers that
-        read `.devfund` don't need to know that -- not a second derivation. """
+        read `.devfund` don't need to know that -- not a second derivation.
+        This is the devfund-config SIGNING key, not the per-holder dev-fund
+        key a member enrolls -- that is derive_devfund_key(). """
     chain_kind: ChainKind
     root_ca: DerivedKey
     devfund: DerivedKey
@@ -60,6 +68,23 @@ def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind) -> RootC
         root_ca=root_key,
         devfund=root_key,
     )
+
+
+def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind) -> DerivedKey:
+    """ The holder's dev-fund key at devfund/<chain_kind>/0/ml-dsa/v1 -- the
+        one a member enrolls with `sf-wallet-gov derive-vk --role devfund`
+        (7fchain 89d3d39). A DIFFERENT key from the Root key. Not to be
+        confused with `RootCeremonyKeys.devfund`, which is the Root key used
+        to sign the devfund-config (the Roots declare the recipient; these
+        devfund keys spend from it). Export only: nothing on this device signs
+        with it yet. """
+    public_key, address = mldsa.derive_pubkey(
+        seed_bytes,
+        devfund_path(chain_kind),
+        int(chain_kind),
+        int(Layer.L1),
+    )
+    return DerivedKey(public_key=public_key, address=address)
 
 
 class SigningNotConfirmedError(Exception):

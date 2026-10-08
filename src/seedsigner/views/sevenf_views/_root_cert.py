@@ -156,7 +156,47 @@ class SevenFSelectChainKindForRootEnrollmentView(View):
 
         return Destination(
             SevenFRootVkFingerprintView,
-            view_args=dict(public_key=keys.root_ca.public_key),
+            view_args=dict(public_key=keys.root_ca.public_key, title=_("Root VK")),
+        )
+
+
+
+class SevenFSelectChainKindForDevfundEnrollmentView(View):
+    """ Dev-fund key enrollment: the second vk a federation member sends
+        (ceremony-federation-member.md Step 3, sf-wallet-gov `derive-vk --role
+        devfund`). 7fchain 89d3d39 locks the dev fund with per-holder keys at
+        devfund/<chain_kind>/0/ml-dsa/v1 -- NOT the Root key, and the runbook
+        says a dev-fund id equal to the Root id means "stop and call". Same
+        chain-select -> subject key id -> pin -> QR flow as Root enrollment,
+        titled "Dev-fund VK" so the two can't be confused on screen. """
+    def __init__(self, seed: Seed):
+        super().__init__()
+        self.seed = seed
+
+        if guard_active_chain(self, "sevenf"):
+            return
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import ButtonListScreen
+        kinds = list(ChainKind)
+        button_data = [ButtonOption(k.name.lower()) for k in kinds]
+
+        selected_menu_num = self.run_screen(
+            ButtonListScreen,
+            title=_("Dev-fund: Chain"),
+            is_button_text_centered=True,
+            button_data=button_data,
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        devfund = root_ceremony.derive_devfund_key(self.seed.seed_bytes, kinds[selected_menu_num])
+
+        return Destination(
+            SevenFRootVkFingerprintView,
+            view_args=dict(public_key=devfund.public_key, title=_("Dev-fund VK")),
         )
 
 
@@ -175,21 +215,60 @@ class SevenFRootVkFingerprintView(View):
         root_self_cert_review_fields's "Subject key id" field, but this
         operation has no review-fields flow of its own to attach it to
         (derive-vk makes no claim beyond "here is a public key" -- nothing
-        else to review), so it gets this one small dedicated screen. """
-    def __init__(self, public_key: bytes):
+        else to review), so it gets this one small dedicated screen. Shared
+        by Root and dev-fund enrollment; `title` says which key this is. """
+    def __init__(self, public_key: bytes, title: str):
         super().__init__()
         self.public_key = public_key
+        self.title = title
 
 
     def run(self):
         from seedsigner.gui.screens.screen import LargeIconStatusScreen
-        from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
+        from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 
         selected_menu_num = self.run_screen(
             LargeIconStatusScreen,
-            title=_("Root VK"),
+            title=self.title,
             status_headline=_("Subject key id"),
-            text=format_ski_for_display(ski(self.public_key.hex())),
+            text=group_hex_for_display(ski(self.public_key.hex())),
+            button_data=[ButtonOption("Next")],
+        )
+
+        if selected_menu_num == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+
+        return Destination(
+            SevenFVkPinView,
+            view_args=dict(public_key=self.public_key, title=self.title),
+        )
+
+
+
+class SevenFVkPinView(View):
+    """ Shows the vk's pin -- the full SHA-256 of the key, 7fchain's
+        x509::vk_pin() -- before the QR export. A member reports the pin over
+        a second channel so the coordinator can confirm the key they received
+        is the key the member holds (ceremony-federation-member.md Step 4).
+        That check only means something if the pin is read off this device:
+        the phone scanner computes it from whatever it scanned, so it would
+        agree with a bad scan. Own screen because 64 hex (16 groups) doesn't
+        fit beside the subject key id. """
+    def __init__(self, public_key: bytes, title: str):
+        super().__init__()
+        self.public_key = public_key
+        self.title = title
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import LargeIconStatusScreen
+        from seedsigner.models.sevenf.review_format import group_hex_for_display, pin
+
+        selected_menu_num = self.run_screen(
+            LargeIconStatusScreen,
+            title=self.title,
+            status_headline=_("Pin"),
+            text=group_hex_for_display(pin(self.public_key.hex())),
             button_data=[ButtonOption("Continue to QR")],
         )
 
@@ -204,7 +283,9 @@ class SevenFRootVkFingerprintView(View):
 
 
 class SevenFExportRootVkQRView(View):
-    """ Exports the Root CA verification key as bare hex, BBQr-encoded ('U':
+    """ Exports an enrollment verification key -- the Root key or, via
+        SevenFSelectChainKindForDevfundEnrollmentView, the dev-fund key -- as
+        bare hex, BBQr-encoded ('U':
         unicode/plain-text) -- the real enrollment artifact. No signature, no
         certificate, no path, no fingerprint: matches 7fchain's own
         sf-wallet-gov's `<ski>.vk` exactly (bare hex vk; see

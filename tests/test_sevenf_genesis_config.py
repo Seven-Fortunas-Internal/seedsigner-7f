@@ -29,7 +29,7 @@ from seedsigner.models.sevenf.genesis_config import (
     review_fields,
     root_sig_filename,
 )
-from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
+from seedsigner.models.sevenf.review_format import group_hex_for_display, pin, ski
 
 
 def _lib_available() -> bool:
@@ -480,14 +480,30 @@ def test_ski_matches_real_x509_key_id_convention():
     assert len(ski(vk_hex)) == 40
 
 
-def test_format_ski_for_display_groups_in_fours_and_loses_nothing():
+def test_group_hex_for_display_groups_in_fours_and_loses_nothing():
     """ 40 unbroken hex chars can't line-wrap on the 240px screen -- they ran
         off both edges. Groups of four wrap into two lines and are easier to
         read aloud; stripping the spaces must give back the exact ski. """
     value = "591c511984a2d73c6bee1f4dc149d48f7f97fc55"
-    shown = format_ski_for_display(value)
+    shown = group_hex_for_display(value)
     assert shown == "591c 5119 84a2 d73c 6bee 1f4d c149 d48f 7f97 fc55"
     assert shown.replace(" ", "") == value
+
+
+def test_pin_is_the_full_sha256_and_the_ski_is_its_prefix():
+    """ 7fchain x509::vk_pin(): Sha256::digest(vk), 64 hex -- the "root pin"
+        a member reports over a second channel. Expected via hashlib. """
+    import hashlib
+    vk_hex = "CD" * 1952
+    expected = hashlib.sha256(bytes.fromhex(vk_hex)).hexdigest()
+    assert pin(vk_hex) == expected
+    assert pin(vk_hex).startswith(ski(vk_hex))
+
+
+def test_group_hex_for_display_wraps_a_pin_into_sixteen_groups():
+    value = "591c511984a2d73c6bee1f4dc149d48f7f97fc55ad607b821b91eca949f0641a"
+    shown = group_hex_for_display(value)
+    assert shown.split(" ") == [value[i:i + 4] for i in range(0, 64, 4)]
 
 
 def test_root_sig_filename_matches_real_sf_wallet_gov_convention():

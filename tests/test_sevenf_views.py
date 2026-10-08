@@ -501,6 +501,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
 
         assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
         assert destination.view_args["public_key"] == keys.root_ca.public_key
+        assert destination.view_args["title"] == "Root VK"
 
 
     def test_fingerprint_view_shows_the_real_ski_and_routes_to_export(self):
@@ -509,17 +510,18 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             sf-wallet-gov prints and names the holder's `<ski>.vk` by
             (7fchain ce04ae9/416f576), so the operator can name the scanned
             file and Patrick can recompute the same value from the vk. """
-        from seedsigner.models.sevenf.review_format import format_ski_for_display, ski
+        from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
 
-        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key)
+        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key, title="Root VK")
         captured = {}
 
         def fake_run_screen(screen_cls, **kwargs):
             captured["text"] = kwargs["text"]
             captured["status_headline"] = kwargs["status_headline"]
+            captured["title"] = kwargs["title"]
             return 0
 
         with pytest.MonkeyPatch().context() as mp:
@@ -527,11 +529,13 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             destination = view.run()
 
         assert captured["status_headline"] == "Subject key id"
-        assert captured["text"] == format_ski_for_display(ski(keys.root_ca.public_key.hex()))
+        assert captured["text"] == group_hex_for_display(ski(keys.root_ca.public_key.hex()))
         assert len(captured["text"].replace(" ", "")) == 40  # 20 bytes, hex-encoded
+        assert captured["title"] == "Root VK"
 
-        assert destination.View_cls == sevenf_views.SevenFExportRootVkQRView
+        assert destination.View_cls == sevenf_views.SevenFVkPinView
         assert destination.view_args["public_key"] == keys.root_ca.public_key
+        assert destination.view_args["title"] == "Root VK"
 
 
     def test_fingerprint_view_back_button_returns_to_back_stack_without_exporting(self):
@@ -539,13 +543,103 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
 
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
-        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key)
+        view = sevenf_views.SevenFRootVkFingerprintView(public_key=keys.root_ca.public_key, title="Root VK")
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
             destination = view.run()
 
         assert destination.View_cls == BackStackView
+
+
+    def test_pin_view_shows_the_real_pin_and_routes_to_export(self):
+        """ The pin (full SHA-256 of the vk) is what a member reports over a
+            second channel (ceremony-federation-member.md Step 4), so it must
+            be read off the device itself -- the phone scanner computes it from
+            whatever it scanned and cannot catch a bad scan. """
+        import hashlib
+        from seedsigner.models.sevenf.review_format import group_hex_for_display
+
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        view = sevenf_views.SevenFVkPinView(public_key=keys.root_ca.public_key, title="Root VK")
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured.update(kwargs)
+            return 0
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            destination = view.run()
+
+        assert captured["title"] == "Root VK"
+        assert captured["status_headline"] == "Pin"
+        assert captured["text"] == group_hex_for_display(hashlib.sha256(keys.root_ca.public_key).hexdigest())
+        assert destination.View_cls == sevenf_views.SevenFExportRootVkQRView
+        assert destination.view_args["public_key"] == keys.root_ca.public_key
+
+
+    def test_pin_view_back_button_returns_to_back_stack_without_exporting(self):
+        from seedsigner.views.view import BackStackView
+
+        seed = self.seed_fixture()
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        view = sevenf_views.SevenFVkPinView(public_key=keys.root_ca.public_key, title="Root VK")
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
+            destination = view.run()
+        assert destination.View_cls == BackStackView
+
+
+    def test_seed_options_view_offers_the_enroll_devfund_vk_button_only_in_sevenf_mode(self):
+        seed = self.seed_fixture()
+        for active_chain_id, should_appear in [("sevenf", True), ("bitcoin", False), ("evm", False), (None, False)]:
+            self.controller.active_chain_id = active_chain_id
+            view = seed_views.SeedOptionsView(seed=seed)
+            captured = {}
+
+            def fake_run_screen(screen_cls, button_data=None, **kwargs):
+                captured["button_data"] = button_data
+                return RET_CODE__BACK_BUTTON
+
+            with pytest.MonkeyPatch().context() as mp:
+                mp.setattr(view, "run_screen", fake_run_screen)
+                view.run()
+            is_present = seed_views.SeedOptionsView.SEVENF_EXPORT_DEVFUND_VK in captured["button_data"]
+            assert is_present == should_appear, f"active_chain_id={active_chain_id!r}"
+
+
+    def test_seed_options_view_routes_to_select_chain_kind_for_devfund_enrollment_view(self):
+        seed = self.seed_fixture()
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_EXPORT_DEVFUND_VK),
+                FlowStep(sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView),
+            ],
+            initial_destination_view_args=dict(seed=seed),
+        )
+
+
+    def test_devfund_enrollment_derives_the_devfund_key_not_the_root_key(self):
+        """ 7fchain 89d3d39: the dev-fund key lives at devfund/<net>/0/ml-dsa/v1,
+            a different key from the Root's. Exporting the Root key here is the
+            exact mistake the runbook warns already happened once. """
+        from seedsigner.models.sevenf.root_ceremony import derive_devfund_key
+
+        seed = self.seed_fixture()
+        devfund = derive_devfund_key(seed.seed_bytes, ChainKind.TESTNET)
+        root = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca
+
+        view = sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView(seed=seed)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET
+            destination = view.run()
+
+        assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
+        assert destination.view_args["public_key"] == devfund.public_key
+        assert destination.view_args["public_key"] != root.public_key
+        assert destination.view_args["title"] == "Dev-fund VK"
 
 
     def test_export_root_vk_qr_view_encodes_the_real_root_ca_pubkey(self):

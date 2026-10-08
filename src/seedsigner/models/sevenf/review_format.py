@@ -52,9 +52,18 @@ def ski(vk_hex: str) -> str:
     return hashlib.sha256(vk).digest()[:20].hex()
 
 
-def format_ski_for_display(ski_hex: str) -> str:
-    """ The ski in groups of four for the 240px screen: 40 unbroken hex
-        characters can't line-wrap and ran off both edges, while ten groups
-        wrap into two lines and are easier to read aloud and compare. Display
-        only -- filenames and anything copied use the plain ski. """
-    return " ".join(ski_hex[i:i + 4] for i in range(0, len(ski_hex), 4))
+def pin(vk_hex: str) -> str:
+    """ The pin: SHA-256 of the raw key, all 32 bytes hex-encoded (64
+        characters) -- 7fchain's shared-crypto x509::vk_pin(). It is the
+        trust anchor sign-root-cert prints as "root pin" and a federation
+        member reports over a second channel (ceremony-federation-member.md
+        Step 4). The ski is its first 40 characters. """
+    return hashlib.sha256(bytes.fromhex(vk_hex)).hexdigest()
+
+
+def group_hex_for_display(hex_str: str) -> str:
+    """ Hex in groups of four for the 240px screen: a 40-char ski or 64-char
+        pin can't line-wrap unbroken and ran off both edges, while groups
+        wrap cleanly and are easier to read aloud and compare. Display only
+        -- filenames and anything copied use the plain hex. """
+    return " ".join(hex_str[i:i + 4] for i in range(0, len(hex_str), 4))

@@ -57,12 +57,25 @@ def root_path(chain_kind: ChainKind) -> str:
         constant: `sf-root.rs`'s own `cmd_sign_genesis` and
         `cmd_sign_devfund` both call the byte-identical
         `root_key_from_file(..., index 0)` -- genesis-config and
-        devfund-config are signed by the SAME Root key, not two. There is
-        no separate "devfund path" any more; root_ceremony.py's devfund
-        key is this same path (see that module's own doc comment for the
-        bug this fixed). Always index 0: the Root ceremony derives exactly
+        devfund-config are signed by the SAME Root key, not two -- so the
+        devfund-config SIGNING key is this path. The per-holder dev-fund key
+        a member enrolls is a different key at devfund_path() below (7fchain
+        89d3d39, 2026-10-05). Always index 0: the Root ceremony derives exactly
         one Root key per chain_kind, never a family of indexed keys. """
     return f"root/{chain_kind.path_segment}/0/ml-dsa/v1"
+
+
+def devfund_path(chain_kind: ChainKind) -> str:
+    """ e.g. "devfund/testnet/0/ml-dsa/v1" -- 7fchain's
+        `path_for(Role::Devfund, chain_kind, 0)` (89d3d39, 2026-10-05): the
+        dev fund is locked by nine devfund keys, one per federation holder,
+        derived from the same phrase as that holder's Root at this different
+        path, so a dev-fund signature isn't attributable to a known Root.
+        This is the key a member enrolls (sf-wallet-gov `derive-vk --role
+        devfund`). It does NOT sign the devfund-config -- the Roots still
+        declare the recipient with the Root key (root_path above). Index 0:
+        the first key set; a later index is a rotation. """
+    return f"devfund/{chain_kind.path_segment}/0/ml-dsa/v1"
 
 
 @dataclass(frozen=True)

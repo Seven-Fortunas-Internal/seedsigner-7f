@@ -62,6 +62,8 @@ from ._root_cert import (
     SevenFExportRootCertQRView,
     SevenFExportRootVkQRView,
     SevenFRootVkFingerprintView,
+    SevenFSelectChainKindForDevfundEnrollmentView,
+    SevenFVkPinView,
     SevenFSelectChainKindForRootEnrollmentView,
     SevenFSelectChainKindForRootSelfCertView,
 )
@@ -98,6 +100,8 @@ __all__ = [
     "SevenFGenesisSignedView",
     "SevenFRootCertSignedView",
     "SevenFRootVkFingerprintView",
+    "SevenFSelectChainKindForDevfundEnrollmentView",
+    "SevenFVkPinView",
     "SevenFScanDeputyCsrView",
     "SevenFScanDevFundConfigView",
     "SevenFScanGenesisConfigView",

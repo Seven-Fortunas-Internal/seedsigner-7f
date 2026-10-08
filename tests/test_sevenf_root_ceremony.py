@@ -113,6 +113,25 @@ def test_root_ca_ski_matches_real_sf_wallet_gov_sign_root_cert():
     assert ski(keys.root_ca.public_key.hex()) == "591c511984a2d73c6bee1f4dc149d48f7f97fc55"
 
 
+def test_devfund_key_matches_real_sf_wallet_gov_derive_vk():
+    """ End-to-end against the real binary: `sf-wallet-gov derive-vk --role
+        devfund --index 0` (7fchain 416f576, sandboxed HOME, testnet dir) on
+        the canonical "abandon ... art" phrase printed `subject key id:
+        af11f8afb793df512bf35110890e15dc8b3a2720` for path
+        devfund/testnet/0/ml-dsa/v1. The runbook (ceremony-federation-
+        member.md Step 3) says a dev-fund id equal to the Root id means
+        "something is wrong -- stop and call". """
+    from seedsigner.models.sevenf.review_format import ski
+    from seedsigner.models.sevenf.root_ceremony import derive_devfund_key
+
+    seed = mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password="")
+    devfund = derive_devfund_key(seed, ChainKind.TESTNET)
+    root = derive_root_ceremony_keys(seed, ChainKind.TESTNET).root_ca
+
+    assert ski(devfund.public_key.hex()) == "af11f8afb793df512bf35110890e15dc8b3a2720"
+    assert devfund.public_key != root.public_key
+
+
 def test_root_ca_and_devfund_are_the_same_key():
     """ BUG FIX, 2026-10-03 (R27 re-port): this used to assert root_ca and
         devfund differ -- that was the bug. Direct reading of 7fchain's
