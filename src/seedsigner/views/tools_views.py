@@ -505,11 +505,17 @@ class ToolsCalcFinalWordDoneView(View):
 
         button_data = [self.LOAD, self.DISCARD]
 
+        if self.controller.active_chain_id == "sevenf":
+            # The new seed's 7F label (testnet Root ski[:8]), as everywhere in 7F mode.
+            fingerprint = self.display_fingerprint(Seed(self.controller.storage.pending_mnemonic))
+        else:
+            fingerprint = self.controller.storage.get_pending_mnemonic_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+
         selected_menu_num = self.run_screen(
             ToolsCalcFinalWordDoneScreen,
             final_word=final_word,
             mnemonic_word_length=mnemonic_word_length,
-            fingerprint=self.controller.storage.get_pending_mnemonic_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK)),
+            fingerprint=fingerprint,
             button_data=button_data,
         )
 

@@ -109,6 +109,27 @@ class View:
         return self._redirect
 
 
+    def display_fingerprint(self, seed) -> str:
+        """ How a seed is labelled on screen. 7F mode: the first 8 hex of the
+            seed's testnet Root subject key id (models/sevenf/seed_label.py).
+            Other modes: the BIP-32 fingerprint. Display only -- functional
+            checks (e.g. a backup's stored fingerprint) keep using
+            seed.get_fingerprint(). """
+        if self.controller.active_chain_id == "sevenf":
+            from seedsigner.models.sevenf._ffi import MlDsa7fError
+            from seedsigner.models.sevenf.seed_label import sevenf_seed_label
+            try:
+                return sevenf_seed_label(seed.seed_bytes)
+            except (MlDsa7fError, OSError) as e:
+                # Keep the seed menus usable (e.g. to discard a seed) if the
+                # signing library fails. Never fall back to the BIP-32 value:
+                # it would label the seed with something that isn't its 7F id.
+                logger.warning("7F seed label unavailable: %s", e)
+                return "????????"
+        from seedsigner.models.settings import SettingsConstants
+        return seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+
+
     def run_screen(self, Screen_cls: Type[BaseScreen], **kwargs) -> int | str:
         """
             Instantiates the provided Screen_cls and runs its interactive display.

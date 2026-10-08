@@ -487,7 +487,10 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             if expect_fingerprint:
                 assert captured["fingerprint"], f"active_chain_id={active_chain_id!r}: expected a real fingerprint"
             else:
-                assert captured["fingerprint"] is None, f"active_chain_id={active_chain_id!r}: expected no fingerprint"
+                # Superseded 2026-10-07 (Jorge): 7F mode shows the seed's 7F
+                # label (testnet Root ski[:8]) instead of no header at all.
+                from seedsigner.models.sevenf.seed_label import sevenf_seed_label
+                assert captured["fingerprint"] == sevenf_seed_label(seed.seed_bytes), f"active_chain_id={active_chain_id!r}"
 
 
     def test_seed_options_view_routes_to_select_chain_kind_for_enrollment_view(self):
@@ -2210,3 +2213,89 @@ class TestSevenFCeremonyClockGate(FlowTest):
             mp.setattr(Version, "get_version_timestamp", classmethod(lambda cls: None))
             destination, shown, DateTimeFields = self._run_confirm_view([RET_CODE__BACK_BUTTON])
         assert shown[0][1]["fields"].to_timestamp() == CLOCK_FLOOR_FALLBACK
+
+
+class TestSevenFSeedLabel(FlowTest):
+    """ In 7F mode a seed is shown by the first 8 hex of its testnet Root ski
+        (Jorge, 2026-10-07), not the BIP-32 fingerprint. Other modes are
+        unchanged. """
+    def seed_fixture(self) -> Seed:
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+        return seed
+
+
+    def expected(self, seed, mode):
+        from seedsigner.models.sevenf.review_format import ski
+        if mode == "sevenf":
+            return ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key.hex())[:8]
+        return seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+
+
+    def capture(self, view, reply=RET_CODE__BACK_BUTTON):
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured.update(kwargs)
+            return reply
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+        return captured
+
+
+    @pytest.mark.parametrize("mode", ["sevenf", "bitcoin"])
+    def test_seeds_menu_lists_seeds_by_the_mode_label(self, mode):
+        self.controller.active_chain_id = mode
+        seed = self.seed_fixture()
+        captured = self.capture(seed_views.SeedsMenuView())
+        assert captured["button_data"][0].button_label == self.expected(seed, mode)
+
+
+    @pytest.mark.parametrize("mode", ["sevenf", "bitcoin"])
+    def test_seed_options_title_uses_the_mode_label(self, mode):
+        self.controller.active_chain_id = mode
+        seed = self.seed_fixture()
+        captured = self.capture(seed_views.SeedOptionsView(seed=seed))
+        assert captured["fingerprint"] == self.expected(seed, mode)
+
+
+    def test_discard_prompt_names_the_seed_by_its_7f_label(self):
+        self.controller.active_chain_id = "sevenf"
+        seed = self.seed_fixture()
+        captured = self.capture(seed_views.SeedDiscardView(seed=seed), reply=0)  # "Keep"
+        assert self.expected(seed, "sevenf") in captured["text"]
+
+
+    def test_a_failing_signing_library_shows_a_placeholder_not_a_crash(self):
+        """ The seeds menu must stay usable (e.g. to discard a seed) if the
+            ML-DSA library fails; never fall back to the BIP-32 value, which
+            would mislabel the seed. """
+        from seedsigner.models.sevenf import seed_label
+        from seedsigner.models.sevenf.mldsa import MlDsaError
+        self.controller.active_chain_id = "sevenf"
+        seed = Seed(mnemonic=["zoo"] * 11 + ["wrong"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+
+        def broken(*a, **kw):
+            raise MlDsaError(-9, "derive_pubkey")
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(seed_label, "derive_root_ceremony_keys", broken)
+            captured = self.capture(seed_views.SeedsMenuView())
+        assert captured["button_data"][0].button_label == "????????"
+
+
+    def test_passphrase_review_shows_with_and_without_labels(self):
+        self.controller.active_chain_id = "sevenf"
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], passphrase="tree", wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.set_pending_seed(seed)
+        from seedsigner.models.sevenf.seed_label import sevenf_seed_label
+        with_label = sevenf_seed_label(seed.seed_bytes)
+        bare = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        captured = self.capture(seed_views.SeedReviewPassphraseView(), reply=0)
+        assert captured["fingerprint_with"] == with_label
+        assert captured["fingerprint_without"] == sevenf_seed_label(bare.seed_bytes)
+        assert with_label != captured["fingerprint_without"]
+        assert seed.passphrase == "tree"  # restored after computing "without"

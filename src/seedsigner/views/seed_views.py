@@ -32,7 +32,7 @@ class SeedsMenuView(View):
         self.seeds = []
         for seed in self.controller.storage.seeds:
             self.seeds.append({
-                "fingerprint": seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+                "fingerprint": self.display_fingerprint(seed)
             })
 
 
@@ -107,7 +107,7 @@ class SeedSelectSeedView(View):
 
         button_data = []
         for seed in seeds:
-            button_str = seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+            button_str = self.display_fingerprint(seed)
             button_data.append(ButtonOption(button_str, SeedSignerIconConstants.FINGERPRINT, icon_color="blue"))
         
         button_data.append(self.SCAN_SEED)
@@ -339,7 +339,7 @@ class SeedFinalizeView(View):
         if not self.seed.has_passphrase:
             # Expected normal user flow. A freshly-loaded seed has no passphrase yet, so
             # we can just get the fingerprint directly.
-            self.fingerprint = self.seed.get_fingerprint(network=self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+            self.fingerprint = self.display_fingerprint(self.seed)
 
         else:
             # This view should display the "naked" seed's fingerprint. Normally the
@@ -348,7 +348,7 @@ class SeedFinalizeView(View):
             # set.
             passphrase = self.seed.passphrase
             self.seed.set_passphrase("")
-            self.fingerprint = self.seed.get_fingerprint(network=self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+            self.fingerprint = self.display_fingerprint(self.seed)
             self.seed.set_passphrase(passphrase)
 
 
@@ -458,11 +458,10 @@ class SeedReviewPassphraseView(View):
 
     def run(self):
         # Get the before/after fingerprints
-        network = self.settings.get_value(SettingsConstants.SETTING__NETWORK)
         passphrase = self.seed.passphrase
-        fingerprint_with = self.seed.get_fingerprint(network=network)
+        fingerprint_with = self.display_fingerprint(self.seed)
         self.seed.set_passphrase("")
-        fingerprint_without = self.seed.get_fingerprint(network=network)
+        fingerprint_without = self.display_fingerprint(self.seed)
         self.seed.set_passphrase(passphrase)
         
         button_data = [self.EDIT, self.DONE]
@@ -507,7 +506,7 @@ class SeedDiscardView(View):
     def run(self):
         button_data = [self.KEEP, self.DISCARD]
 
-        fingerprint = self.seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+        fingerprint = self.display_fingerprint(self.seed)
         # TRANSLATOR_NOTE: Inserts the seed fingerprint
         text = _("Wipe seed {} from the device?").format(fingerprint)
         selected_menu_num = self.run_screen(
@@ -688,16 +687,9 @@ class SeedOptionsView(View):
 
         button_data.append(self.DISCARD)
         
-        # 7F/ML-DSA mode has no single canonical per-seed fingerprint the way
-        # Bitcoin's BIP-32 master key does -- which vk this seed implies depends
-        # on a ceremony role and chain_kind not yet chosen on this screen (see
-        # chains/sevenf/plugin.py). Showing the secp256k1 fingerprint here would
-        # be a value with no relationship to any 7F key; SeedOptionsScreen falls
-        # back to a generic title when fingerprint is omitted.
-        if self.controller.active_chain_id == "sevenf":
-            fingerprint = None
-        else:
-            fingerprint = self.seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
+        # In 7F mode this is the seed's 7F label (testnet Root ski[:8]); the
+        # secp256k1 BIP-32 fingerprint has no relationship to any 7F key.
+        fingerprint = self.display_fingerprint(self.seed)
 
         selected_menu_num = self.run_screen(
             seed_screens.SeedOptionsScreen,
