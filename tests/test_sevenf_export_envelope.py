@@ -83,3 +83,17 @@ def test_signature_export_refuses_an_unknown_kind():
     from seedsigner.models.sevenf.export_envelope import signature_export
     with pytest.raises(ValueError):
         signature_export("treasury", b"\x07" * 1952, b"\x01" * 3309)
+
+
+GOV_DEPUTY = (Path(__file__).parent / "fixtures" / "sf_wallet_gov_deputy_cert_issuer_255ef46a.pem").read_text()
+
+
+def test_deputy_cert_export_is_named_for_the_issuing_root():
+    """ sign-deputy-cert writes deputy-<issuing Root ski>.pem (7fchain ce04ae9:
+        named for the ISSUER -- six Roots certify one Deputy). """
+    from seedsigner.models.sevenf.export_envelope import deputy_cert_export
+    issuer_vk = b"\x09" * 1952
+    env = json.loads(deputy_cert_export(pem_to_der(GOV_DEPUTY), issuer_vk))
+    assert env["kind"] == "deputy-cert"
+    assert env["file"] == f"deputy-{hashlib.sha256(issuer_vk).hexdigest()[:40]}.pem"
+    assert env["body"] == GOV_DEPUTY

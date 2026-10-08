@@ -273,8 +273,12 @@ class SevenFExportDeputyCertQRView(View):
             self.certificate.tbs_bytes, self.certificate.signature, self.certificate.root_cert_der,
         )
 
+        from seedsigner.models.sevenf.export_envelope import deputy_cert_export
+
+        # deputy-<issuing Root ski>.pem exactly as sign-deputy-cert writes it,
+        # in an envelope that tells the host page the file name.
         self.run_screen(
             QRDisplayScreen,
-            qr_encoder=BBQrEncoder(data=cert_der, file_type="B"),  # 'B': BBQr generic binary
+            qr_encoder=BBQrEncoder(data=deputy_cert_export(cert_der, self.certificate.public_key), file_type="J"),
         )
         return Destination(MainMenuView, skip_current_view=True)

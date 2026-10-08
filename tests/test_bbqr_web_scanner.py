@@ -402,3 +402,27 @@ def test_inspect_export_refuses_inherited_property_names_as_kinds(kind):
     env = {**json.loads(_sig_envelope("genesis")), "kind": kind}
     r = _inspect(json.dumps(env))
     assert r["error"] and "unsupported export kind" in r["error"]
+
+
+# A real `sf-wallet-gov sign-deputy-cert` output, issued by Root ski 255ef46a...
+DEPUTY_ISSUER = "255ef46a87fe6a5607e1ce58f0cf5cce0bee3bae"
+
+
+def _deputy_envelope(file=None) -> str:
+    import json
+    from pathlib import Path
+    pem = Path("tests/fixtures/sf_wallet_gov_deputy_cert_issuer_255ef46a.pem").read_text()
+    return json.dumps({"sf7_export": 1, "kind": "deputy-cert",
+                       "file": file or f"deputy-{DEPUTY_ISSUER}.pem", "body": pem})
+
+
+def test_inspect_export_accepts_a_deputy_cert_named_for_its_issuer():
+    r = _inspect(_deputy_envelope())
+    assert r["error"] is None
+    assert r["issuer_ski"] == DEPUTY_ISSUER
+    assert r["ski"] == "720573f1e72fed7c3c7f9aeaec504d3976287ea5"  # the Deputy's own key (e2e run)
+
+
+def test_inspect_export_refuses_a_deputy_cert_named_for_another_root():
+    r = _inspect(_deputy_envelope(file="deputy-" + "0" * 40 + ".pem"))
+    assert r["error"] and "does not match" in r["error"]

@@ -68,3 +68,10 @@ def signature_export(kind: str, signer_vk: bytes, sig: bytes) -> bytes:
         raise ValueError(f"unknown signature kind {kind!r}")
     body = json.dumps({"signer_vk": "", "sig": sig.hex()}, indent=2) + "\n"
     return envelope(f"{kind}-sig", f"{ski(signer_vk.hex())}.{_SIGNATURE_EXTENSIONS[kind]}", body)
+
+
+def deputy_cert_export(cert_der: bytes, issuer_vk: bytes) -> bytes:
+    """ A Deputy certificate as sign-deputy-cert writes it:
+        deputy-<issuing Root ski>.pem -- named for the issuer, since six Roots
+        certify one Deputy and naming by subject would collide. """
+    return envelope("deputy-cert", f"deputy-{ski(issuer_vk.hex())}.pem", der_to_pem(cert_der))

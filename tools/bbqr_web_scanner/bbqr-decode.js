@@ -134,20 +134,53 @@ function derChildren(b, tlv) {
   return out;
 }
 
-// The certificate's subject key, found by walking the structure (RFC 5280:
-// Certificate -> tbsCertificate -> [version] serial sigAlg issuer validity
-// subject subjectPublicKeyInfo) -- not by searching for a byte pattern,
-// which a decoy earlier in the certificate could satisfy. Null unless the
-// key is ML-DSA-65 (OID 2.16.840.1.101.3.4.3.18) and 1952 bytes long.
-function certSubjectVk(der) {
+// The tbsCertificate's fields after the optional explicit version:
+// serial, sigAlg, issuer, validity, subject, spki, then optional [1]/[2]/[3].
+function tbsFields(der) {
   const cert = readTlv(der, 0);
   if (!cert || cert.tag !== 0x30 || cert.end !== der.length) return null;
   const top = derChildren(der, cert);
   if (!top || top.length !== 3 || top[0].tag !== 0x30) return null;
   let tbs = derChildren(der, top[0]);
   if (!tbs) return null;
-  if (tbs.length && tbs[0].tag === 0xa0) tbs = tbs.slice(1);  // explicit version
-  if (tbs.length < 6) return null;
+  if (tbs.length && tbs[0].tag === 0xa0) tbs = tbs.slice(1);
+  return tbs.length >= 6 ? tbs : null;
+}
+
+const OID_AUTHORITY_KEY_ID = [0x06, 0x03, 0x55, 0x1d, 0x23];  // 2.5.29.35
+
+// The AuthorityKeyIdentifier's keyIdentifier ([0]) as hex: the issuing
+// key's ski (7fchain sets it to x509::key_id of the issuer). Null if absent.
+function certAuthorityKeyId(der) {
+  const tbs = tbsFields(der);
+  const extsWrap = tbs && tbs.find((t) => t.tag === 0xa3);
+  if (!extsWrap) return null;
+  const extsSeq = derChildren(der, extsWrap);
+  const exts = extsSeq && extsSeq.length === 1 && derChildren(der, extsSeq[0]);
+  if (!exts) return null;
+  for (const ext of exts) {
+    const parts = derChildren(der, ext);
+    if (!parts || parts.length < 2) continue;
+    const oid = der.slice(parts[0].off, parts[0].end);
+    if (oid.length !== OID_AUTHORITY_KEY_ID.length || !OID_AUTHORITY_KEY_ID.every((x, i) => oid[i] === x)) continue;
+    const value = parts[parts.length - 1];  // OCTET STRING wrapping AuthorityKeyIdentifier
+    if (value.tag !== 0x04) return null;
+    const aki = readTlv(der, value.start);
+    const fields = aki && aki.tag === 0x30 && derChildren(der, aki);
+    const keyId = fields && fields.find((f) => f.tag === 0x80);
+    return keyId ? bytesToHexStr(der.slice(keyId.start, keyId.end)) : null;
+  }
+  return null;
+}
+
+// The certificate's subject key, found by walking the structure (RFC 5280:
+// Certificate -> tbsCertificate -> [version] serial sigAlg issuer validity
+// subject subjectPublicKeyInfo) -- not by searching for a byte pattern,
+// which a decoy earlier in the certificate could satisfy. Null unless the
+// key is ML-DSA-65 (OID 2.16.840.1.101.3.4.3.18) and 1952 bytes long.
+function certSubjectVk(der) {
+  const tbs = tbsFields(der);
+  if (!tbs) return null;
   const spki = tbs[5];
   if (spki.tag !== 0x30) return null;
   const parts = derChildren(der, spki);
@@ -185,7 +218,7 @@ async function inspectExport(jsonText) {
   if (typeof obj.file !== "string" || !SAFE_FILE_NAME.test(obj.file)) return fail(`unsafe file name ${JSON.stringify(obj.file)}`);
   if (typeof obj.body !== "string") return fail("export has no body");
 
-  if (obj.kind === "root-cert") {
+  if (obj.kind === "root-cert" || obj.kind === "deputy-cert") {
     const der = pemCertToDer(obj.body);
     const vk = der && certSubjectVk(der);
     if (!vk) return fail("body is not an ML-DSA-65 certificate");
@@ -193,7 +226,16 @@ async function inspectExport(jsonText) {
     const vkHex = bytesToHexStr(vk);
     out.pin = await pin(vkHex);
     out.ski = out.pin.slice(0, 40);
-    const expected = `root-${out.ski}.pem`;
+    let expected;
+    if (obj.kind === "root-cert") {
+      expected = `root-${out.ski}.pem`;
+    } else {
+      // sign-deputy-cert names it for the ISSUING Root (six Roots certify one
+      // Deputy): the AuthorityKeyIdentifier carries that Root's ski.
+      out.issuer_ski = certAuthorityKeyId(der);
+      if (!out.issuer_ski || out.issuer_ski.length !== 40) return fail("certificate has no 20-byte AuthorityKeyIdentifier");
+      expected = `deputy-${out.issuer_ski}.pem`;
+    }
     if (obj.file !== expected) return fail(`file name ${obj.file} does not match the certificate (expected ${expected})`);
     return out;
   }
@@ -364,6 +406,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, vkSummary, saveMethod, inspectExport, certSubjectVk };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, vkSummary, saveMethod, inspectExport, certSubjectVk, certAuthorityKeyId };
 
 });

@@ -1310,14 +1310,20 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             destination = view.run()
 
         encoder = captured["qr_encoder"]
-        assert encoder.file_type == "B"
+        assert encoder.file_type == "J"  # an export envelope carrying the file name
 
         d = DecodeQR()
         while True:
             status = d.add_data(encoder.next_part())
             if status == DecodeQRStatus.COMPLETE:
                 break
-        cert_der = d.decoder.get_data()
+        from seedsigner.models.sevenf.export_envelope import pem_to_der
+        from seedsigner.models.sevenf.review_format import ski
+        envelope = json.loads(d.decoder.get_data())
+        assert envelope["kind"] == "deputy-cert"
+        # sign-deputy-cert names it for the ISSUING Root (six Roots certify one Deputy)
+        assert envelope["file"] == f"deputy-{ski(certificate.public_key.hex())}.pem"
+        cert_der = pem_to_der(envelope["body"])
         parsed = cert_request_module.parse_root_certificate_der(cert_der)
         assert parsed.subject_vk == deputy_csr.subject_vk
         assert parsed.chain_kind == ChainKind.TESTNET
