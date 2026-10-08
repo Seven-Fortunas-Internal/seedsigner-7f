@@ -149,8 +149,8 @@ def render_seed_qr(name: str, mnemonic: list[str], out_dir: Path) -> Path:
     return path
 
 
-def render_bbqr(name: str, payload: bytes, out_dir: Path) -> list[Path]:
-    encoder = BBQrEncoder(data=payload, file_type="B", bbqr_encoding="Z")
+def render_bbqr(name: str, payload: bytes, out_dir: Path, file_type: str = "B") -> list[Path]:
+    encoder = BBQrEncoder(data=payload, file_type=file_type, bbqr_encoding="Z")
     total = encoder.seq_len()
     paths = []
     for i in range(total):
