@@ -161,6 +161,8 @@ function certSubjectVk(der) {
   return der.slice(bits.start + 1, bits.end);
 }
 
+const SIGNATURE_KINDS = new Map([["genesis-sig", "genesis"], ["devfund-sig", "devfund"]]);
+
 async function inspectExport(jsonText) {
   let obj;
   try {
@@ -193,6 +195,34 @@ async function inspectExport(jsonText) {
     out.ski = out.pin.slice(0, 40);
     const expected = `root-${out.ski}.pem`;
     if (obj.file !== expected) return fail(`file name ${obj.file} does not match the certificate (expected ${expected})`);
+    return out;
+  }
+  const sigExt = SIGNATURE_KINDS.get(obj.kind);  // a Map: no inherited names
+  if (sigExt) {
+    // A Root signature, as sf-wallet-gov sign-genesis/sign-devfund write it.
+    // It carries no key, so the name can only be checked for shape (and
+    // against the key if one is embedded); the coordinator verifies the
+    // signature against <ski>.vk and refuses a misnamed file.
+    const m = new RegExp(`^([0-9a-f]{40})\\.${sigExt}$`).exec(obj.file);
+    if (!m) return fail(`file name ${obj.file} is not <subject key id>.${sigExt}`);
+    out.ski = m[1];
+    let sig;
+    try {
+      sig = JSON.parse(obj.body);
+    } catch (e) {
+      return fail("body is not a signature (not JSON)");
+    }
+    const keys = sig && typeof sig === "object" ? Object.keys(sig) : [];
+    if (keys.length !== 2 || keys[0] !== "signer_vk" || keys[1] !== "sig") return fail("body is not a signature {signer_vk, sig}");
+    if (typeof sig.sig !== "string" || typeof sig.signer_vk !== "string") return fail("body is not a signature (signer_vk and sig must be strings)");
+    if (!/^[0-9a-f]{6618}$/.test(sig.sig)) return fail("body is not a signature (sig must be 3309 bytes of lowercase hex)");
+    if (sig.signer_vk !== "") {
+      if (!/^[0-9a-f]{3904}$/.test(sig.signer_vk)) return fail("body's signer_vk is not a 1952-byte key");
+      const keyPin = await pin(sig.signer_vk);
+      if (keyPin.slice(0, 40) !== out.ski) return fail(`file name ${obj.file} does not match the embedded key`);
+      out.pin = keyPin;
+    }
+    if (JSON.stringify(sig, null, 2) + "\n" !== obj.body) return fail("body is not canonical (sf-wallet-gov's pretty JSON plus a newline)");
     return out;
   }
   return fail(`unsupported export kind ${JSON.stringify(obj.kind)}`);

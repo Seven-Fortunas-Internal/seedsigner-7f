@@ -344,3 +344,61 @@ def test_inspect_export_refuses_malformed_bodies_and_names(change, needle):
     r = _inspect(json.dumps(change(json.loads(_root_cert_envelope()))))
     assert r["error"] and needle in r["error"]
     assert isinstance(r["body"], str)  # the page can still show what it refused
+
+
+def _sig_envelope(kind: str) -> str:
+    from seedsigner.models.sevenf.export_envelope import signature_export
+    return signature_export(kind, b"\x07" * 1952, bytes(range(256)) * 12 + bytes(3309 - 3072)).decode()
+
+
+@pytest.mark.parametrize("kind", ["genesis", "devfund"])
+def test_inspect_export_accepts_device_signatures(kind):
+    import hashlib, json
+    env = json.loads(_sig_envelope(kind))
+    r = _inspect(json.dumps(env))
+    assert r["error"] is None
+    assert r["kind"] == f"{kind}-sig"
+    assert r["file"] == f"{hashlib.sha256(b'\x07' * 1952).hexdigest()[:40]}.{kind}"
+    assert r["ski"] == r["file"].split(".")[0]
+    assert r["body"] == env["body"]
+
+
+@pytest.mark.parametrize("change, needle", [
+    (lambda e: {**e, "file": e["file"].replace(".genesis", ".devfund")}, "file name"),   # extension must match kind
+    (lambda e: {**e, "file": "ABC.genesis"}, "file name"),
+    (lambda e: {**e, "body": e["body"].replace('"sig": "', '"sig": "zz')}, "signature"),
+    (lambda e: {**e, "body": e["body"].rstrip("\n")}, "canonical"),
+    (lambda e: {**e, "body": '{\n  "signer_vk": "' + "11" * 1952 + '",\n  "sig": "' + "22" * 3309 + '"\n}\n'}, "does not match"),
+])
+def test_inspect_export_refuses_bad_signature_envelopes(change, needle):
+    import json
+    r = _inspect(json.dumps(change(json.loads(_sig_envelope("genesis")))))
+    assert r["error"] and needle in r["error"]
+
+
+def test_inspect_export_accepts_an_embedded_key_that_matches_the_name():
+    import hashlib, json
+    vk = b"\x07" * 1952
+    env = json.loads(_sig_envelope("genesis"))
+    env["body"] = json.dumps({"signer_vk": vk.hex(), "sig": "22" * 3309}, indent=2) + "\n"
+    r = _inspect(json.dumps(env))
+    assert r["error"] is None and r["file"].startswith(hashlib.sha256(vk).hexdigest()[:40])
+
+
+@pytest.mark.parametrize("body", [
+    '{\n  "signer_vk": "",\n  "sig": [\n    "' + "22" * 3309 + '"\n  ]\n}\n',  # RegExp.test would coerce the array
+    '{\n  "signer_vk": [],\n  "sig": "' + "22" * 3309 + '"\n}\n',
+])
+def test_inspect_export_refuses_non_string_signature_fields(body):
+    import json
+    env = {**json.loads(_sig_envelope("genesis")), "body": body}
+    r = _inspect(json.dumps(env))
+    assert r["error"]
+
+
+@pytest.mark.parametrize("kind", ["constructor", "toString", "__proto__"])
+def test_inspect_export_refuses_inherited_property_names_as_kinds(kind):
+    import json
+    env = {**json.loads(_sig_envelope("genesis")), "kind": kind}
+    r = _inspect(json.dumps(env))
+    assert r["error"] and "unsupported export kind" in r["error"]

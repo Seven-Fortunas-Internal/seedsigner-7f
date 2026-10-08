@@ -52,3 +52,19 @@ def root_cert_export(cert_der: bytes, subject_vk: bytes) -> bytes:
     """ The Root self-certificate as sign-root-cert writes it:
         root-<ski>.pem (runbook Step 2). """
     return envelope("root-cert", f"root-{ski(subject_vk.hex())}.pem", der_to_pem(cert_der))
+
+
+_SIGNATURE_EXTENSIONS = {"genesis": "genesis", "devfund": "devfund"}
+
+
+def signature_export(kind: str, signer_vk: bytes, sig: bytes) -> bytes:
+    """ A Root signature over a genesis or devfund definition, as
+        sf-wallet-gov sign-genesis / sign-devfund write it: <ski>.genesis or
+        <ski>.devfund, serde pretty JSON {"signer_vk": "", "sig": hex} plus a
+        trailing newline. The key is not embedded (runbook Steps 5-6: the
+        coordinator already has it and pairs the signature with <ski>.vk by
+        this file name). """
+    if kind not in _SIGNATURE_EXTENSIONS:
+        raise ValueError(f"unknown signature kind {kind!r}")
+    body = json.dumps({"signer_vk": "", "sig": sig.hex()}, indent=2) + "\n"
+    return envelope(f"{kind}-sig", f"{ski(signer_vk.hex())}.{_SIGNATURE_EXTENSIONS[kind]}", body)

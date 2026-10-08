@@ -352,7 +352,11 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             status = d.add_data(encoder.next_part())
             if status == DecodeQRStatus.COMPLETE:
                 break
-        decoded_json = json.loads(d.decoder.get_data())
+        from seedsigner.models.sevenf.review_format import ski
+        envelope = json.loads(d.decoder.get_data())
+        assert envelope["kind"] == "genesis-sig"
+        assert envelope["file"] == f"{ski(keys.root_ca.public_key.hex())}.genesis"
+        decoded_json = json.loads(envelope["body"])
         assert decoded_json == build_root_sig_json(keys.root_ca.public_key, signature)
         assert decoded_json["signer_vk"] == ""
         assert decoded_json["sig"] == signature.hex()
@@ -402,8 +406,12 @@ def _confirm_clock_now(controller):
     """ Certificate flows need an operator-confirmed date (ceremony_clock);
         tests that aren't about that gate start with it already confirmed. """
     import time
-    from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock
-    controller.sevenf_confirmed_clock = ConfirmedClock(utc=int(time.time()), monotonic=time.monotonic())
+    from seedsigner.helpers.version import Version
+    from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock, floor_timestamp
+    # A minute above both "now" and the build-time floor: the view truncates
+    # to the minute, and in a dev checkout the floor is the newest file mtime.
+    utc = max(int(time.time()), floor_timestamp(Version.get_version_timestamp())) + 60
+    controller.sevenf_confirmed_clock = ConfirmedClock(utc=utc, monotonic=time.monotonic())
 
 
 class TestSevenFRootSelfCertificationFlow(FlowTest):
@@ -773,7 +781,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST),
                 FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, is_redirect=True),  # asks for the date first
-                FlowStep(sevenf_views.SevenFConfirmDateTimeView, screen_return_value=0),  # "Yes, continue"
+                FlowStep(sevenf_views.SevenFConfirmDateTimeView, before_run=lambda v: v.controller.sevenf_confirmed_clock or _confirm_clock_now(v.controller), screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, button_data_selection=ButtonOption("testnet")),
                 *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(5)],
                 FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
@@ -1000,7 +1008,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
                 FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, is_redirect=True),  # asks for the date first
-                FlowStep(sevenf_views.SevenFConfirmDateTimeView, screen_return_value=0),  # "Yes, continue"
+                FlowStep(sevenf_views.SevenFConfirmDateTimeView, before_run=lambda v: v.controller.sevenf_confirmed_clock or _confirm_clock_now(v.controller), screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
                 FlowStep(sevenf_views.SevenFScanRootCertificateView),
             ],
@@ -1067,7 +1075,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                 [
                     FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
                     FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, is_redirect=True),  # asks for the date first
-                FlowStep(sevenf_views.SevenFConfirmDateTimeView, screen_return_value=0),  # "Yes, continue"
+                FlowStep(sevenf_views.SevenFConfirmDateTimeView, before_run=lambda v: v.controller.sevenf_confirmed_clock or _confirm_clock_now(v.controller), screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
                     FlowStep(
                         sevenf_views.SevenFScanRootCertificateView,
@@ -1949,6 +1957,34 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             view.run()
         assert "Root key" in captured["text"]
         assert "devfund key" not in captured["text"]
+
+
+    def test_export_names_the_signature_file_by_the_signer_ski(self):
+        """ <ski>.devfund in an export envelope, body exactly as sf-wallet-gov
+            sign-devfund writes it. """
+        from seedsigner.models.sevenf.devfund_config import build_root_sig_json
+        from seedsigner.models.sevenf.review_format import ski
+        from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
+        seed = self.seed_fixture()
+        pk, sig = sign_with_devfund(seed.seed_bytes, ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True)
+        view = sevenf_views.SevenFExportSignedDevFundConfigQRView(artifact=sevenf_views.SevenFSignedArtifact(public_key=pk, signature=sig))
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured["qr_encoder"] = kwargs["qr_encoder"]
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+        encoder = captured["qr_encoder"]
+        assert encoder.file_type == "J"
+        d = DecodeQR()
+        while d.add_data(encoder.next_part()) != DecodeQRStatus.COMPLETE:
+            pass
+        envelope = json.loads(d.decoder.get_data())
+        assert envelope["kind"] == "devfund-sig"
+        assert envelope["file"] == f"{ski(pk.hex())}.devfund"
+        assert envelope["body"] == json.dumps(build_root_sig_json(pk, sig), indent=2) + "\n"
 
 
     def test_back_button_on_confirm_sign_screen_returns_to_back_stack_without_signing(self):

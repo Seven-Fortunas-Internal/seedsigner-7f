@@ -54,3 +54,32 @@ def test_root_cert_export_names_the_file_by_the_subject_ski():
         "body": GOV_PEM,
     }
     assert hashlib.sha256(vk).hexdigest()[:40] == "591c511984a2d73c6bee1f4dc149d48f7f97fc55"
+
+
+# Written by `sf-wallet-gov sign-genesis --index 0` (7fchain 416f576, the
+# 2026-10-07 end-to-end run): serde pretty JSON plus write_out's newline.
+GOV_GENESIS = (Path(__file__).parent / "fixtures" / "sf_wallet_gov_sign_genesis_76a2e66c.genesis").read_text()
+
+
+def test_signature_body_matches_sf_wallet_gov_byte_for_byte():
+    from seedsigner.models.sevenf.export_envelope import signature_export
+    sig = bytes.fromhex(json.loads(GOV_GENESIS)["sig"])
+    vk = b"\x07" * 1952
+    env = json.loads(signature_export("genesis", vk, sig))
+    assert env["body"] == GOV_GENESIS
+
+
+@pytest.mark.parametrize("kind, ext", [("genesis", "genesis"), ("devfund", "devfund")])
+def test_signature_export_names_the_file_by_the_signer_ski(kind, ext):
+    from seedsigner.models.sevenf.export_envelope import signature_export
+    vk = b"\x07" * 1952
+    env = json.loads(signature_export(kind, vk, b"\x01" * 3309))
+    assert env["kind"] == f"{kind}-sig"
+    assert env["file"] == f"{hashlib.sha256(vk).hexdigest()[:40]}.{ext}"
+    assert json.loads(env["body"]) == {"signer_vk": "", "sig": "01" * 3309}
+
+
+def test_signature_export_refuses_an_unknown_kind():
+    from seedsigner.models.sevenf.export_envelope import signature_export
+    with pytest.raises(ValueError):
+        signature_export("treasury", b"\x07" * 1952, b"\x01" * 3309)

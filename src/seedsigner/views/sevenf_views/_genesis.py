@@ -363,17 +363,15 @@ class SevenFExportSignedConfigQRView(View):
 
 
     def run(self):
-        import json
-
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        signed_json = genesis_config.build_root_sig_json(
-            self.state.public_key, self.state.signature,
-        )
-        json_bytes = json.dumps(signed_json).encode("utf-8")
+        from seedsigner.models.sevenf.export_envelope import signature_export
 
+        # <ski>.genesis exactly as sf-wallet-gov sign-genesis writes it, in an
+        # envelope that tells the host page the file name (export_envelope.py).
         self.run_screen(
             QRDisplayScreen,
-            qr_encoder=BBQrEncoder(data=json_bytes, file_type="J"),  # 'J': BBQr JSON
+            qr_encoder=BBQrEncoder(
+                data=signature_export("genesis", self.state.public_key, self.state.signature), file_type="J"),
         )
         return Destination(SevenFExportView, view_args=dict(state=self.state), skip_current_view=True)

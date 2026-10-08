@@ -66,7 +66,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261008d"></script>
+<script src="bbqr-decode.js?v=20261008f"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -237,8 +237,16 @@ async function renderResult(bytes) {
   if (exportInfo && exportInfo.error) {
     resultEl.textContent = `NOT SAVED -- this export failed its check: ${exportInfo.error}\n\n${text}`;
   } else if (exportInfo) {
-    const label = { "root-cert": "Root certificate" }[exportInfo.kind] || exportInfo.kind;
-    resultEl.textContent = `${label}\nFile: ${exportInfo.file}\nSubject key id: ${exportInfo.ski}\nPin: ${exportInfo.pin}\n\n${text}`;
+    const label = {
+      "root-cert": "Root certificate",
+      "genesis-sig": "Genesis signature (Root key)",
+      "devfund-sig": "Dev-fund definition signature (Root key)",
+    }[exportInfo.kind] || exportInfo.kind;
+    const pinLine = exportInfo.pin ? `\nPin: ${exportInfo.pin}` : "";
+    const keyNote = exportInfo.kind.endsWith("-sig") && !exportInfo.pin
+      ? "\nKey not embedded: the coordinator pairs this with <subject key id>.vk." : "";
+    const idLabel = exportInfo.kind.endsWith("-sig") ? "Signed by subject key id" : "Subject key id";
+    resultEl.textContent = `${label}\nFile: ${exportInfo.file}\n${idLabel}: ${exportInfo.ski}${pinLine}${keyNote}\n\n${text}`;
   } else if (vkInfo) {
     resultEl.textContent = `Subject key id: ${vkInfo.id}\nPin: ${vkInfo.pin}\nFile: ${vkInfo.id}.vk\n\n${text}`;
   } else {
