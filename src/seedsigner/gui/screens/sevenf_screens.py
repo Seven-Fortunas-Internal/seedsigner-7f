@@ -31,9 +31,11 @@
 from dataclasses import dataclass
 from gettext import gettext as _
 
-from seedsigner.gui.components import FormattedAddress, GUIConstants, IconTextLine, SeedSignerIconConstants
+from seedsigner.gui.components import Fonts, FormattedAddress, GUIConstants, IconTextLine, SeedSignerIconConstants
+from seedsigner.hardware.buttons import HardwareButtonsConstants
+from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
 
-from .screen import ButtonListScreen, ButtonOption
+from .screen import RET_CODE__BACK_BUTTON, BaseTopNavScreen, ButtonListScreen, ButtonOption
 
 
 @dataclass
@@ -139,3 +141,91 @@ class SevenFConfirmSignScreen(ButtonListScreen):
             screen_y=chain_display.screen_y + chain_display.height + 2*GUIConstants.COMPONENT_PADDING,
         )
         self.components.append(address_display)
+
+
+
+@dataclass
+class SevenFDateTimeEntryScreen(BaseTopNavScreen):
+    """
+        One-screen UTC date/time editor for the certificate flows
+        (models/sevenf/ceremony_clock.py has why). Up/down changes the
+        highlighted field (holding repeats), left/right moves between fields
+        (left from the year reaches Back), any press confirms. Shows the
+        weekday live so a wrong day is easy to spot. Returns the edited
+        DateTimeFields, or RET_CODE__BACK_BUTTON.
+    """
+    title: str = _("Date & time (UTC)")
+    fields: DateTimeFields = None
+    field_index: int = 2  # start on the day: usually the only thing that changes
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.value_font = Fonts.get_font(GUIConstants.FIXED_WIDTH_EMPHASIS_FONT_NAME, 30)
+        self.small_font = Fonts.get_font(GUIConstants.get_body_font_name(), 16)
+
+
+    def _render(self):
+        super()._render()
+        self._draw_editor()
+
+
+    def _segments(self) -> list[list[tuple[str, int | None]]]:
+        """ Two rows of (text, field index or None for separators). """
+        f = self.fields
+        return [
+            [(f"{f.year:04d}", 0), ("-", None), (f"{f.month:02d}", 1), ("-", None), (f"{f.day:02d}", 2)],
+            [(f"{f.hour:02d}", 3), (":", None), (f"{f.minute:02d}", 4)],
+        ]
+
+
+    def _draw_editor(self):
+        draw = self.image_draw
+        y = GUIConstants.TOP_NAV_HEIGHT + 14
+        pad = 4
+        for row in self._segments():
+            widths = [draw.textlength(text, font=self.value_font) + (2 * pad if idx is not None else 2) for text, idx in row]
+            x = (self.canvas_width - sum(widths)) // 2
+            for (text, idx), w in zip(row, widths):
+                selected = idx == self.field_index and not self.top_nav.is_selected
+                if selected:
+                    draw.rounded_rectangle((x, y - 2, x + w, y + 36), radius=6, fill=GUIConstants.ACCENT_COLOR)
+                draw.text(
+                    (x + w / 2, y + 17), text, anchor="mm", font=self.value_font,
+                    fill=GUIConstants.BACKGROUND_COLOR if selected else GUIConstants.BODY_FONT_COLOR,
+                )
+                x += w
+            y += 46
+
+        weekday = self.fields.describe().split(" ", 1)[0]
+        draw.text((self.canvas_width / 2, y + 6), weekday, anchor="mm", font=self.small_font, fill=GUIConstants.ACCENT_COLOR)
+        for i, hint in enumerate((_("Up/down: change"), _("Left/right: next field"), _("Press: done"))):
+            draw.text((self.canvas_width / 2, y + 30 + 19 * i), hint, anchor="mm", font=self.small_font, fill=GUIConstants.LABEL_FONT_COLOR)
+
+
+    def _run(self):
+        while True:
+            user_input = self.hw_inputs.wait_for(HardwareButtonsConstants.ALL_KEYS)
+            with self.renderer.lock:
+                if self.top_nav.is_selected:
+                    if user_input in HardwareButtonsConstants.KEYS__ANYCLICK:
+                        return RET_CODE__BACK_BUTTON
+                    if user_input in (HardwareButtonsConstants.KEY_DOWN, HardwareButtonsConstants.KEY_RIGHT):
+                        self.top_nav.is_selected = False
+                elif user_input == HardwareButtonsConstants.KEY_UP:
+                    self.fields = self.fields.adjusted(self.field_index, +1)
+                elif user_input == HardwareButtonsConstants.KEY_DOWN:
+                    self.fields = self.fields.adjusted(self.field_index, -1)
+                elif user_input == HardwareButtonsConstants.KEY_LEFT:
+                    if self.field_index == 0:
+                        self.top_nav.is_selected = True
+                    else:
+                        self.field_index -= 1
+                elif user_input == HardwareButtonsConstants.KEY_RIGHT:
+                    self.field_index = min(self.field_index + 1, len(DateTimeFields.FIELDS) - 1)
+                elif user_input in HardwareButtonsConstants.KEYS__ANYCLICK:
+                    return self.fields
+                else:
+                    continue
+                self.top_nav.render_buttons()
+                self._render()
+                self.renderer.show_image()

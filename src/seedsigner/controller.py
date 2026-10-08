@@ -147,6 +147,12 @@ class Controller(Singleton):
     # pick yet this session" -- EvmNetworkView.run() falls back to index 0.
     evm_last_network_id: str = None
 
+    # The operator-confirmed date/time for 7F certificate flows
+    # (models/sevenf/ceremony_clock.ConfirmedClock). Same lifetime as the two
+    # above: memory only, cleared only by a fresh Controller (a reboot) -- an
+    # air-gapped unit has no clock of its own to trust.
+    sevenf_confirmed_clock = None
+
     # Destination placeholder for when we need to jump out to a side flow but intend to
     # return navigation to the main flow (e.g. PSBT flow, load multisig descriptor,
     # then resume PSBT flow).

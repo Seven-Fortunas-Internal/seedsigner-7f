@@ -20,6 +20,7 @@ from seedsigner.models.sevenf.cert_request import CertRequestError
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
+from ._clock import ceremony_now, require_confirmed_clock
 from ._common import (
     SevenFCertRequestReviewFieldView,
     SevenFConfirmSignRootCertView,
@@ -48,18 +49,24 @@ class SevenFSelectChainKindForRootSelfCertView(View):
         compensating control is the mandatory enrollment-fingerprint check
         on the review screen this view routes to, not a device-side
         pin allowlist (deferred, a federation-level question). """
-    def __init__(self, seed: Seed):
+    def __init__(self, seed: Seed, date_confirmed: bool = False):
         super().__init__()
         self.seed = seed
+        self.date_confirmed = date_confirmed
 
         if guard_active_chain(self, "sevenf"):
             return
 
 
     def run(self):
-        import time
-
         from seedsigner.gui.screens.screen import ButtonListScreen
+
+        # The certificate's validity starts "now": ask the operator for the
+        # date first (once per boot); this device has no clock to trust.
+        ask_date = require_confirmed_clock(self)
+        if ask_date:
+            return ask_date
+
         kinds = list(ChainKind)
         button_data = [ButtonOption(k.name.lower()) for k in kinds]
 
@@ -77,7 +84,10 @@ class SevenFSelectChainKindForRootSelfCertView(View):
         keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind)
         subject_vk = keys.root_ca.public_key
         serial = cert_request.generate_serial()
-        not_before = int(time.time())
+        not_before = ceremony_now(self.controller)
+        if not_before is None:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("The date and time haven't been confirmed; start again from the menu.")))
         days = cert_request.ROOT_DAYS
 
         try:

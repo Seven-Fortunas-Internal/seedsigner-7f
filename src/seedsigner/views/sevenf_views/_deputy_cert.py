@@ -23,6 +23,7 @@ from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
+from ._clock import ceremony_now, require_confirmed_clock
 from ._common import (
     SevenFCertRequestReviewFieldView,
     SevenFConfirmSignRootCertView,
@@ -45,9 +46,10 @@ class SevenFSelectChainKindForDeputyCrossCertView(View):
         the way the retired flow's Deputy request was checked against the
         Root request's `kind` -- the cross-check moved, it was not
         dropped. Mirrors EvmNetworkView's own ButtonListScreen usage. """
-    def __init__(self, seed: Seed):
+    def __init__(self, seed: Seed, date_confirmed: bool = False):
         super().__init__()
         self.seed = seed
+        self.date_confirmed = date_confirmed
 
         if guard_active_chain(self, "sevenf"):
             return
@@ -55,6 +57,13 @@ class SevenFSelectChainKindForDeputyCrossCertView(View):
 
     def run(self):
         from seedsigner.gui.screens.screen import ButtonListScreen
+
+        # The Deputy certificate's validity starts "now": ask the operator for
+        # the date first (once per boot), before any scanning.
+        ask_date = require_confirmed_clock(self)
+        if ask_date:
+            return ask_date
+
         kinds = list(ChainKind)
         button_data = [ButtonOption(k.name.lower()) for k in kinds]
 
@@ -186,7 +195,6 @@ class SevenFScanDeputyCsrView(ScanView):
 
 
     def _handle_complete_scan(self):
-        import time
         deputy_csr_der = self.decoder.get_sevenf_bbqr_data()
 
         try:
@@ -195,7 +203,10 @@ class SevenFScanDeputyCsrView(ScanView):
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't verify this certificate request: {}").format(e)))
 
-        now = int(time.time())
+        now = ceremony_now(self.controller)
+        if now is None:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("The date and time haven't been confirmed; start again from the menu.")))
         days = cert_request.DEPUTY_DAYS
         serial = cert_request.generate_serial()
 

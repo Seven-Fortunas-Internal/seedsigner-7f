@@ -398,6 +398,14 @@ def _load_cert_request_into_decoder(data: bytes, file_type: str = "J"):
     return loader
 
 
+def _confirm_clock_now(controller):
+    """ Certificate flows need an operator-confirmed date (ceremony_clock);
+        tests that aren't about that gate start with it already confirmed. """
+    import time
+    from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock
+    controller.sevenf_confirmed_clock = ConfirmedClock(utc=int(time.time()), monotonic=time.monotonic())
+
+
 class TestSevenFRootSelfCertificationFlow(FlowTest):
     """ The Root self-certification flow's PKCS#10-era rework
         (7f-signing-support-root-self-certification-pkcs10-rework; see
@@ -415,6 +423,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
     def setup_method(self):
         super().setup_method()
         self.controller.active_chain_id = "sevenf"
+        _confirm_clock_now(self.controller)  # the operator already confirmed the date this boot
 
 
     def seed_fixture(self) -> Seed:
@@ -717,7 +726,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         seed = self.seed_fixture()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
 
-        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed)
+        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed, date_confirmed=True)
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET (Mainnet=0, Testnet=1, Devnet=2)
             destination1 = view.run()
@@ -763,6 +772,8 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         self.run_sequence(
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST),
+                FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, is_redirect=True),  # asks for the date first
+                FlowStep(sevenf_views.SevenFConfirmDateTimeView, screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, button_data_selection=ButtonOption("testnet")),
                 *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(5)],
                 FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
@@ -836,7 +847,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
         seed = self.seed_fixture()
-        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed)
+        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed, date_confirmed=True)
 
         def fake_build_root_tbs(*a, **kw):
             raise cert_request_module.CertRequestError("simulated build failure")
@@ -939,6 +950,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
     def setup_method(self):
         super().setup_method()
         self.controller.active_chain_id = "sevenf"
+        _confirm_clock_now(self.controller)  # the operator already confirmed the date this boot
 
 
     def seed_fixture(self) -> Seed:
@@ -981,6 +993,8 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         self.run_sequence(
             [
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
+                FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, is_redirect=True),  # asks for the date first
+                FlowStep(sevenf_views.SevenFConfirmDateTimeView, screen_return_value=0),  # "Yes, continue"
                 FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
                 FlowStep(sevenf_views.SevenFScanRootCertificateView),
             ],
@@ -1010,6 +1024,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             into a certificate parsing back to the Deputy's own subject key
             and chosen chain -- not just "didn't raise". """
         import time as time_module
+        from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock
         from test_sevenf_cert_request import DEPUTY_CSR_DER
         from seedsigner.models.sevenf import cert_request as cert_request_module
         from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
@@ -1041,11 +1056,13 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         with pytest.MonkeyPatch().context() as mp:
             # Same wall-clock fix as test_review_fields_are_labeled_and_ordered_root_then_deputy,
             # kept within this freshly-built Root cert's own validity window.
-            mp.setattr(time_module, "time", lambda: root_not_before + 86400)
+            self.controller.sevenf_confirmed_clock = ConfirmedClock(utc=root_not_before + 86400, monotonic=time_module.monotonic())  # the operator-confirmed "now"
             self.run_sequence(
                 [
                     FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEPUTY_CROSS_CERT),
-                    FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
+                    FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, is_redirect=True),  # asks for the date first
+                FlowStep(sevenf_views.SevenFConfirmDateTimeView, screen_return_value=0),  # "Yes, continue"
+                FlowStep(sevenf_views.SevenFSelectChainKindForDeputyCrossCertView, button_data_selection=ButtonOption("testnet")),
                     FlowStep(
                         sevenf_views.SevenFScanRootCertificateView,
                         before_run=_load_cert_request_into_decoder(root_cert_der),
@@ -1092,6 +1109,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             view can be exercised directly against the real root cert/CSR
             reference vectors. """
         import time as time_module
+        from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock
         from test_sevenf_cert_request import DEPUTY_CSR_DER, ROOT_CERT_DER, ROOT_CERT_NOT_BEFORE
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
@@ -1110,7 +1128,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         # 2027 -- fix the wall clock inside its window rather than relying
         # on the sandbox's actual system time, which may be earlier.
         with pytest.MonkeyPatch().context() as mp:
-            mp.setattr(time_module, "time", lambda: ROOT_CERT_NOT_BEFORE + 86400)
+            self.controller.sevenf_confirmed_clock = ConfirmedClock(utc=ROOT_CERT_NOT_BEFORE + 86400, monotonic=time_module.monotonic())  # the operator-confirmed "now"
             destination = view._handle_complete_scan()
 
         fields = destination.view_args["review_fields"]
@@ -1957,3 +1975,196 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
         assert view.devfund_address == keys.devfund.address
         assert view.devfund_address == keys.root_ca.address
+
+
+
+class TestSevenFCeremonyClockGate(FlowTest):
+    """ Certificate flows stamp "now" into the validity window, and an
+        air-gapped production unit boots in 1970 (no RTC, no NTP). Both
+        flows ask the operator for the date first, once per boot. """
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "sevenf"
+
+
+    def seed_fixture(self) -> Seed:
+        seed = Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+        self.controller.storage.seeds.append(seed)
+        return seed
+
+
+    @pytest.mark.parametrize("view_name", [
+        "SevenFSelectChainKindForRootSelfCertView",
+        "SevenFSelectChainKindForDeputyCrossCertView",
+    ])
+    def test_certificate_flows_ask_for_the_date_first(self, view_name):
+        seed = self.seed_fixture()
+        assert self.controller.sevenf_confirmed_clock is None  # a fresh boot
+        view_cls = getattr(sevenf_views, view_name)
+        view = view_cls(seed=seed)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: pytest.fail("chain picker shown before the date"))
+            destination = view.run()
+        assert destination.View_cls == sevenf_views.SevenFConfirmDateTimeView
+        assert destination.view_args["next_view_cls"] is view_cls
+        assert destination.view_args["next_view_args"] == dict(seed=seed, date_confirmed=True)
+        assert destination.skip_current_view
+
+
+    @pytest.mark.parametrize("view_name", [
+        "SevenFSelectChainKindForRootSelfCertView",
+        "SevenFSelectChainKindForDeputyCrossCertView",
+    ])
+    def test_asks_again_on_every_flow_even_after_a_confirmation(self, view_name):
+        """ A wrongly confirmed date must not stick for the whole boot: each
+            certificate flow re-asks (one press when the value is right). """
+        _confirm_clock_now(self.controller)
+        seed = self.seed_fixture()
+        view = getattr(sevenf_views, view_name)(seed=seed)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: pytest.fail("chain picker shown before the date"))
+            destination = view.run()
+        assert destination.View_cls == sevenf_views.SevenFConfirmDateTimeView
+
+
+    def test_with_a_confirmed_clock_it_opens_on_the_readback_and_one_press_continues(self):
+        import time
+        from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock, DateTimeFields
+        confirmed = DateTimeFields(2026, 10, 9, 14, 5).to_timestamp()
+        self.controller.sevenf_confirmed_clock = ConfirmedClock(utc=confirmed, monotonic=time.monotonic())
+        destination, shown, _ = self._run_confirm_view([0])  # "Yes, continue"
+        assert [s[0] for s in shown] == ["LargeIconStatusScreen"]
+        assert "Friday 9 October 2026, 14:05 UTC" in shown[0][1]["text"]
+        assert destination.View_cls == sevenf_views.SevenFSelectChainKindForRootSelfCertView
+
+
+    def test_change_from_the_readback_opens_the_editor_on_the_current_value(self):
+        import time
+        from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock, DateTimeFields
+        current = DateTimeFields(2026, 10, 9, 14, 5)
+        fixed = DateTimeFields(2026, 10, 10, 14, 5)
+        self.controller.sevenf_confirmed_clock = ConfirmedClock(utc=current.to_timestamp(), monotonic=time.monotonic())
+        destination, shown, _ = self._run_confirm_view([1, fixed, 0])  # "Change", edit, "Yes"
+        assert shown[1][0] == "SevenFDateTimeEntryScreen" and shown[1][1]["fields"] == current
+        assert self.controller.sevenf_confirmed_clock.utc == fixed.to_timestamp()
+
+
+    def test_a_date_more_than_five_years_past_the_build_is_refused(self):
+        from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
+        far, ok = DateTimeFields(2099, 1, 1, 0, 0), DateTimeFields(2026, 10, 9, 14, 5)
+        destination, shown, _ = self._run_confirm_view([far, 0, ok, 0])
+        assert [s[0] for s in shown][:3] == ["SevenFDateTimeEntryScreen", "WarningScreen", "SevenFDateTimeEntryScreen"]
+        assert self.controller.sevenf_confirmed_clock.utc == ok.to_timestamp()
+
+
+    def test_root_self_cert_refuses_without_a_confirmed_clock(self):
+        seed = self.seed_fixture()
+        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed, date_confirmed=True)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # testnet
+            destination = view.run()
+        assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
+
+
+    def test_deputy_csr_scan_refuses_without_a_confirmed_clock(self):
+        from seedsigner.models.sevenf import cert_request
+        from test_sevenf_cert_request import DEPUTY_CSR_DER, ROOT_CERT_DER
+        seed = self.seed_fixture()
+        view = sevenf_views.SevenFScanDeputyCsrView(
+            seed=seed, chain_kind=ChainKind.TESTNET, root_cert_der=ROOT_CERT_DER,
+            root_cert=cert_request.parse_root_certificate_der(ROOT_CERT_DER))
+        _load_cert_request_into_decoder(DEPUTY_CSR_DER, file_type="B")(view)
+        destination = view._handle_complete_scan()
+        assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
+
+
+    def test_self_cert_stamps_the_confirmed_time_not_the_system_clock(self):
+        import time
+        from seedsigner.models.sevenf import cert_request
+        from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock
+        confirmed = 1_800_000_000
+        self.controller.sevenf_confirmed_clock = ConfirmedClock(utc=confirmed, monotonic=time.monotonic())
+        seed = self.seed_fixture()
+        view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed, date_confirmed=True)
+        captured = {}
+        real = cert_request.build_root_tbs
+
+        def spy(subject_vk, chain_kind, not_before, days, serial):
+            captured["not_before"] = not_before
+            return real(subject_vk, chain_kind, not_before, days, serial)
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(cert_request, "build_root_tbs", spy)
+            mp.setattr(time, "time", lambda: 0.0)  # what a fresh air-gapped boot reports
+            mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # testnet
+            view.run()
+        assert confirmed <= captured["not_before"] <= confirmed + 5
+
+
+    def _run_confirm_view(self, screen_returns):
+        """ Drives SevenFConfirmDateTimeView with scripted screen results;
+            returns (destination, list of (screen_cls name, kwargs)). """
+        from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
+        seed = self.seed_fixture()
+        view = sevenf_views.SevenFConfirmDateTimeView(
+            next_view_cls=sevenf_views.SevenFSelectChainKindForRootSelfCertView,
+            next_view_args=dict(seed=seed),
+        )
+        shown = []
+        returns = iter(screen_returns)
+
+        def fake_run_screen(screen_cls, **kwargs):
+            shown.append((screen_cls.__name__, kwargs))
+            return next(returns)
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            destination = view.run()
+        return destination, shown, DateTimeFields
+
+
+    def test_entry_then_readback_confirms_and_continues(self):
+        from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
+        entered = DateTimeFields(2026, 10, 9, 14, 5)
+        destination, shown, _ = self._run_confirm_view([entered, 0])  # 0 = "Yes"
+        assert shown[0][0] == "SevenFDateTimeEntryScreen"
+        assert "Friday 9 October 2026, 14:05 UTC" in shown[1][1]["text"]
+        assert destination.View_cls == sevenf_views.SevenFSelectChainKindForRootSelfCertView
+        assert destination.skip_current_view
+        assert self.controller.sevenf_confirmed_clock.utc == entered.to_timestamp()
+
+
+    def test_change_on_readback_reopens_the_editor_on_the_same_value(self):
+        from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
+        first, second = DateTimeFields(2026, 10, 9, 14, 5), DateTimeFields(2026, 10, 9, 15, 5)
+        destination, shown, _ = self._run_confirm_view([first, 1, second, 0])  # 1 = "Change"
+        assert [s[0] for s in shown].count("SevenFDateTimeEntryScreen") == 2
+        assert shown[2][1]["fields"] == first
+        assert self.controller.sevenf_confirmed_clock.utc == second.to_timestamp()
+
+
+    def test_a_date_before_the_firmware_build_is_refused_and_re_asked(self):
+        from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
+        too_early, ok = DateTimeFields(2025, 1, 1, 0, 0), DateTimeFields(2026, 10, 9, 14, 5)
+        destination, shown, _ = self._run_confirm_view([too_early, 0, ok, 0])  # 0 on the warning = "Edit"
+        names = [s[0] for s in shown]
+        assert names[:3] == ["SevenFDateTimeEntryScreen", "WarningScreen", "SevenFDateTimeEntryScreen"]
+        assert self.controller.sevenf_confirmed_clock.utc == ok.to_timestamp()
+
+
+    def test_back_on_the_editor_leaves_without_confirming(self):
+        from seedsigner.views.view import BackStackView
+        destination, shown, _ = self._run_confirm_view([RET_CODE__BACK_BUTTON])
+        assert destination.View_cls == BackStackView
+        assert self.controller.sevenf_confirmed_clock is None
+
+
+    def test_editor_is_prefilled_from_the_floor_on_a_1970_clock(self):
+        import time
+        from seedsigner.helpers.version import Version
+        from seedsigner.models.sevenf.ceremony_clock import CLOCK_FLOOR_FALLBACK
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(time, "time", lambda: 0.0)
+            mp.setattr(Version, "get_version_timestamp", classmethod(lambda cls: None))
+            destination, shown, DateTimeFields = self._run_confirm_view([RET_CODE__BACK_BUTTON])
+        assert shown[0][1]["fields"].to_timestamp() == CLOCK_FLOOR_FALLBACK
