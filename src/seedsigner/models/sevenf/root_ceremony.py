@@ -44,9 +44,10 @@ class RootCeremonyKeys:
     chain_kind: ChainKind
     root_ca: DerivedKey
     devfund: DerivedKey
+    index: int = 0
 
 
-def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind) -> RootCeremonyKeys:
+def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind, index: int = 0) -> RootCeremonyKeys:
     """ Derive the Root ML-DSA-65 key for `chain_kind` from `seed_bytes`
         (SeedSigner's Seed.seed_bytes -- standard BIP-39, empty passphrase,
         64 bytes). `root_ca` and `devfund` are the same derived key (see
@@ -57,7 +58,7 @@ def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind) -> RootC
     """
     root_pk, root_address = mldsa.derive_pubkey(
         seed_bytes,
-        root_path(chain_kind),
+        root_path(chain_kind, index),
         int(chain_kind),
         int(Layer.L1),
     )
@@ -67,10 +68,11 @@ def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind) -> RootC
         chain_kind=chain_kind,
         root_ca=root_key,
         devfund=root_key,
+        index=index,
     )
 
 
-def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind) -> DerivedKey:
+def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind, index: int = 0) -> DerivedKey:
     """ The holder's dev-fund key at devfund/<chain_kind>/0/ml-dsa/v1 -- the
         one a member enrolls with `sf-wallet-gov derive-vk --role devfund`
         (7fchain 89d3d39). A DIFFERENT key from the Root key. Not to be
@@ -80,7 +82,7 @@ def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind) -> DerivedKey:
         with it yet. """
     public_key, address = mldsa.derive_pubkey(
         seed_bytes,
-        devfund_path(chain_kind),
+        devfund_path(chain_kind, index),
         int(chain_kind),
         int(Layer.L1),
     )
@@ -94,7 +96,7 @@ class SigningNotConfirmedError(Exception):
     pass
 
 
-def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool) -> tuple[bytes, bytes]:
+def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
     """ Sign `message` with the Root CA key for `chain_kind` -- the
         operation `sf-root sign-genesis` performs over a genesis-config's
         canonical bytes. Returns (public_key, signature).
@@ -149,6 +151,9 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         ever reaching SevenFPlugin.sign() -- the obligation sits with that
         future caller, exactly as it already does for EVM today.
     """
+    # `index` is required, like `confirmed`, with no default
+    # (7f-signing-support-key-index-selector): a view that forgot to pass it
+    # would otherwise sign at index 0 under a key it showed at index N.
     if not confirmed:
         raise SigningNotConfirmedError(
             "sign_with_root_ca refuses to sign without confirmed=True -- "
@@ -157,12 +162,12 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         )
     return mldsa.derive_and_sign(
         seed_bytes,
-        root_path(chain_kind),
+        root_path(chain_kind, index),
         message,
     )
 
 
-def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool) -> tuple[bytes, bytes]:
+def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
     """ Sign `message` with the Root key for `chain_kind` -- the
         devfund-config twin of sign_with_root_ca() above, same enforced
         review-before-sign gate and same rationale (see that function's own
@@ -193,6 +198,6 @@ def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
         )
     return mldsa.derive_and_sign(
         seed_bytes,
-        root_path(chain_kind),
+        root_path(chain_kind, index),
         message,
     )

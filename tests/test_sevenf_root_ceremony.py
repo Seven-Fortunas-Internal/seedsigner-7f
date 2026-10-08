@@ -191,7 +191,7 @@ def test_sign_with_root_ca_produces_a_verifiable_signature_shape():
         docstring for why this Python layer doesn't re-implement a
         verifier). """
     message = b"genesis-config canonical bytes for testnet"
-    pk, sig = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True)
+    pk, sig = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
 
     keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
     assert pk == keys.root_ca.public_key, "sign_with_root_ca must use the same key derive_root_ceremony_keys does"
@@ -204,7 +204,7 @@ def test_sign_with_root_ca_refuses_without_confirmation():
         explicitly passes confirmed=True. """
     message = b"genesis-config canonical bytes for testnet"
     with pytest.raises(SigningNotConfirmedError):
-        sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=False)
+        sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=False, index=0)
 
 
 def test_sign_with_root_ca_requires_confirmed_as_keyword():
@@ -220,7 +220,7 @@ def test_sign_with_root_ca_requires_confirmed_as_keyword():
 
 def test_sign_with_devfund_produces_a_verifiable_signature_shape():
     message = b"devfund-config canonical bytes for testnet"
-    pk, sig = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True)
+    pk, sig = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
 
     keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
     assert pk == keys.devfund.public_key, "sign_with_devfund must use the same key derive_root_ceremony_keys does"
@@ -234,15 +234,15 @@ def test_sign_with_devfund_uses_the_same_key_as_sign_with_root_ca():
         both call the byte-identical root_key_from_file(..., index 0)): the
         same Root key signs both genesis-config and devfund-config. """
     message = b"same message, same intended signer"
-    root_pk, _ = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True)
-    devfund_pk, _ = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True)
+    root_pk, _ = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
+    devfund_pk, _ = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
     assert root_pk == devfund_pk
 
 
 def test_sign_with_devfund_refuses_without_confirmation():
     message = b"devfund-config canonical bytes for testnet"
     with pytest.raises(SigningNotConfirmedError):
-        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=False)
+        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=False, index=0)
 
 
 def test_sign_with_devfund_requires_confirmed_as_keyword():

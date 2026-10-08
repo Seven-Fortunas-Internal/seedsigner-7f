@@ -791,7 +791,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         assert confirmed_args["signed_view_args"] == dict(export_destination=sevenf_views.SevenFExportRootCertQRView)
 
         tbs_bytes = confirmed_args["tbs_bytes"]
-        _, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, tbs_bytes, confirmed=True)
+        _, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, tbs_bytes, confirmed=True, index=0)
         cert_der = cert_request_module.assemble_root_cert_der(tbs_bytes, signature, keys.root_ca.public_key)
         parsed = cert_request_module.parse_root_certificate_der(cert_der)
         assert parsed.subject_vk == keys.root_ca.public_key
@@ -864,7 +864,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         serial = cert_request_module.generate_serial()
         not_before = 1_750_000_000
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.MAINNET, not_before, cert_request_module.ROOT_DAYS, serial)
-        public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.MAINNET, tbs_bytes, confirmed=True)
+        public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.MAINNET, tbs_bytes, confirmed=True, index=0)
         certificate = sevenf_views.SevenFSignedCertificate(public_key=public_key, signature=signature, tbs_bytes=tbs_bytes)
 
         view = sevenf_views.SevenFExportRootCertQRView(certificate=certificate)
@@ -1098,7 +1098,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         root_tbs = cert_request_module.build_root_tbs(
             real_root_ca_public_key, ChainKind.TESTNET, root_not_before, cert_request_module.ROOT_DAYS, root_serial,
         )
-        _, root_signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, root_tbs, confirmed=True)
+        _, root_signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, root_tbs, confirmed=True, index=0)
         root_cert_der = cert_request_module.assemble_root_cert_der(root_tbs, root_signature, real_root_ca_public_key)
         deputy_csr = cert_request_module.verify_and_parse_csr_der(DEPUTY_CSR_DER)
 
@@ -1329,7 +1329,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         root_tbs = cert_request_module.build_root_tbs(
             root_vk, ChainKind.TESTNET, root_not_before, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial(),
         )
-        _, root_signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, root_tbs, confirmed=True)
+        _, root_signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, root_tbs, confirmed=True, index=0)
         root_cert_der = cert_request_module.assemble_root_cert_der(root_tbs, root_signature, root_vk)
 
         deputy_csr = cert_request_module.verify_and_parse_csr_der(DEPUTY_CSR_DER)
@@ -1338,7 +1338,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         days = cert_request_module.DEPUTY_DAYS
         tbs_bytes = cert_request_module.build_deputy_tbs_v2(root_cert_der, DEPUTY_CSR_DER, ChainKind.TESTNET, now, days, serial)
 
-        public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, tbs_bytes, confirmed=True)
+        public_key, signature = sign_with_root_ca(seed.seed_bytes, ChainKind.TESTNET, tbs_bytes, confirmed=True, index=0)
 
         certificate = sevenf_views.SevenFSignedCertificate(
             public_key=public_key, signature=signature, tbs_bytes=tbs_bytes, root_cert_der=root_cert_der,
@@ -1898,7 +1898,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         assert destination.View_cls == sevenf_views.SevenFDevFundConfigSignedView
         artifact = destination.view_args["artifact"]
         keys = derive_root_ceremony_keys(seed.seed_bytes, fields.network)
-        expected_pk, expected_sig = sign_with_devfund(seed.seed_bytes, fields.network, canonical_bytes, confirmed=True)
+        expected_pk, expected_sig = sign_with_devfund(seed.seed_bytes, fields.network, canonical_bytes, confirmed=True, index=0)
         assert artifact.public_key == keys.devfund.public_key == expected_pk
         assert len(artifact.signature) == len(expected_sig) == 3309
 
@@ -1999,7 +1999,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
     def test_signed_screen_says_root_key(self):
         from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
         seed = self.seed_fixture()
-        pk, sig = sign_with_devfund(seed.seed_bytes, ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True)
+        pk, sig = sign_with_devfund(seed.seed_bytes, ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True, index=0)
         view = sevenf_views.SevenFDevFundConfigSignedView(artifact=sevenf_views.SevenFSignedArtifact(public_key=pk, signature=sig))
         captured = {}
 
@@ -2021,7 +2021,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         from seedsigner.models.sevenf.review_format import ski
         from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
         seed = self.seed_fixture()
-        pk, sig = sign_with_devfund(seed.seed_bytes, ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True)
+        pk, sig = sign_with_devfund(seed.seed_bytes, ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True, index=0)
         view = sevenf_views.SevenFExportSignedDevFundConfigQRView(artifact=sevenf_views.SevenFSignedArtifact(public_key=pk, signature=sig))
         captured = {}
 

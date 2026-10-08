@@ -43,8 +43,40 @@ ADDRESS_LEN = 49
 # bip39.mnemonic_to_seed()'s PBKDF2-HMAC-SHA512 output (models/seed.py).
 MASTER_SEED_LEN = 64
 
+# A key index is a u32 in 7fchain (sf-keytree path.rs: `pub index: u32`);
+# sf-wallet-gov accepts 0..=4294967295 and refuses anything else. No value is
+# reserved for any operation (docs/7f-integration/root-key-index-selector-plan.md).
+MAX_KEY_INDEX = 2**32 - 1
 
-def root_path(chain_kind: ChainKind) -> str:
+
+def key_index_segment(index: int) -> str:
+    """ The index as it appears in a path: canonical decimal, as 7fchain's
+        `path_for` writes it (`u32::to_string`). The path string is what gets
+        hashed, so "007" and "7" would be two different keys; only an int in
+        range is accepted, never a string or a bool. """
+    if isinstance(index, bool) or not isinstance(index, int):
+        raise TypeError(f"key index must be an int, got {type(index).__name__}")
+    if not 0 <= index <= MAX_KEY_INDEX:
+        raise ValueError(f"key index must be 0 to {MAX_KEY_INDEX}, got {index}")
+    return str(index)
+
+
+def parse_key_index_entry(text: str) -> int:
+    """ An index typed on the device's digits keypad, read the way
+        sf-wallet-gov reads `--index` (Rust `str::parse::<u32>`): ASCII digits
+        only, leading zeros allowed ("007" is 7), 0 to MAX_KEY_INDEX. Raises
+        ValueError otherwise. Python's int() and str.isdigit() also accept
+        non-ASCII digits, spaces and signs, so they are not used on their own. """
+    if not isinstance(text, str):
+        raise TypeError(f"key index entry must be text, got {type(text).__name__}")
+    if not text or any(c not in "0123456789" for c in text):
+        raise ValueError(f"key index must be digits 0-9, got {text!r}")
+    index = int(text)
+    key_index_segment(index)  # range check
+    return index
+
+
+def root_path(chain_kind: ChainKind, index: int = 0) -> str:
     """ e.g. "root/testnet/0/ml-dsa/v1" -- confirmed against 7fchain's real
         `crates/sf-keytree/src/path.rs::path_for(Role::Root, chain_kind, 0)`
         and `phrase_file.rs::root_path()`.
@@ -60,12 +92,13 @@ def root_path(chain_kind: ChainKind) -> str:
         devfund-config are signed by the SAME Root key, not two -- so the
         devfund-config SIGNING key is this path. The per-holder dev-fund key
         a member enrolls is a different key at devfund_path() below (7fchain
-        89d3d39, 2026-10-05). Always index 0: the Root ceremony derives exactly
-        one Root key per chain_kind, never a family of indexed keys. """
-    return f"root/{chain_kind.path_segment}/0/ml-dsa/v1"
+        89d3d39, 2026-10-05). `index` is sf-wallet-gov's `--index`, default 0
+        (7f-signing-support-key-index-selector); our practice is one phrase per
+        Root key at index 0. """
+    return f"root/{chain_kind.path_segment}/{key_index_segment(index)}/ml-dsa/v1"
 
 
-def devfund_path(chain_kind: ChainKind) -> str:
+def devfund_path(chain_kind: ChainKind, index: int = 0) -> str:
     """ e.g. "devfund/testnet/0/ml-dsa/v1" -- 7fchain's
         `path_for(Role::Devfund, chain_kind, 0)` (89d3d39, 2026-10-05): the
         dev fund is locked by nine devfund keys, one per federation holder,
@@ -73,9 +106,10 @@ def devfund_path(chain_kind: ChainKind) -> str:
         path, so a dev-fund signature isn't attributable to a known Root.
         This is the key a member enrolls (sf-wallet-gov `derive-vk --role
         devfund`). It does NOT sign the devfund-config -- the Roots still
-        declare the recipient with the Root key (root_path above). Index 0:
-        the first key set; a later index is a rotation. """
-    return f"devfund/{chain_kind.path_segment}/0/ml-dsa/v1"
+        declare the recipient with the Root key (root_path above). `index` is
+        sf-wallet-gov's `--index`, default 0; 7fchain calls a later index a
+        rotation (open question on 7fchain#7). """
+    return f"devfund/{chain_kind.path_segment}/{key_index_segment(index)}/ml-dsa/v1"
 
 
 @dataclass(frozen=True)

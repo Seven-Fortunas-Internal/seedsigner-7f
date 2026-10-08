@@ -80,7 +80,7 @@ def build_root_cert_der(root_keys, root_seed: Seed) -> bytes:
     serial = cert_request.generate_serial()
     not_before = int(time.time())
     tbs = cert_request.build_root_tbs(root_keys.root_ca.public_key, CHAIN_KIND, not_before, cert_request.ROOT_DAYS, serial)
-    _, signature = root_ceremony.sign_with_root_ca(root_seed.seed_bytes, CHAIN_KIND, tbs, confirmed=True)
+    _, signature = root_ceremony.sign_with_root_ca(root_seed.seed_bytes, CHAIN_KIND, tbs, confirmed=True, index=0)
     return cert_request.assemble_root_cert_der(tbs, signature, root_keys.root_ca.public_key)
 
 
@@ -99,7 +99,7 @@ def build_deputy_csr_der(deputy_keys, deputy_seed: Seed) -> bytes:
         Deputy's test identity above (`deputy_keys`), it just signs a
         different artifact with it here. """
     info_der = cert_request.csr_info_der(deputy_keys.root_ca.public_key)
-    _, signature = root_ceremony.sign_with_root_ca(deputy_seed.seed_bytes, CHAIN_KIND, info_der, confirmed=True)
+    _, signature = root_ceremony.sign_with_root_ca(deputy_seed.seed_bytes, CHAIN_KIND, info_der, confirmed=True, index=0)
     return cert_request.assemble_csr_der(info_der, signature)
 
 

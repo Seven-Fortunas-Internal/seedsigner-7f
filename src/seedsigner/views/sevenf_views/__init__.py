@@ -27,6 +27,7 @@
       _deputy_cert.py   Deputy cross-certification
                         (docs/7f-integration/archive/deputy-cross-cert-pkcs10-rework-plan.md).
       _devfund.py       Devfund-config signing (R11).
+      _key_index.py     The Root / dev-fund key index step every flow shares.
 
     tests/test_sevenf_views.py's own 8 test classes already map 1:1 onto
     these same four flows (TestSevenFGenesisReviewFlow,
@@ -63,6 +64,12 @@ from ._genesis import (
     SevenFGenesisSignedView,
     SevenFScanGenesisConfigView,
 )
+from ._key_index import (
+    SevenFConfirmKeyIndexView,
+    SevenFEnterKeyIndexView,
+    SevenFInvalidKeyIndexView,
+    SevenFSelectKeyIndexView,
+)
 from ._root_cert import (
     SevenFExportRootCertQRView,
     SevenFExportRootVkQRView,
@@ -88,10 +95,12 @@ from ._devfund import (
 
 __all__ = [
     "SevenFCertRequestReviewFieldView",
+    "SevenFConfirmKeyIndexView",
     "SevenFConfirmSignDevFundView",
     "SevenFConfirmSignRootCertView",
     "SevenFConfirmSignView",
     "SevenFDevFundConfigSignedView",
+    "SevenFEnterKeyIndexView",
     "SevenFExportDeputyCertQRView",
     "SevenFExportPubkeyQRView",
     "SevenFExportRootCertQRView",
@@ -103,6 +112,7 @@ __all__ = [
     "SevenFGenesisReviewFieldView",
     "SevenFGenesisReviewStartView",
     "SevenFGenesisSignedView",
+    "SevenFInvalidKeyIndexView",
     "SevenFRootCertSignedView",
     "SevenFRootVkFingerprintView",
     "SevenFConfirmDateTimeView",
@@ -113,6 +123,7 @@ __all__ = [
     "SevenFScanGenesisConfigView",
     "SevenFScanRootCertificateView",
     "SevenFSelectChainKindForDeputyCrossCertView",
+    "SevenFSelectKeyIndexView",
     "SevenFSelectChainKindForRootEnrollmentView",
     "SevenFSelectChainKindForRootSelfCertView",
     "SevenFSignedArtifact",

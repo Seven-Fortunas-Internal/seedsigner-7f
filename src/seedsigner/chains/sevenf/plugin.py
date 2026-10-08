@@ -116,7 +116,9 @@ class SevenFPlugin:
             separately-supplied argument. """
         canonical_bytes, fields = _canonical_bytes_from_json(payload)
         public_key, signature_bytes = root_ceremony.sign_with_root_ca(
-            seed_bytes, fields.chain_kind, canonical_bytes, confirmed=True,
+            # Index 0, matching parse_sign_request()'s derivation_path; no view
+            # signs through this plugin (the 7F views carry the chosen index).
+            seed_bytes, fields.chain_kind, canonical_bytes, confirmed=True, index=0,
         )
         return Signature(signature_bytes=signature_bytes, public_key=public_key)
 

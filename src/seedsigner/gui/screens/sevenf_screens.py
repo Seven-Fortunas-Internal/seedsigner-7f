@@ -35,7 +35,9 @@ from seedsigner.gui.components import Fonts, FormattedAddress, GUIConstants, Ico
 from seedsigner.hardware.buttons import HardwareButtonsConstants
 from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
 
-from .screen import RET_CODE__BACK_BUTTON, BaseTopNavScreen, ButtonListScreen, ButtonOption
+from seedsigner.gui.keyboard import Keyboard
+
+from .screen import RET_CODE__BACK_BUTTON, BaseTopNavScreen, ButtonListScreen, ButtonOption, KeyboardScreen
 
 
 @dataclass
@@ -241,3 +243,20 @@ class SevenFDateTimeEntryScreen(BaseTopNavScreen):
                 self.top_nav.render_buttons()
                 self._render()
                 self.renderer.show_image()
+
+
+
+@dataclass
+class SevenFKeyIndexScreen(KeyboardScreen):
+    """ Digits keypad for a Root or dev-fund key index
+        (7f-signing-support-key-index-selector). Same shape as
+        evm_screens.EvmSelectAddressIndexScreen; the caller passes the title
+        ("Root key index" or "Dev-fund key index") and validates the result. """
+    def __post_init__(self):
+        self.user_input = ""
+        self.rows = 3
+        self.cols = 5
+        self.keys_charset = "0123456789"
+        self.show_save_button = True
+        self.custom_additional_keys = [Keyboard.KEY_BACKSPACE_5]
+        super().__post_init__()

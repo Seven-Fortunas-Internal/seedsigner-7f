@@ -109,7 +109,7 @@ def test_sign_produces_the_real_root_ca_signature():
 
     fields = parse_genesis_config_json(genesis_json)
     canonical_bytes = build_canonical_bytes(fields.chain_kind, fields.timestamp, fields.message, fields.consensus)
-    expected_pk, expected_sig = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, canonical_bytes, confirmed=True)
+    expected_pk, expected_sig = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, canonical_bytes, confirmed=True, index=0)
     assert signature.public_key == expected_pk
     # ML-DSA-65 signing is hedged/randomized (confirmed elsewhere in this
     # suite) -- can't compare signature bytes directly, but both must verify
