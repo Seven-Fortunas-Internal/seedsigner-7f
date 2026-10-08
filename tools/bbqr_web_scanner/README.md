@@ -2,6 +2,7 @@
 
 Operator-side page that moves ceremony files between a host and the device by animated BBQr QR codes, in both directions. It runs entirely in the browser and never ships on the device.
 
+- **Start** (`#start`, and the bare URL): the operator guide. When to use each tab and what to do there, which device menu goes with which file, how the pin and subject key id are derived (with a command to recompute them), the key index, and how files travel as QR. The camera is off on this tab.
 - **From device** (`#from-device`): scans the device's exports, checks them, and saves the files.
 - **To device** (`#to-device`): checks a file the device must scan and plays it as a full-screen QR.
 
@@ -73,14 +74,14 @@ The script copies only the page's files (no README, CLIs or tests), stamps `vers
 
 ## Tests
 
-`tests/test_bbqr_web_scanner.py` and `tests/test_bbqr_web_encoder.py` (require Node; skipped if Node is absent).
+`tests/test_bbqr_web_scanner.py` and `tests/test_bbqr_web_encoder.py` (require Node; skipped if Node is absent), and `tests/test_bbqr_web_start.py` (the Start tab's content; no Node).
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `index.html`, `style.css` | The page (strict CSP: only its own scripts and styles) |
-| `app.js` | Tab switching; the camera runs only on the From device tab |
+| `app.js` | Tab switching (Start by default); the camera runs only on the From device tab |
 | `app-scan.js` | From device tab |
 | `app-send.js` | To device tab and the QR player |
 | `bbqr-decode.js` | Decoding and envelope checks (shared with `decode_cli.js`) |
