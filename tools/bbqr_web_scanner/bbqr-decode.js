@@ -59,6 +59,19 @@ async function pin(hexText) {
   return sha256OfHex(hexText);
 }
 
+// vkSummary(): a <ski>.txt record of one key for the holder -- the bundle
+// above with a reminder that the pin is only a check when confirmed over a
+// second channel (the .vk itself must stay bare hex for 7fchain's tools).
+async function vkSummary(hexText) {
+  const bundle = await vkBundle(hexText);
+  if (bundle === null) return null;
+  const id = bundle.split("\n")[0].slice("subject key id: ".length);
+  return {
+    name: `${id}.txt`,
+    text: "# Record only. Send the .vk file; confirm the pin by phone -- a pin in a file proves nothing.\n" + bundle,
+  };
+}
+
 // saveMethod(): how the page saves a file under the name it computed.
 // Desktop Chrome/Edge have a folder picker (save straight into
 // governance/<role>/outbox); iPhone Safari has none but can share a named
@@ -195,6 +208,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, saveMethod };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, vkSummary, saveMethod };
 
 });

@@ -204,3 +204,26 @@ def test_scanner_page_offers_save_for_vk_results():
     assert 'id="saveVk"' in html
     assert "BBQrDecode.saveMethod(" in html
     assert "application/octet-stream" in html  # iOS Safari appends .txt to text/plain downloads
+
+
+def test_summary_file_is_the_bundle_with_a_phone_check_reminder():
+    """ "Save summary" writes <ski>.txt next to the .vk: a record for the
+        holder, never a substitute for confirming the pin by phone. """
+    import hashlib
+    vk = root_ceremony.derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET).root_ca.public_key
+    digest = hashlib.sha256(vk).hexdigest()
+    out = _node(f"require('./bbqr-decode.js').vkSummary('{vk.hex()}').then(r => process.stdout.write(JSON.stringify(r)));")
+    import json
+    summary = json.loads(out)
+    assert summary["name"] == f"{digest[:40]}.txt"
+    text = summary["text"]
+    assert text.startswith("# ")
+    assert "phone" in text.splitlines()[0]
+    assert f"subject key id: {digest[:40]}\npin: {digest}\nfile: {digest[:40]}.vk\nvk: {vk.hex()}\n" in text
+
+
+def test_scanner_page_offers_save_summary():
+    from pathlib import Path
+    html = (Path(TOOL_DIR) / "index.html").read_text()
+    assert 'id="saveSummary"' in html
+    assert "BBQrDecode.vkSummary(" in html

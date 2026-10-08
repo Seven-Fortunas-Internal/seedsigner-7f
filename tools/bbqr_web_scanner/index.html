@@ -54,6 +54,7 @@
   <button id="copy" class="secondary" hidden>Copy result</button>
   <button id="copyVk" class="secondary" hidden>Copy VK</button>
   <button id="saveVk" hidden>Save .vk</button>
+  <button id="saveSummary" class="secondary" hidden>Save summary</button>
   <button id="copyAll" class="secondary" hidden>Copy all</button>
   <button id="copyId" class="secondary" hidden>Copy ID</button>
 </div>
@@ -64,7 +65,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261008a"></script>
+<script src="bbqr-decode.js?v=20261008b"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -78,6 +79,7 @@ const copyVkBtn = document.getElementById("copyVk");
 const copyIdBtn = document.getElementById("copyId");
 const copyAllBtn = document.getElementById("copyAll");
 const saveVkBtn = document.getElementById("saveVk");
+const saveSummaryBtn = document.getElementById("saveSummary");
 const vkNoteEl = document.getElementById("vkNote");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
@@ -245,6 +247,7 @@ async function renderResult(bytes) {
     lastFileName = `${vkInfo.id}.vk`;
     saveVkBtn.hidden = false;
     saveVkBtn.textContent = `Save ${lastFileName}`;
+    saveSummaryBtn.hidden = false;
     copyAllBtn.hidden = false;
     copyAllBtn.textContent = "Copy all";
     copyVkBtn.hidden = false;
@@ -257,6 +260,7 @@ async function renderResult(bytes) {
     vkNoteEl.hidden = true;
     copyAllBtn.hidden = true;
     saveVkBtn.hidden = true;
+    saveSummaryBtn.hidden = true;
     copyVkBtn.hidden = true;
     copyIdBtn.hidden = true;
   }
@@ -296,6 +300,7 @@ document.getElementById("reset").addEventListener("click", () => {
   copyIdBtn.hidden = true;
   copyAllBtn.hidden = true;
   saveVkBtn.hidden = true;
+  saveSummaryBtn.hidden = true;
   vkNoteEl.hidden = true;
   lastVkText = null;
   lastIdText = null;
@@ -360,17 +365,23 @@ async function saveFile(name, text) {
   return method;
 }
 
-saveVkBtn.addEventListener("click", async () => {
-  const label = `Save ${lastFileName}`;
-  try {
-    const method = await saveFile(lastFileName, lastVkText);
-    saveVkBtn.textContent = method === "share" ? "Shared" : "Saved";
-  } catch (e) {
-    // AbortError: the person closed the picker or share sheet -- not a failure.
-    saveVkBtn.textContent = e.name === "AbortError" ? label : "Save failed";
-  }
-  setTimeout(() => { saveVkBtn.textContent = label; }, 1500);
-});
+function wireSaveButton(btn, getLabel, getFile) {
+  btn.addEventListener("click", async () => {
+    const label = getLabel();
+    try {
+      const { name, text } = await getFile();
+      const method = await saveFile(name, text);
+      btn.textContent = method === "share" ? "Shared" : "Saved";
+    } catch (e) {
+      // AbortError: the person closed the picker or share sheet -- not a failure.
+      btn.textContent = e.name === "AbortError" ? label : "Save failed";
+    }
+    setTimeout(() => { btn.textContent = label; }, 1500);
+  });
+}
+
+wireSaveButton(saveVkBtn, () => `Save ${lastFileName}`, async () => ({ name: lastFileName, text: lastVkText }));
+wireSaveButton(saveSummaryBtn, () => "Save summary", () => BBQrDecode.vkSummary(lastVkText));
 
 // Continuous autofocus and torch are both device-gated (iPhones and most
 // laptop webcams expose neither) -- every call here is guarded by a real
