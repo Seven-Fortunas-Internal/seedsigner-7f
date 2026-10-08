@@ -38,11 +38,12 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import genesis_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
-from ._common import SevenFUnsupportedArtefactView, _paginate_value
+from ._common import SevenFUnsupportedArtefactView, _review_pages
 
 
 @dataclass(frozen=True)
@@ -158,7 +159,7 @@ class SevenFGenesisReviewStartView(View):
             seed=seed,
             chain_kind=fields.chain_kind,
             canonical_bytes=canonical_bytes,
-            review_fields=genesis_config.review_fields(fields),
+            review_fields=genesis_config.review_fields(fields, canonical_bytes=canonical_bytes),
         )
 
 
@@ -187,11 +188,7 @@ class SevenFGenesisReviewFieldView(View):
         super().__init__()
         self.state = state
         self.page_num = page_num
-        self.chunks: list[ReviewField] = [
-            ReviewField(label=field.label, value=chunk_value, is_warning=field.is_warning, warning_detail=field.warning_detail)
-            for field in state.review_fields
-            for chunk_value in _paginate_value(field.value)
-        ]
+        self.chunks: list[ReviewField] = _review_pages(state.review_fields)
 
         if self.page_num >= len(self.chunks):
             raise Exception("Bug in 7F genesis-config review field paging")
@@ -240,6 +237,7 @@ class SevenFConfirmSignView(View):
 
         keys = root_ceremony.derive_root_ceremony_keys(state.seed.seed_bytes, state.chain_kind)
         self.root_ca_address = keys.root_ca.address
+        self.subject_key_id = group_hex_for_display(ski(keys.root_ca.public_key.hex()))
 
 
     def run(self):
@@ -248,6 +246,7 @@ class SevenFConfirmSignView(View):
             SevenFConfirmSignScreen,
             chain_kind_name=self.state.chain_kind.name.lower(),
             address=self.root_ca_address,
+            subject_key_id=self.subject_key_id,
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:

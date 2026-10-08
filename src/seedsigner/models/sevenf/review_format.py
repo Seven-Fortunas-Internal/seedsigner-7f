@@ -67,3 +67,11 @@ def group_hex_for_display(hex_str: str) -> str:
         wrap cleanly and are easier to read aloud and compare. Display only
         -- filenames and anything copied use the plain hex. """
     return " ".join(hex_str[i:i + 4] for i in range(0, len(hex_str), 4))
+
+
+def canonical_digest(canonical_bytes: bytes) -> str:
+    """ sf-wallet-gov's "canonical digest": SHA-256 of the exact bytes being
+        signed, first 16 bytes, hex -- the value Roots and the coordinator can
+        compare by voice to confirm they are signing the same definition.
+        Grouped for the screen. """
+    return group_hex_for_display(hashlib.sha256(canonical_bytes).hexdigest()[:32])

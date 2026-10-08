@@ -363,4 +363,10 @@ class SevenFExportRootCertQRView(View):
             QRDisplayScreen,
             qr_encoder=BBQrEncoder(data=root_cert_export(cert_der, self.certificate.public_key), file_type="J"),
         )
-        return Destination(MainMenuView, skip_current_view=True)
+        # Runbook Step 2 yields root-<ski>.pem AND <ski>.vk: carry straight on
+        # to the Root VK (ski -> pin -> QR) in the same sitting.
+        return Destination(
+            SevenFRootVkFingerprintView,
+            view_args=dict(public_key=self.certificate.public_key, title=_("Root VK")),
+            skip_current_view=True,
+        )

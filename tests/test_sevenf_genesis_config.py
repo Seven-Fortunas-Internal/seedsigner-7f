@@ -417,11 +417,15 @@ def test_review_fields_matches_genesis_config_review_lines_content():
     lines = genesis_config_review_lines(fields)
     review_field_list = review_fields(fields)
 
-    assert len(review_field_list) == len(lines) == 7
+    # the 7 signed fields, then the canonical digest (not a signed field itself)
+    assert len(lines) == 7 and len(review_field_list) == 8
+    assert review_field_list[-1].label == "Canonical digest"
     assert all(isinstance(f, ReviewField) for f in review_field_list)
+    consensus_labels = {"Target block time", "Difficulty adjustment interval", "Blocks per decay period"}
     for line, field in zip(lines, review_field_list):
         assert line == f"{field.label}: {field.value}"
-        assert field.is_warning is False
+        # this fixture's consensus isn't the testnet default, so only consensus fields may warn
+        assert not field.is_warning or field.label in consensus_labels
 
 
 def test_review_fields_includes_derivation_scheme():

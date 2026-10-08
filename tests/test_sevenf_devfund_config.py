@@ -118,7 +118,8 @@ def test_review_fields_covers_every_signed_field():
     result = review_fields(fields)
     assert all(isinstance(f, ReviewField) for f in result)
     labels = [f.label for f in result]
-    assert labels == ["Chain", "Recipient kind", "Recipient", "Effective block", "Timestamp"]
+    # + the canonical digest sf-wallet-gov prints (not a signed field itself)
+    assert labels == ["Chain", "Recipient kind", "Recipient", "Effective block", "Timestamp", "Canonical digest"]
     values = {f.label: f.value for f in result}
     assert values["Chain"] == "testnet"
     assert values["Recipient kind"] == "Address"
@@ -133,7 +134,7 @@ def test_review_fields_shows_multisig_kind():
     )
     values = {f.label: f.value for f in review_fields(fields)}
     assert values["Recipient kind"] == "Multisig"
-    assert values["Recipient"] == "ab" * 64
+    assert values["Recipient"].replace(" ", "") == "ab" * 64  # shown grouped in fours so it wraps
 
 
 def test_build_root_sig_json_matches_the_shared_rootsig_shape():

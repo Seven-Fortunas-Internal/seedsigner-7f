@@ -293,7 +293,10 @@ def generate_serial(length: int = 16) -> bytes:
         for the same bound, applied there to a coordinator-supplied value
         instead of a generated one. """
     serial = bytearray(secrets.token_bytes(length))
-    serial[0] &= 0x7F
+    # As 7fchain's shared-crypto x509 does: high bit clear (positive) and 0x40
+    # set, so the first byte is never 00 and the serial shown on review is
+    # exactly the one the DER INTEGER encodes.
+    serial[0] = (serial[0] & 0x7F) | 0x40
     return bytes(serial)
 
 
@@ -329,6 +332,48 @@ def parse_root_certificate_der(cert_der: bytes) -> ParsedRootCertificate:
     )
 
 
+# PKCS#9 extensionRequest (RFC 2985), 1.2.840.113549.1.9.14, as DER.
+_OID_EXTENSION_REQUEST = bytes.fromhex("06092a864886f70d01090e")
+
+
+def _der_tlv(b: bytes, off: int) -> tuple[int, int, int, int]:
+    """ (tag, tag offset, content start, content end) of the TLV at `off`. """
+    tag, length, p = b[off], b[off + 1], off + 2
+    if length & 0x80:
+        n = length & 0x7F
+        if not 1 <= n <= 3:
+            raise ValueError("unsupported DER length")
+        length = int.from_bytes(b[p:p + n], "big")
+        p += n
+    if p + length > len(b):
+        raise ValueError("truncated DER")
+    return tag, off, p, p + length
+
+
+def _der_children(b: bytes, start: int, end: int) -> list[tuple[int, int, int, int]]:
+    out, off = [], start
+    while off < end:
+        t = _der_tlv(b, off)
+        out.append(t)
+        off = t[3]
+    return out
+
+
+def _csr_requests_extensions(csr_der: bytes) -> bool:
+    """ Whether the CertificationRequestInfo's [0] attributes carry an
+        extensionRequest. """
+    _, _, start, end = _der_tlv(csr_der, 0)
+    info = _der_children(csr_der, start, end)[0]
+    for tag, _, a_start, a_end in _der_children(csr_der, info[2], info[3]):
+        if tag != 0xA0:
+            continue
+        for _, _, s, e in _der_children(csr_der, a_start, a_end):
+            attr = _der_children(csr_der, s, e)
+            if attr and csr_der[attr[0][1]:attr[0][3]] == _OID_EXTENSION_REQUEST:
+                return True
+    return False
+
+
 def verify_and_parse_csr_der(csr_der: bytes) -> ParsedCsr:
     """ Parse a PKCS#10 CSR (scanned from a QR) and verify its
         self-signature -- proof the requester holds the matching private
@@ -337,10 +382,10 @@ def verify_and_parse_csr_der(csr_der: bytes) -> ParsedCsr:
         on-device signature verification over untrusted scanned input --
         see this module's own "PKCS#10 REWORK" docstring note.
 
-        A CSR's `extensionRequest` attribute (RFC 2985), if present, is
-        never read or honored here or anywhere downstream -- confirmed
-        against cert_request.rs's own verify_and_parse_csr() doc comment,
-        which only reads the CSR's algorithm/signature/public-key fields.
+        A CSR carrying an `extensionRequest` attribute (RFC 2985) is
+        refused, as sf-wallet-gov sign-deputy-cert refuses one (2026-10-08;
+        previously it was ignored, which certified a request the real tool
+        rejects).
         The Deputy certificate's own extensions are always built from the
         issuing Root's real certificate and the operator-confirmed
         chain_kind (Gate-1 plan's §7.6), never from anything the CSR asks
@@ -354,6 +399,16 @@ def verify_and_parse_csr_der(csr_der: bytes) -> ParsedCsr:
     if rc != 0:
         _raise_cert_error(rc, "it may not be a well-formed PKCS#10 request, may use the wrong "
                                "signature algorithm, or its self-signature may not actually verify")
+    # sign-deputy-cert refuses a CSR that asks for extensions ("may not carry
+    # extension ..."); the Deputy cert's extensions always come from the Root
+    # side, so a request for any is refused rather than silently ignored.
+    try:
+        requests_extensions = _csr_requests_extensions(csr_der)
+    except (ValueError, IndexError) as e:
+        raise CertRequestError(f"couldn't read the request's attributes: {e}") from e
+    if requests_extensions:
+        raise CertRequestError("this certificate request asks for extensions (e.g. CA/path length); "
+                               "a Deputy request must not -- ask the Deputy to create a fresh one")
     return ParsedCsr(subject_vk=subject_vk_out.raw[:_CERT_SUBJECT_VK_LEN])
 
 

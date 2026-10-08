@@ -23,6 +23,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 
 
@@ -58,6 +59,10 @@ class SevenFSignedCertificate:
 # combination, the fix is tuning this constant down, not a correctness
 # regression: every character is still shown on some page.
 _MAX_CHARS_PER_REVIEW_PAGE = 180
+# A warning field also shows its warning text, so its value gets less room;
+# about three wrapped lines keeps the warning above the button (a grouped
+# 128-hex dev-fund commitment hid its warning, found by rendering 2026-10-08).
+_MAX_CHARS_PER_WARNING_PAGE = 75
 
 
 def _paginate_value(value: str, max_chars: int = _MAX_CHARS_PER_REVIEW_PAGE) -> list[str]:
@@ -82,6 +87,19 @@ def _paginate_value(value: str, max_chars: int = _MAX_CHARS_PER_REVIEW_PAGE) -> 
     if current:
         pages.append(current)
     return pages if pages else [value]
+
+
+def _review_pages(review_fields: list[ReviewField]) -> list[ReviewField]:
+    """ One screen per page: long values split on word boundaries; a warning
+        field's pages are shorter and each repeats the warning. """
+    return [
+        ReviewField(label=field.label, value=chunk_value, is_warning=field.is_warning, warning_detail=field.warning_detail)
+        for field in review_fields
+        for chunk_value in _paginate_value(
+            field.value,
+            _MAX_CHARS_PER_WARNING_PAGE if field.is_warning and field.warning_detail else _MAX_CHARS_PER_REVIEW_PAGE,
+        )
+    ]
 
 
 class SevenFUnsupportedArtefactView(View):
@@ -154,11 +172,7 @@ class SevenFCertRequestReviewFieldView(View):
         self.confirmed_destination = confirmed_destination
         self.confirmed_view_args = confirmed_view_args or {}
         self.page_num = page_num
-        self.chunks: list[ReviewField] = [
-            ReviewField(label=field.label, value=chunk_value, is_warning=field.is_warning, warning_detail=field.warning_detail)
-            for field in review_fields
-            for chunk_value in _paginate_value(field.value)
-        ]
+        self.chunks: list[ReviewField] = _review_pages(review_fields)
 
         if self.page_num >= len(self.chunks):
             raise Exception("Bug in 7F CertRequest review field paging")
@@ -239,6 +253,7 @@ class SevenFConfirmSignRootCertView(View):
 
         keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
         self.root_ca_address = keys.root_ca.address
+        self.subject_key_id = group_hex_for_display(ski(keys.root_ca.public_key.hex()))
 
 
     def run(self):
@@ -247,6 +262,7 @@ class SevenFConfirmSignRootCertView(View):
             SevenFConfirmSignScreen,
             chain_kind_name=self.chain_kind.name.lower(),
             address=self.root_ca_address,
+            subject_key_id=self.subject_key_id,
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:

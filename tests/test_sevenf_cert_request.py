@@ -1025,3 +1025,49 @@ def test_assemble_csr_der_rejects_a_wrong_signer():
 def test_assemble_csr_der_rejects_garbage_info_der():
     with pytest.raises(CertRequestError):
         assemble_csr_der(b"not a csr info at all", bytes(3309))
+
+
+def test_generated_serials_match_7fchains_masking():
+    """ shared-crypto x509 masks b[0] = (b[0] & 0x7f) | 0x40: positive, and no
+        leading zero byte, so the serial shown on review is exactly the one
+        the DER INTEGER encodes (a 00 lead byte would be dropped). """
+    from seedsigner.models.sevenf.cert_request import generate_serial
+    for _ in range(2000):
+        s = generate_serial()
+        assert len(s) == 16 and 0x40 <= s[0] <= 0x7F
+
+
+def test_a_csr_requesting_extensions_is_refused():
+    """ sign-deputy-cert refuses a CSR that asks for extensions ("may not carry
+        extension 2.5.29.19"); this one asks for CA:TRUE, pathlen 9 (built in
+        the 2026-10-07 end-to-end run). The device must not certify it. """
+    from pathlib import Path
+    der = (Path(__file__).parent / "fixtures" / "deputy_csr_requesting_ca_pathlen9.der").read_bytes()
+    with pytest.raises(CertRequestError, match="extension"):
+        verify_and_parse_csr_der(der)
+
+
+def test_a_real_sf_wallet_gov_csr_is_still_accepted():
+    from pathlib import Path
+    from seedsigner.models.sevenf.export_envelope import pem_to_der
+    pem = (Path(__file__).parent / "fixtures" / "sf_wallet_gov_deputy_csr.pem").read_text()
+    der = pem_to_der(pem.replace("CERTIFICATE REQUEST", "CERTIFICATE"))
+    assert verify_and_parse_csr_der(der).subject_vk
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d[:3],                                  # truncated header
+    lambda d: d[:40],                                 # truncated body
+    lambda d: bytes([0x30, 0x80]) + d[2:],            # indefinite length
+    lambda d: bytes([0x30, 0x84, 0, 0, 0, 1]) + d,    # 4-byte length
+    lambda d: bytes([0x30, 0x00]),                    # empty
+])
+def test_csr_attribute_walk_refuses_malformed_der_without_crashing(mutate):
+    """ _csr_requests_extensions only runs after Rust has verified the CSR,
+        but must still fail with ValueError/IndexError -- never hang or raise
+        anything else -- on hostile DER. """
+    from pathlib import Path
+    from seedsigner.models.sevenf.cert_request import _csr_requests_extensions
+    der = (Path(__file__).parent / "fixtures" / "deputy_csr_requesting_ca_pathlen9.der").read_bytes()
+    with pytest.raises((ValueError, IndexError)):
+        _csr_requests_extensions(mutate(der))

@@ -40,7 +40,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp, ski
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, ski
 
 # Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
 # exactly -- display-only here (parse_canonical_bytes already enforces the
@@ -79,6 +79,16 @@ class ConsensusParams:
     target_block_time_secs: int
     difficulty_adjustment_interval_blocks: int
     blocks_per_decay_period: int
+
+
+# sf-core ConsensusParams::defaults_for (genesis_config.rs, 7fchain 416f576).
+# Chain tempo is signed, so a definition with other values is a different
+# chain; sf-wallet-gov refuses one without --accept-nondefault-consensus.
+CONSENSUS_DEFAULTS = {
+    ChainKind.DEVNET: ConsensusParams(30, 50, 200),
+    ChainKind.TESTNET: ConsensusParams(420, 1500, 70000),
+    ChainKind.MAINNET: ConsensusParams(420, 1500, 70000),
+}
 
 
 @dataclass(frozen=True)
@@ -266,6 +276,9 @@ def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
     timestamp = obj.get("timestamp")
     if isinstance(timestamp, bool) or not isinstance(timestamp, int) or not (0 <= timestamp <= 0xFFFFFFFFFFFFFFFF):
         raise GenesisConfigJsonError(f"timestamp must be a non-negative 64-bit integer, got {timestamp!r}")
+    if timestamp == 0:
+        # sf-wallet-gov validate_genesis refuses it too.
+        raise GenesisConfigJsonError("timestamp is 0, so this definition names no genesis time")
 
     message = obj.get("message")
     if not isinstance(message, str):
@@ -341,7 +354,7 @@ def genesis_config_review_lines(fields: GenesisConfigFields) -> list[str]:
     return [f"{label}: {value}" for label, value in _labeled_values(fields)]
 
 
-def review_fields(fields: GenesisConfigFields) -> list[ReviewField]:
+def review_fields(fields: GenesisConfigFields, canonical_bytes: bytes | None = None) -> list[ReviewField]:
     """ The no-blind-signing field list for the on-device review screen, one
         ReviewField per field carried in the signed canonical bytes
         (sf-core::GenesisConfig). derivation_scheme is included even though
@@ -353,7 +366,29 @@ def review_fields(fields: GenesisConfigFields) -> list[ReviewField]:
         signing field type the EVM chain plugin's review screens consume,
         via chains.base's re-export) rather than inventing a parallel type
         for this one flow. """
-    return [ReviewField(label=label, value=value) for label, value in _labeled_values(fields)]
+    defaults = CONSENSUS_DEFAULTS[fields.chain_kind]
+    nondefault = {
+        "Target block time": (fields.consensus.target_block_time_secs, defaults.target_block_time_secs, "s"),
+        "Difficulty adjustment interval": (fields.consensus.difficulty_adjustment_interval_blocks,
+                                           defaults.difficulty_adjustment_interval_blocks, " blocks"),
+        "Blocks per decay period": (fields.consensus.blocks_per_decay_period, defaults.blocks_per_decay_period, ""),
+    }
+    out = []
+    for label, value in _labeled_values(fields):
+        got_want = nondefault.get(label)
+        if got_want and got_want[0] != got_want[1]:
+            out.append(ReviewField(
+                label=label, value=value, is_warning=True,
+                warning_detail=f"Not the {fields.chain_kind.name.lower()} default ({got_want[1]}{got_want[2]}). "
+                               "A different tempo is a different chain: continue only if the coordinator meant it.",
+            ))
+        else:
+            out.append(ReviewField(label=label, value=value))
+    # The digest of the exact bytes being signed; callers pass them. Rebuilt
+    # from the fields only when not given (tests, tooling).
+    canonical = canonical_bytes if canonical_bytes is not None else build_canonical_bytes(fields.chain_kind, fields.timestamp, fields.message, fields.consensus)
+    out.append(ReviewField(label="Canonical digest", value=canonical_digest(canonical)))
+    return out
 
 
 def build_root_sig_json(signer_vk: bytes, sig: bytes, *, with_vk: bool = False) -> dict:

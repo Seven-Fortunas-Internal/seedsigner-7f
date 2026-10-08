@@ -12,6 +12,7 @@ from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import devfund_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 from seedsigner.models.sevenf.devfund_config import DevFundConfigError, DevFundConfigJsonError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
@@ -83,7 +84,7 @@ class SevenFScanDevFundConfigView(ScanView):
         return Destination(
             SevenFCertRequestReviewFieldView,
             view_args=dict(
-                review_fields=devfund_config.review_fields(fields),
+                review_fields=devfund_config.review_fields(fields, canonical_bytes=canonical_bytes),
                 page_title=_("Review Devfund Config"),
                 confirmed_destination=SevenFConfirmSignDevFundView,
                 confirmed_view_args=dict(
@@ -132,6 +133,7 @@ class SevenFConfirmSignDevFundView(View):
 
         keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind)
         self.devfund_address = keys.devfund.address
+        self.subject_key_id = group_hex_for_display(ski(keys.devfund.public_key.hex()))
 
 
     def run(self):
@@ -140,6 +142,7 @@ class SevenFConfirmSignDevFundView(View):
             SevenFConfirmSignScreen,
             chain_kind_name=self.chain_kind.name.lower(),
             address=self.devfund_address,
+            subject_key_id=self.subject_key_id,
             signing_role_label=_("Root key"),
         )
 

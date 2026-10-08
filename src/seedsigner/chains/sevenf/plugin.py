@@ -97,12 +97,12 @@ class SevenFPlugin:
             `sf-root prepare-genesis` produces (received over BBQr) -- see
             genesis_config.py's own docstring for the parser's
             self-validation. """
-        _, fields = _canonical_bytes_from_json(payload)
+        canonical, fields = _canonical_bytes_from_json(payload)
         return ParsedRequest(
             operation="Genesis Config",
             network_name=fields.chain_kind.name.lower(),
             derivation_path=root_path(fields.chain_kind),
-            review_fields=genesis_config.review_fields(fields),
+            review_fields=genesis_config.review_fields(fields, canonical_bytes=canonical),
         )
 
 

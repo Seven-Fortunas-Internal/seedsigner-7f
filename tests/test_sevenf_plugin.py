@@ -74,7 +74,7 @@ def test_parse_sign_request_matches_real_genesis_config_fields():
     labels = [f.label for f in parsed.review_fields]
     assert "Chain" in labels
     assert "Message" in labels
-    assert len(parsed.review_fields) == 7
+    assert len(parsed.review_fields) == 8  # 7 signed fields + the canonical digest
 
 
 def test_parse_sign_request_rejects_a_malformed_payload():

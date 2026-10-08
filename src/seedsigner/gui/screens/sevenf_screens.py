@@ -116,6 +116,7 @@ class SevenFConfirmSignScreen(ButtonListScreen):
         the one screen that was supposed to prove it wasn't. """
     chain_kind_name: str | None = None
     address: str | None = None
+    subject_key_id: str | None = None  # shown instead of the address when given
     signing_role_label: str = "Root CA"
 
     def __post_init__(self):
@@ -136,11 +137,22 @@ class SevenFConfirmSignScreen(ButtonListScreen):
         )
         self.components.append(chain_display)
 
-        address_display = FormattedAddress(
-            address=self.address,
-            screen_y=chain_display.screen_y + chain_display.height + 2*GUIConstants.COMPONENT_PADDING,
-        )
-        self.components.append(address_display)
+        if self.subject_key_id:
+            # The id holders know and report (sf-wallet-gov: "signing as root <ski>").
+            address_display = IconTextLine(
+                label_text=_("Subject key id"),
+                value_text=self.subject_key_id,
+                is_text_centered=True,
+                auto_line_break=True,
+                screen_y=chain_display.screen_y + chain_display.height + GUIConstants.COMPONENT_PADDING,
+            )
+            self.components.append(address_display)
+        else:
+            address_display = FormattedAddress(
+                address=self.address,
+                screen_y=chain_display.screen_y + chain_display.height + 2*GUIConstants.COMPONENT_PADDING,
+            )
+            self.components.append(address_display)
 
 
 

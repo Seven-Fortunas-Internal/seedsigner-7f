@@ -123,6 +123,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Target block time (5/7)
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Difficulty adj. interval (6/7)
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Blocks per decay period (7/7)
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Canonical digest
                 FlowStep(sevenf_views.SevenFConfirmSignView, screen_return_value=0),  # "Sign"
                 FlowStep(sevenf_views.SevenFGenesisSignedView, screen_return_value=0),  # "OK"
                 FlowStep(sevenf_views.SevenFExportView, screen_return_value=0),  # "Export Root CA Pubkey"
@@ -161,6 +162,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Canonical digest
                 FlowStep(sevenf_views.SevenFConfirmSignView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisSignedView, before_run=capture_before_home, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFExportView, screen_return_value=RET_CODE__BACK_BUTTON),
@@ -790,6 +792,9 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
                 FlowStep(sevenf_views.SevenFRootCertSignedView, before_run=capture_before_export, screen_return_value=0),  # "OK"
                 FlowStep(sevenf_views.SevenFExportRootCertQRView, screen_return_value=0),
+                FlowStep(sevenf_views.SevenFRootVkFingerprintView, screen_return_value=0),  # ski
+                FlowStep(sevenf_views.SevenFVkPinView, screen_return_value=0),  # pin
+                FlowStep(sevenf_views.SevenFExportRootVkQRView, screen_return_value=0),  # .vk QR
                 FlowStep(MainMenuView),
             ],
             initial_destination_view_args=dict(seed=seed),
@@ -855,7 +860,10 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         assert parsed.chain_kind == ChainKind.MAINNET
         assert parsed.not_before == not_before
 
-        assert destination.View_cls == MainMenuView
+        # Runbook Step 2 yields root-<ski>.pem AND <ski>.vk: carry straight on
+        # to the Root VK (ski -> pin -> QR) in the same sitting.
+        assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
+        assert destination.view_args == dict(public_key=keys.root_ca.public_key, title="Root VK")
 
 
     def test_select_chain_kind_fails_closed_if_tbs_building_fails(self):
@@ -1536,14 +1544,14 @@ class TestSevenFReviewFieldPagination:
         fields = parse_canonical_bytes(canonical_bytes)
 
         real_fields = review_fields(fields)
-        assert len(real_fields) == 7  # baseline, unchanged
+        assert len(real_fields) == 8  # baseline: 7 signed fields + the canonical digest
 
         chunks = [
             chunk_value
             for field in real_fields
             for chunk_value in sevenf_views._paginate_value(field.value)
         ]
-        assert len(chunks) > 7  # message pagination added real pages
+        assert len(chunks) > 8  # message pagination added real pages
 
         message_field = next(f for f in real_fields if f.label == "Message")
         message_chunks = sevenf_views._paginate_value(message_field.value)
@@ -1800,6 +1808,10 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         seed = self.seed_fixture()
         devfund_json = _sample_devfund_json()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        from seedsigner.models.sevenf import devfund_config
+        from seedsigner.views.sevenf_views._common import _review_pages
+        review_pages = len(_review_pages(devfund_config.review_fields(devfund_config.parse_devfund_config_json(devfund_json))))
+        assert review_pages > 6  # 5 signed fields + digest, the commitment split across pages
 
         captured = {}
 
@@ -1815,11 +1827,8 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
                     before_run=_load_genesis_config_into_decoder(devfund_json),
                     screen_return_value=0,
                 ),
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Chain
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Recipient kind
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Recipient
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Effective block
-                FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Timestamp (final)
+                # every review page: the commitment spans several (warning pages are shorter)
+                *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(review_pages)],
                 FlowStep(sevenf_views.SevenFConfirmSignDevFundView, screen_return_value=0),  # "Sign"
                 FlowStep(sevenf_views.SevenFDevFundConfigSignedView, before_run=capture_before_home, screen_return_value=0),  # "OK"
                 FlowStep(sevenf_views.SevenFExportSignedDevFundConfigQRView, screen_return_value=0),
@@ -2305,3 +2314,54 @@ class TestSevenFSeedLabel(FlowTest):
         assert captured["fingerprint_without"] == sevenf_seed_label(bare.seed_bytes)
         assert with_label != captured["fingerprint_without"]
         assert seed.passphrase == "tree"  # restored after computing "without"
+
+
+class TestSevenFConfirmScreensShowTheSigningSki(FlowTest):
+    """ The confirm-before-signing screen names the signing key by its subject
+        key id -- the value holders know and report -- not only a t1 address
+        (sf-wallet-gov prints "signing as root <ski>"). """
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "sevenf"
+
+
+    def capture(self, view):
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured.update(kwargs)
+            return RET_CODE__BACK_BUTTON
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+        return captured
+
+
+    def expected(self, seed):
+        from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
+        return group_hex_for_display(ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key.hex()))
+
+
+    def seed(self):
+        return Seed(mnemonic=["abandon"] * 11 + ["about"], wordlist_language_code=SettingsConstants.WORDLIST_LANGUAGE__ENGLISH)
+
+
+    def test_root_cert_confirm(self):
+        seed = self.seed()
+        view = sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", signed_view_args={})
+        assert self.capture(view)["subject_key_id"] == self.expected(seed)
+
+
+    def test_devfund_confirm(self):
+        seed = self.seed()
+        view = sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x")
+        assert self.capture(view)["subject_key_id"] == self.expected(seed)
+
+
+    def test_genesis_confirm(self):
+        seed = self.seed()
+        state = sevenf_views.SevenFGenesisCeremonyState(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=b"x", review_fields=[])
+        view = sevenf_views.SevenFConfirmSignView(state=state)
+        assert self.capture(view)["subject_key_id"] == self.expected(seed)

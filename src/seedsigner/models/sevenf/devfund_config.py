@@ -23,7 +23,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import format_timestamp as _format_timestamp
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display
 
 # 7f-review-parse-failure-messages-not-actionable (2026-10-04): what each
 # code plausibly means for THIS artifact type, grounded directly in
@@ -392,18 +392,32 @@ def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
     return [
         ("Chain", fields.network.name.lower()),
         ("Recipient kind", kind),
-        ("Recipient", fields.recipient.payload),
+        # A 128-hex commitment can't wrap unbroken; group it for the screen.
+        ("Recipient", group_hex_for_display(fields.recipient.payload)
+         if fields.recipient.tag == DevfundRecipient.MULTISIG else fields.recipient.payload),
         ("Effective block", str(fields.effective_block)),
         ("Timestamp", _format_timestamp(fields.timestamp)),
     ]
 
 
-def review_fields(fields: DevFundConfigFields) -> list[ReviewField]:
+def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = None) -> list[ReviewField]:
     """ The no-blind-signing field list for the on-device review screen, one
         ReviewField per field carried in the signed canonical bytes
         (sf-core::DevFundConfig). Reuses models.review.ReviewField, same as
         genesis_config.py's own review_fields(). """
-    return [ReviewField(label=label, value=value) for label, value in _labeled_values(fields)]
+    out = []
+    for label, value in _labeled_values(fields):
+        if label == "Recipient":
+            # sf-wallet-gov sign-devfund prints the same warning.
+            out.append(ReviewField(label=label, value=value, is_warning=True,
+                                   warning_detail="This recipient receives the ENTIRE genesis reward."))
+        else:
+            out.append(ReviewField(label=label, value=value))
+    # The digest of the exact bytes being signed; callers pass them. Rebuilt
+    # from the fields only when not given (tests, tooling).
+    canonical = canonical_bytes if canonical_bytes is not None else build_canonical_bytes(fields.network, fields.recipient, fields.effective_block, fields.timestamp)
+    out.append(ReviewField(label="Canonical digest", value=canonical_digest(canonical)))
+    return out
 
 
 def build_root_sig_json(signer_vk: bytes, sig: bytes, *, with_vk: bool = False) -> dict:
