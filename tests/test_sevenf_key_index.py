@@ -81,7 +81,7 @@ def test_paths_refuse_an_index_that_is_not_a_u32_int(bad):
 @needs_lib
 @pytest.mark.parametrize("index", sorted(ROOT_SKI))
 def test_root_key_at_index_matches_sf_wallet_gov(index):
-    keys = derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index)
+    keys = derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=index)
     assert ski(keys.root_ca.public_key.hex()) == ROOT_SKI[index]
     assert keys.index == index
 
@@ -89,15 +89,15 @@ def test_root_key_at_index_matches_sf_wallet_gov(index):
 @needs_lib
 @pytest.mark.parametrize("index", sorted(DEVFUND_SKI))
 def test_devfund_key_at_index_matches_sf_wallet_gov(index):
-    devfund = derive_devfund_key(CANONICAL_SEED, ChainKind.TESTNET, index)
+    devfund = derive_devfund_key(CANONICAL_SEED, ChainKind.TESTNET, index=index)
     assert ski(devfund.public_key.hex()) == DEVFUND_SKI[index]
 
 
 @needs_lib
 def test_derivation_defaults_to_index_0():
-    assert derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET).index == 0
-    assert ski(derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET).root_ca.public_key.hex()) == ROOT_SKI[0]
-    assert ski(derive_devfund_key(CANONICAL_SEED, ChainKind.TESTNET).public_key.hex()) == DEVFUND_SKI[0]
+    assert derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=0).index == 0
+    assert ski(derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=0).root_ca.public_key.hex()) == ROOT_SKI[0]
+    assert ski(derive_devfund_key(CANONICAL_SEED, ChainKind.TESTNET, index=0).public_key.hex()) == DEVFUND_SKI[0]
 
 
 # --- signing --------------------------------------------------------------
@@ -113,7 +113,7 @@ def test_signing_at_an_index_verifies_only_under_that_index_key(sign):
         two signatures always differ): assemble_root_cert_der() verifies the
         signature against the subject key and refuses on mismatch. Both sign
         functions sign with the ROOT key at the given index. """
-    index_2_vk = derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, 2).root_ca.public_key
+    index_2_vk = derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=2).root_ca.public_key
     tbs = _root_tbs_for(index_2_vk)
 
     public_key, signature = sign(CANONICAL_SEED, ChainKind.TESTNET, tbs, confirmed=True, index=2)
@@ -137,3 +137,12 @@ def test_signing_requires_the_index(sign):
 def test_signing_refuses_a_bad_index_before_signing(sign):
     with pytest.raises((ValueError, TypeError)):
         sign(CANONICAL_SEED, ChainKind.TESTNET, b"x", index=-1, confirmed=True)
+
+
+@pytest.mark.parametrize("derive", [derive_root_ceremony_keys, derive_devfund_key])
+def test_derivation_requires_the_index(derive):
+    """ No default: an enrollment that forgot the index would export the
+        index-0 key under a screen that says index N, with no signature to
+        catch it. """
+    with pytest.raises(TypeError):
+        derive(CANONICAL_SEED, ChainKind.TESTNET)

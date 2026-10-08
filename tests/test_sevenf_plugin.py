@@ -114,7 +114,7 @@ def test_sign_produces_the_real_root_ca_signature():
     # ML-DSA-65 signing is hedged/randomized (confirmed elsewhere in this
     # suite) -- can't compare signature bytes directly, but both must verify
     # under the same public key and both must be well-formed.
-    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
+    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
     assert signature.public_key == keys.root_ca.public_key
 
 
@@ -128,9 +128,9 @@ def test_sign_ignores_a_mismatched_path_argument_and_uses_the_payloads_own_chain
     testnet_json = _sample_genesis_config_json(chain_kind_str="testnet")
 
     signature = plugin.sign(FIXED_SEED, root_path(ChainKind.MAINNET), testnet_json)
-    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
+    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
     assert signature.public_key == keys.root_ca.public_key
-    mainnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.MAINNET)
+    mainnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.MAINNET, index=0)
     assert signature.public_key != mainnet_keys.root_ca.public_key
 
 
@@ -144,7 +144,7 @@ def test_derive_address_matches_root_ceremony_derivation():
     assert address.path == path
     assert address.network_name == "testnet"
 
-    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET)
+    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
     assert address.address == keys.root_ca.address
 
 

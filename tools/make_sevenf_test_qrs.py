@@ -208,8 +208,8 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    root_keys = root_ceremony.derive_root_ceremony_keys(root_seed().seed_bytes, CHAIN_KIND)
-    deputy_keys = root_ceremony.derive_root_ceremony_keys(deputy_seed().seed_bytes, CHAIN_KIND)
+    root_keys = root_ceremony.derive_root_ceremony_keys(root_seed().seed_bytes, CHAIN_KIND, index=0)
+    deputy_keys = root_ceremony.derive_root_ceremony_keys(deputy_seed().seed_bytes, CHAIN_KIND, index=0)
 
     artifacts = {
         # "root_cert_request" is gone (2026-10-03): Root self-certification's

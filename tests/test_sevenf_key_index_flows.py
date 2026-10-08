@@ -21,7 +21,7 @@ from seedsigner.models.sevenf.ceremony_clock import ConfirmedClock
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.export_envelope import pem_to_der
 from seedsigner.models.sevenf.review_format import ski
-from seedsigner.views import sevenf_views
+from seedsigner.views import seed_views, sevenf_views
 
 from test_sevenf_key_index import DEVFUND_SKI, ROOT_SKI
 from test_sevenf_views import _past_key_index, _sample_canonical_bytes, _sample_devfund_canonical_bytes
@@ -218,7 +218,7 @@ class TestSigningKeyMustBeTheKeyShown(_IndexFlowTest):
     ])
     def test_a_different_signing_key_is_refused(self, make_view, sign_name):
         view = make_view(self.seed_fixture())
-        index_0_key = root_ceremony.derive_root_ceremony_keys(_seed_of(view).seed_bytes, ChainKind.TESTNET, 0).root_ca.public_key
+        index_0_key = root_ceremony.derive_root_ceremony_keys(_seed_of(view).seed_bytes, ChainKind.TESTNET, index=0).root_ca.public_key
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(root_ceremony, sign_name, lambda *a, **kw: (index_0_key, b"sig"))
@@ -226,3 +226,50 @@ class TestSigningKeyMustBeTheKeyShown(_IndexFlowTest):
 
         assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
         assert destination.view_args["headline"] == "Key Mismatch"
+
+
+
+class TestBackFromAfterTheIndex(_IndexFlowTest):
+    """ Back from the screen after the index returns to the screen before
+        the index, whichever way the index was chosen: none of the index
+        screens stays on the real controller's back stack. """
+    def _back_stack_at_fingerprint(self, index_steps):
+        from base import FlowStep
+        from seedsigner.gui.screens.screen import ButtonOption
+        self.controller.active_chain_id = "sevenf"
+        captured = {}
+        self.run_sequence(
+            [
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_EXPORT_ROOT_VK),
+                FlowStep(sevenf_views.SevenFSelectChainKindForRootEnrollmentView, button_data_selection=ButtonOption("testnet")),
+                *index_steps,
+                FlowStep(sevenf_views.SevenFDeriveEnrollmentVkView, is_redirect=True),
+                FlowStep(sevenf_views.SevenFRootVkFingerprintView, screen_return_value=0,
+                         before_run=lambda v: captured.update(stack=[d.View_cls for d in self.controller.back_stack])),
+                FlowStep(sevenf_views.SevenFVkPinView),
+            ],
+            initial_destination_view_args=dict(seed=self.seed_fixture()),
+        )
+        stack = captured["stack"]
+        # The current screen is on top; Back goes to the one under it.
+        assert stack[-1] is sevenf_views.SevenFRootVkFingerprintView
+        return stack[:-1]
+
+
+    def test_default_index(self):
+        from base import FlowStep
+        stack = self._back_stack_at_fingerprint([FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0)])
+        assert stack[-1] is sevenf_views.SevenFSelectChainKindForRootEnrollmentView
+
+
+    def test_other_index_through_the_keypad_and_warning(self):
+        from base import FlowStep
+        stack = self._back_stack_at_fingerprint([
+            FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=1),  # "Other index"
+            FlowStep(sevenf_views.SevenFEnterKeyIndexView, screen_return_value="5"),
+            FlowStep(sevenf_views.SevenFConfirmKeyIndexView, screen_return_value=0),  # "Use index 5"
+        ])
+        assert stack[-1] is sevenf_views.SevenFSelectChainKindForRootEnrollmentView
+        index_views = {sevenf_views.SevenFSelectKeyIndexView, sevenf_views.SevenFEnterKeyIndexView,
+                       sevenf_views.SevenFConfirmKeyIndexView, sevenf_views.SevenFInvalidKeyIndexView}
+        assert not index_views & set(stack)

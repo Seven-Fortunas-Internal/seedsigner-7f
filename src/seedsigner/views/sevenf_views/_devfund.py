@@ -172,7 +172,7 @@ class SevenFConfirmSignDevFundView(View):
         self.tbs_bytes = tbs_bytes
         self.key_index = key_index
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, index=key_index)
         self.public_key = keys.devfund.public_key
         self.devfund_address = keys.devfund.address
         self.subject_key_id = subject_key_id_with_index(keys.devfund.public_key, key_index)

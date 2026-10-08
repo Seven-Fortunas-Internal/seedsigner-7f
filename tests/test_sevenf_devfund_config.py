@@ -186,7 +186,7 @@ _DROP = object()
 
 def _real_address() -> str:
     from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys
-    return derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET).root_ca.address
+    return derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET, index=0).root_ca.address
 
 
 def test_parses_the_real_coordinator_file():

@@ -184,7 +184,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             initial_destination_view_args=dict(state=state, page_num=0),
         )
 
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         assert captured["public_key"] == keys.root_ca.public_key
         assert len(captured["signature"]) == 3309
 
@@ -256,7 +256,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
     def test_confirm_sign_view_shows_the_real_root_ca_address_for_the_chain_kind(self):
         """ Unit-level check (not a full flow run): SevenFConfirmSignView must
             derive the address it displays from the same
-            derive_root_ceremony_keys() path the rest of the ceremony uses --
+            derive_root_ceremony_keys(, index=0) path the rest of the ceremony uses --
             confirms it isn't a placeholder or a different derivation. """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
@@ -265,7 +265,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         )
 
         view = sevenf_views.SevenFConfirmSignView(state=state)
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         assert view.root_ca_address == keys.root_ca.address
 
 
@@ -297,7 +297,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             and not merely "some bytes got passed to some encoder". """
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         state = sevenf_views.SevenFGenesisCeremonyState(
             key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
             review_fields=[], public_key=keys.root_ca.public_key, signature=b"\x00" * 3309,
@@ -342,7 +342,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
 
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         signature = bytes(range(256)) * 12 + bytes(3309 - 256 * 12)  # 3309 varied bytes, not all-zero
         state = sevenf_views.SevenFGenesisCeremonyState(
             key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=canonical_bytes,
@@ -527,7 +527,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             a public key"), just the one on-screen fact worth confirming
             before export. """
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
 
         view = sevenf_views.SevenFSelectChainKindForRootEnrollmentView(seed=seed)
         with pytest.MonkeyPatch().context() as mp:
@@ -549,7 +549,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
 
         view = sevenf_views.SevenFRootVkFingerprintView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
         captured = {}
@@ -579,7 +579,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.views.view import BackStackView
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         view = sevenf_views.SevenFRootVkFingerprintView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
 
         with pytest.MonkeyPatch().context() as mp:
@@ -598,7 +598,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf.review_format import group_hex_for_display
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         view = sevenf_views.SevenFVkPinView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
         captured = {}
 
@@ -621,7 +621,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.views.view import BackStackView
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         view = sevenf_views.SevenFVkPinView(key_index=0, public_key=keys.root_ca.public_key, title="Root VK")
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", lambda *a, **kw: RET_CODE__BACK_BUTTON)
@@ -665,8 +665,8 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf.root_ceremony import derive_devfund_key
 
         seed = self.seed_fixture()
-        devfund = derive_devfund_key(seed.seed_bytes, ChainKind.TESTNET)
-        root = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca
+        devfund = derive_devfund_key(seed.seed_bytes, ChainKind.TESTNET, index=0)
+        root = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0).root_ca
 
         view = sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView(seed=seed)
         with pytest.MonkeyPatch().context() as mp:
@@ -686,7 +686,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             MainMenuView, since a standalone enrollment export has nothing
             else to offer afterward. """
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
 
         view = sevenf_views.SevenFExportRootVkQRView(public_key=keys.root_ca.public_key)
         captured = {}
@@ -718,7 +718,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             so the host page can say which inbox it belongs in. """
         from seedsigner.models.sevenf.root_ceremony import derive_devfund_key
         seed = self.seed_fixture()
-        devfund = derive_devfund_key(seed.seed_bytes, ChainKind.TESTNET)
+        devfund = derive_devfund_key(seed.seed_bytes, ChainKind.TESTNET, index=0)
 
         view = sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView(seed=seed)
         with pytest.MonkeyPatch().context() as mp:
@@ -789,7 +789,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
 
         view = sevenf_views.SevenFSelectChainKindForRootSelfCertView(seed=seed, date_confirmed=True)
         with pytest.MonkeyPatch().context() as mp:
@@ -827,7 +827,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             assemble into a certificate that parses back to the exact
             fields this ceremony run chose, not just "didn't raise". """
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
 
         captured = {}
 
@@ -877,7 +877,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             encoder". Also confirms this routes to MainMenuView directly,
             NOT through SevenFExportView's old pubkey/signed-config menu. """
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.MAINNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.MAINNET, index=0)
         from seedsigner.models.sevenf import cert_request as cert_request_module
         from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
 
@@ -949,7 +949,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
         view = sevenf_views.SevenFConfirmSignRootCertView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
@@ -965,7 +965,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
         view = sevenf_views.SevenFConfirmSignRootCertView(key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=tbs_bytes)
@@ -979,7 +979,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.models.sevenf import cert_request as cert_request_module
 
         seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         tbs_bytes = cert_request_module.build_root_tbs(keys.root_ca.public_key, ChainKind.TESTNET, 1_700_000_000, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial())
 
         view = sevenf_views.SevenFConfirmSignRootCertView(
@@ -1113,7 +1113,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
 
         seed = self.seed_fixture()
-        real_root_ca_public_key = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key
+        real_root_ca_public_key = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0).root_ca.public_key
         root_not_before = 1_800_000_000
         root_serial = cert_request_module.generate_serial()
         root_tbs = cert_request_module.build_root_tbs(
@@ -1349,7 +1349,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         # sandbox can sign for) no longer fits here now that
         # assemble_deputy_cert_der genuinely verifies against it.
         seed = self.seed_fixture()
-        root_vk = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key
+        root_vk = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0).root_ca.public_key
         root_not_before = 1_800_000_000
         root_tbs = cert_request_module.build_root_tbs(
             root_vk, ChainKind.TESTNET, root_not_before, cert_request_module.ROOT_DAYS, cert_request_module.generate_serial(),
@@ -1863,7 +1863,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         """ End-to-end from a real BBQr-encoded devfund-config, through
             scan -> review (5 fields, v2 schema) -> confirm+sign -> signed -> export
             -> Home. Confirms the real public_key/signature match a direct
-            derive_root_ceremony_keys()/sign_with_devfund() call -- not a
+            derive_root_ceremony_keys(, index=0)/sign_with_devfund() call -- not a
             placeholder. BUG FIX, 2026-10-03 (R27): this used to also assert
             the devfund key differs from the Root key -- that was the bug
             (see root_ceremony.py's own BUG FIX note); devfund now signs
@@ -1871,7 +1871,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             sf-root.rs. """
         seed = self.seed_fixture()
         devfund_json = _sample_devfund_json()
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         from seedsigner.models.sevenf import devfund_config
         from seedsigner.views.sevenf_views._common import _review_pages
         # +1: the "Root key" page (index and path) comes first.
@@ -1927,7 +1927,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
 
         assert destination.View_cls == sevenf_views.SevenFDevFundConfigSignedView
         artifact = destination.view_args["artifact"]
-        keys = derive_root_ceremony_keys(seed.seed_bytes, fields.network)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, fields.network, index=0)
         expected_pk, expected_sig = sign_with_devfund(seed.seed_bytes, fields.network, canonical_bytes, confirmed=True, index=0)
         assert artifact.public_key == keys.devfund.public_key == expected_pk
         assert len(artifact.signature) == len(expected_sig) == 3309
@@ -2100,7 +2100,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         fields = parse_devfund_canonical_bytes(canonical_bytes)
 
         view = sevenf_views.SevenFConfirmSignDevFundView(key_index=0, seed=seed, chain_kind=fields.network, tbs_bytes=canonical_bytes)
-        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
+        keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0)
         assert view.devfund_address == keys.devfund.address
         assert view.devfund_address == keys.root_ca.address
 
@@ -2311,7 +2311,7 @@ class TestSevenFSeedLabel(FlowTest):
     def expected(self, seed, mode):
         from seedsigner.models.sevenf.review_format import ski
         if mode == "sevenf":
-            return ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key.hex())[:8]
+            return ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0).root_ca.public_key.hex())[:8]
         return seed.get_fingerprint(self.settings.get_value(SettingsConstants.SETTING__NETWORK))
 
 
@@ -2410,7 +2410,7 @@ class TestSevenFConfirmScreensShowTheSigningSki(FlowTest):
         """ The ski, then the key index on its own line under it
             (7f-signing-support-key-index-selector). """
         from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
-        return group_hex_for_display(ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET).root_ca.public_key.hex())) + "\nindex 0"
+        return group_hex_for_display(ski(derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET, index=0).root_ca.public_key.hex())) + "\nindex 0"
 
 
     def seed(self):

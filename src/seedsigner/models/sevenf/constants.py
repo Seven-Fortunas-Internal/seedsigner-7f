@@ -62,9 +62,10 @@ def key_index_segment(index: int) -> str:
 
 
 def parse_key_index_entry(text: str) -> int:
-    """ An index typed on the device's digits keypad, read the way
-        sf-wallet-gov reads `--index` (Rust `str::parse::<u32>`): ASCII digits
-        only, leading zeros allowed ("007" is 7), 0 to MAX_KEY_INDEX. Raises
+    """ An index typed on the device's digits keypad: a strict subset of
+        what sf-wallet-gov accepts for `--index` (Rust `str::parse::<u32>`,
+        which also takes a leading "+"): ASCII digits only, leading zeros
+        allowed ("007" is 7), 0 to MAX_KEY_INDEX. Raises
         ValueError otherwise. Python's int() and str.isdigit() also accept
         non-ASCII digits, spaces and signs, so they are not used on their own. """
     if not isinstance(text, str):
@@ -88,7 +89,7 @@ def root_path(chain_kind: ChainKind, index: int = 0) -> str:
         `devfund_purpose_path()`, and the separate `ML_DSA_LEAF_ROLE`
         constant: `sf-root.rs`'s own `cmd_sign_genesis` and
         `cmd_sign_devfund` both call the byte-identical
-        `root_key_from_file(..., index 0)` -- genesis-config and
+        `root_key_from_file(...)` at the same index -- genesis-config and
         devfund-config are signed by the SAME Root key, not two -- so the
         devfund-config SIGNING key is this path. The per-holder dev-fund key
         a member enrolls is a different key at devfund_path() below (7fchain

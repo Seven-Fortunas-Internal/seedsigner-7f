@@ -23,7 +23,7 @@
 
     Separately (2026-10-05, 7fchain 89d3d39): each holder also has a
     dev-fund key at devfund/<chain_kind>/0/ml-dsa/v1 that locks the dev
-    fund's multisig -- derive_devfund_key() below, enrolled and exported
+    fund's multisig -- derive_devfund_key(, index=0) below, enrolled and exported
     only. The Roots DECLARE the recipient (Root-signed devfund-config);
     those dev-fund keys SPEND from it.
 """
@@ -40,15 +40,17 @@ class RootCeremonyKeys:
         (see the BUG FIX note above), kept as its own field so callers that
         read `.devfund` don't need to know that -- not a second derivation.
         This is the devfund-config SIGNING key, not the per-holder dev-fund
-        key a member enrolls -- that is derive_devfund_key(). """
+        key a member enrolls -- that is derive_devfund_key(, index=0). """
     chain_kind: ChainKind
     root_ca: DerivedKey
     devfund: DerivedKey
     index: int = 0
 
 
-def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind, index: int = 0) -> RootCeremonyKeys:
-    """ Derive the Root ML-DSA-65 key for `chain_kind` from `seed_bytes`
+def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind, *, index: int) -> RootCeremonyKeys:
+    """ Derive the Root ML-DSA-65 key for `chain_kind`, at key index `index`
+        (sf-wallet-gov's `--index`; required, no default, so a caller can't
+        silently get index 0 -- 7f-signing-support-key-index-selector), from `seed_bytes`
         (SeedSigner's Seed.seed_bytes -- standard BIP-39, empty passphrase,
         64 bytes). `root_ca` and `devfund` are the same derived key (see
         this module's own BUG FIX note) -- confirmed against 7fchain's real
@@ -72,8 +74,9 @@ def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind, index: i
     )
 
 
-def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind, index: int = 0) -> DerivedKey:
-    """ The holder's dev-fund key at devfund/<chain_kind>/0/ml-dsa/v1 -- the
+def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind, *, index: int) -> DerivedKey:
+    """ The holder's dev-fund key at devfund/<chain_kind>/<index>/ml-dsa/v1
+        (`index` required, as for derive_root_ceremony_keys) -- the
         one a member enrolls with `sf-wallet-gov derive-vk --role devfund`
         (7fchain 89d3d39). A DIFFERENT key from the Root key. Not to be
         confused with `RootCeremonyKeys.devfund`, which is the Root key used
@@ -97,7 +100,8 @@ class SigningNotConfirmedError(Exception):
 
 
 def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
-    """ Sign `message` with the Root CA key for `chain_kind` -- the
+    """ Sign `message` with the Root CA key for `chain_kind` at key index
+        `index` (required) -- the
         operation `sf-root sign-genesis` performs over a genesis-config's
         canonical bytes. Returns (public_key, signature).
 
@@ -168,7 +172,8 @@ def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, 
 
 
 def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
-    """ Sign `message` with the Root key for `chain_kind` -- the
+    """ Sign `message` with the Root key for `chain_kind` at key index
+        `index` (required; sf-wallet-gov sign-devfund signs as Role::Root) -- the
         devfund-config twin of sign_with_root_ca() above, same enforced
         review-before-sign gate and same rationale (see that function's own
         docstring; not repeated here).

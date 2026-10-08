@@ -24,7 +24,7 @@ def sevenf_seed_label(seed_bytes: bytes) -> str:
     key = hashlib.sha256(seed_bytes).digest()
     label = _cache.get(key)
     if label is None:
-        vk = derive_root_ceremony_keys(seed_bytes, ChainKind.TESTNET).root_ca.public_key
+        vk = derive_root_ceremony_keys(seed_bytes, ChainKind.TESTNET, index=0).root_ca.public_key
         label = ski(vk.hex())[:LABEL_CHARS]
         _cache[key] = label
     return label

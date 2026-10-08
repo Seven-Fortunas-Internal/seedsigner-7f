@@ -52,7 +52,7 @@ def signed_genesis_config(tmp_path):
     original_json = gen_tool.build_genesis_config()
     f = genesis_config.parse_genesis_config_json(original_json)
     canonical_bytes = genesis_config.build_canonical_bytes(f.chain_kind, f.timestamp, f.message, f.consensus)
-    root_keys = root_ceremony.derive_root_ceremony_keys(gen_tool.root_seed().seed_bytes, gen_tool.CHAIN_KIND)
+    root_keys = root_ceremony.derive_root_ceremony_keys(gen_tool.root_seed().seed_bytes, gen_tool.CHAIN_KIND, index=0)
     _, sig = mldsa.derive_and_sign(
         gen_tool.root_seed().seed_bytes, "root/testnet/0/ml-dsa/v1", canonical_bytes,
     )
@@ -118,7 +118,7 @@ def test_cli_refuses_without_pubkey_hex_or_trust_flag(signed_genesis_config, mon
 def test_cli_verifies_with_explicit_trusted_pubkey(signed_genesis_config, monkeypatch, capsys):
     from seedsigner.models.sevenf import root_ceremony
     original_paths, signed_paths = signed_genesis_config
-    root_keys = root_ceremony.derive_root_ceremony_keys(gen_tool.root_seed().seed_bytes, gen_tool.CHAIN_KIND)
+    root_keys = root_ceremony.derive_root_ceremony_keys(gen_tool.root_seed().seed_bytes, gen_tool.CHAIN_KIND, index=0)
 
     argv = [
         "--original", *map(str, original_paths),

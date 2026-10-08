@@ -151,7 +151,7 @@ class SevenFScanRootCertificateView(ScanView):
                              root_cert.chain_kind.name.lower(), self.chain_kind.name.lower()),
             ))
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, self.key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, index=self.key_index)
         if root_cert.subject_vk != keys.root_ca.public_key:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 headline=_("Wrong Key"),

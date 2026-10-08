@@ -300,7 +300,7 @@ class SevenFConfirmSignRootCertView(View):
         self.root_cert_der = root_cert_der
         self.signed_view_args = signed_view_args or {}
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, index=key_index)
         self.public_key = keys.root_ca.public_key
         self.root_ca_address = keys.root_ca.address
         self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, key_index)

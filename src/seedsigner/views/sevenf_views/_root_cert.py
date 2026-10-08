@@ -104,7 +104,7 @@ class SevenFBuildRootSelfCertView(View):
 
     def run(self):
         chain_kind = self.chain_kind
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind, self.key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, chain_kind, index=self.key_index)
         subject_vk = keys.root_ca.public_key
         serial = cert_request.generate_serial()
         not_before = ceremony_now(self.controller)
@@ -252,10 +252,10 @@ class SevenFDeriveEnrollmentVkView(View):
     def run(self):
         if self.role == "root":
             public_key = root_ceremony.derive_root_ceremony_keys(
-                self.seed.seed_bytes, self.chain_kind, self.key_index).root_ca.public_key
+                self.seed.seed_bytes, self.chain_kind, index=self.key_index).root_ca.public_key
             title = _("Root VK")
         elif self.role == "devfund":
-            public_key = root_ceremony.derive_devfund_key(self.seed.seed_bytes, self.chain_kind, self.key_index).public_key
+            public_key = root_ceremony.derive_devfund_key(self.seed.seed_bytes, self.chain_kind, index=self.key_index).public_key
             title = _("Dev-fund VK")
         else:
             raise ValueError(f"no enrollment key for role {self.role!r}")

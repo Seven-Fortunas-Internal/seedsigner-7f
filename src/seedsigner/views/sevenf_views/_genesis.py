@@ -252,7 +252,7 @@ class SevenFConfirmSignView(View):
         super().__init__()
         self.state = state
 
-        keys = root_ceremony.derive_root_ceremony_keys(state.seed.seed_bytes, state.chain_kind, state.key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(state.seed.seed_bytes, state.chain_kind, index=state.key_index)
         self.public_key = keys.root_ca.public_key
         self.root_ca_address = keys.root_ca.address
         self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, state.key_index)

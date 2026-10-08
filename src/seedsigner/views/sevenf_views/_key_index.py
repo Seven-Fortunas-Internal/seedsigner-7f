@@ -8,9 +8,10 @@
     about (`role`) and where to go next; the next view receives everything it
     was given plus `key_index`. Nothing here derives or signs.
 
-    The steps of the choice are left off the back stack (skip_current_view),
-    so Back from the next screen returns to whatever came before the index,
-    not to the keypad or the warning.
+    Every step of the choice leaves the back stack (skip_current_view), so
+    Back from the screen after the index, or from the keypad or the warning,
+    returns to whatever came before the index, by either path.
+    tests/test_sevenf_key_index_flows.py checks the real back stack.
 """
 from gettext import gettext as _
 
@@ -67,7 +68,7 @@ class SevenFSelectKeyIndexView(_KeyIndexStep):
             return Destination(BackStackView)
         if selected_menu_num == 0:
             return self._continue_with(0)
-        return Destination(SevenFEnterKeyIndexView, view_args=self._step_args())
+        return Destination(SevenFEnterKeyIndexView, view_args=self._step_args(), skip_current_view=True)
 
 
 
