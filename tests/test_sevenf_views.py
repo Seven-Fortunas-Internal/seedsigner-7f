@@ -825,14 +825,20 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             destination = view.run()
 
         encoder = captured["qr_encoder"]
-        assert encoder.file_type == "B"
+        assert encoder.file_type == "J"  # an export envelope carrying the file name
 
         d = DecodeQR()
         while True:
             status = d.add_data(encoder.next_part())
             if status == DecodeQRStatus.COMPLETE:
                 break
-        cert_der = d.decoder.get_data()
+        import json
+        from seedsigner.models.sevenf.export_envelope import pem_to_der
+        from seedsigner.models.sevenf.review_format import ski
+        envelope = json.loads(d.decoder.get_data())
+        assert envelope["kind"] == "root-cert"
+        assert envelope["file"] == f"root-{ski(keys.root_ca.public_key.hex())}.pem"
+        cert_der = pem_to_der(envelope["body"])
         parsed = cert_request_module.parse_root_certificate_der(cert_der)
         assert parsed.subject_vk == keys.root_ca.public_key
         assert parsed.chain_kind == ChainKind.MAINNET

@@ -53,6 +53,7 @@
   <button id="torch" class="secondary" hidden>Torch: off</button>
   <button id="copy" class="secondary" hidden>Copy result</button>
   <button id="copyVk" class="secondary" hidden>Copy VK</button>
+  <button id="saveExport" hidden>Save</button>
   <button id="saveVk" hidden>Save .vk</button>
   <button id="saveSummary" class="secondary" hidden>Save summary</button>
   <button id="copyAll" class="secondary" hidden>Copy all</button>
@@ -65,7 +66,7 @@
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261008b"></script>
+<script src="bbqr-decode.js?v=20261008d"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -79,6 +80,7 @@ const copyVkBtn = document.getElementById("copyVk");
 const copyIdBtn = document.getElementById("copyId");
 const copyAllBtn = document.getElementById("copyAll");
 const saveVkBtn = document.getElementById("saveVk");
+const saveExportBtn = document.getElementById("saveExport");
 const saveSummaryBtn = document.getElementById("saveSummary");
 const vkNoteEl = document.getElementById("vkNote");
 const video = document.getElementById("video");
@@ -101,6 +103,7 @@ let lastVkText = null;
 let lastIdText = null;
 let lastBundleText = null;
 let lastFileName = null;
+let lastExport = null;  // a checked device export envelope: {file, body, ...}
 
 function recordDetection(found, now) {
   if (found) detectionTimestamps.push(now);
@@ -193,10 +196,17 @@ async function renderResult(bytes) {
   let text;
   let vkInfo = null;    // {id, pin, bundle} for a well-formed vk
   let vkError = null;   // why vkInfo couldn't be computed
+  let exportInfo = null;
   if (session.fileType === "J") {
+    const raw = new TextDecoder().decode(bytes);
     try {
-      const obj = JSON.parse(new TextDecoder().decode(bytes));
-      text = JSON.stringify(obj, null, 2);
+      exportInfo = await BBQrDecode.inspectExport(raw);
+    } catch (e) {
+      exportInfo = { error: `couldn't check this export: ${e.message}` };
+    }
+    try {
+      const obj = JSON.parse(raw);
+      text = exportInfo && typeof exportInfo.body === "string" ? exportInfo.body : JSON.stringify(obj, null, 2);
     } catch (e) {
       text = `(claimed JSON but failed to parse: ${e.message})\n\nhex:\n${bytesToHex(bytes)}`;
     }
@@ -224,7 +234,12 @@ async function renderResult(bytes) {
   } else {
     text = `file_type=${session.fileType}, ${bytes.length} bytes\n\nhex:\n${bytesToHex(bytes)}`;
   }
-  if (vkInfo) {
+  if (exportInfo && exportInfo.error) {
+    resultEl.textContent = `NOT SAVED -- this export failed its check: ${exportInfo.error}\n\n${text}`;
+  } else if (exportInfo) {
+    const label = { "root-cert": "Root certificate" }[exportInfo.kind] || exportInfo.kind;
+    resultEl.textContent = `${label}\nFile: ${exportInfo.file}\nSubject key id: ${exportInfo.ski}\nPin: ${exportInfo.pin}\n\n${text}`;
+  } else if (vkInfo) {
     resultEl.textContent = `Subject key id: ${vkInfo.id}\nPin: ${vkInfo.pin}\nFile: ${vkInfo.id}.vk\n\n${text}`;
   } else {
     resultEl.textContent = vkError ? `${vkError}\n\n${text}` : text;
@@ -236,6 +251,9 @@ async function renderResult(bytes) {
   // labels sf-wallet-gov prints), "Copy VK" is the bare hex for the .vk file,
   // "Copy ID" the 40-char ski to read aloud. Shown only when the ids were
   // actually computed, so no button can copy an error message.
+  lastExport = exportInfo && !exportInfo.error ? exportInfo : null;
+  saveExportBtn.hidden = !lastExport;
+  if (lastExport) saveExportBtn.textContent = `Save ${lastExport.file}`;
   if (vkInfo) {
     // Exactly what sf-wallet-gov writes to a .vk file: lowercase hex plus a
     // trailing newline (main.rs: so `cat *.vk` can't join two keys).
@@ -255,7 +273,7 @@ async function renderResult(bytes) {
     copyIdBtn.hidden = false;
     copyIdBtn.textContent = "Copy ID";
   } else {
-    copyBtn.hidden = false;
+    copyBtn.hidden = !!(exportInfo && exportInfo.error);
     copyBtn.textContent = "Copy result";
     vkNoteEl.hidden = true;
     copyAllBtn.hidden = true;
@@ -301,6 +319,8 @@ document.getElementById("reset").addEventListener("click", () => {
   copyAllBtn.hidden = true;
   saveVkBtn.hidden = true;
   saveSummaryBtn.hidden = true;
+  saveExportBtn.hidden = true;
+  lastExport = null;
   vkNoteEl.hidden = true;
   lastVkText = null;
   lastIdText = null;
@@ -376,11 +396,13 @@ function wireSaveButton(btn, getLabel, getFile) {
       // AbortError: the person closed the picker or share sheet -- not a failure.
       btn.textContent = e.name === "AbortError" ? label : "Save failed";
     }
-    setTimeout(() => { btn.textContent = label; }, 1500);
+    // Re-read the label: a new scan may have replaced what this button saves.
+    setTimeout(() => { btn.textContent = getLabel(); }, 1500);
   });
 }
 
-wireSaveButton(saveVkBtn, () => `Save ${lastFileName}`, async () => ({ name: lastFileName, text: lastVkText }));
+wireSaveButton(saveVkBtn, () => (lastFileName ? `Save ${lastFileName}` : "Save .vk"), async () => ({ name: lastFileName, text: lastVkText }));
+wireSaveButton(saveExportBtn, () => (lastExport ? `Save ${lastExport.file}` : "Save"), async () => ({ name: lastExport.file, text: lastExport.body }));
 wireSaveButton(saveSummaryBtn, () => "Save summary", () => BBQrDecode.vkSummary(lastVkText));
 
 // Continuous autofocus and torch are both device-gated (iPhones and most

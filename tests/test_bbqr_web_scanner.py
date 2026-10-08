@@ -227,3 +227,120 @@ def test_scanner_page_offers_save_summary():
     html = (Path(TOOL_DIR) / "index.html").read_text()
     assert 'id="saveSummary"' in html
     assert "BBQrDecode.vkSummary(" in html
+
+
+def _root_cert_envelope() -> str:
+    from pathlib import Path
+    from seedsigner.models.sevenf.export_envelope import pem_to_der, root_cert_export
+    from embit.bip39 import mnemonic_to_seed
+    pem = (Path("tests/fixtures/sf_wallet_gov_root_cert_abandon_art_testnet.pem")).read_text()
+    vk = root_ceremony.derive_root_ceremony_keys(
+        mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password=""), ChainKind.TESTNET).root_ca.public_key
+    return root_cert_export(pem_to_der(pem), vk).decode()
+
+
+def _inspect(envelope_text: str) -> dict:
+    import json
+    js = f"require('./bbqr-decode.js').inspectExport({json.dumps(envelope_text)}).then(r => process.stdout.write(JSON.stringify(r)));"
+    return json.loads(_node(js))
+
+
+def test_inspect_export_accepts_a_device_root_cert_and_checks_its_name():
+    from pathlib import Path
+    r = _inspect(_root_cert_envelope())
+    assert r["error"] is None
+    assert r["kind"] == "root-cert"
+    assert r["file"] == "root-591c511984a2d73c6bee1f4dc149d48f7f97fc55.pem"
+    assert r["ski"] == "591c511984a2d73c6bee1f4dc149d48f7f97fc55"
+    assert r["pin"] == "591c511984a2d73c6bee1f4dc149d48f7f97fc55ad607b821b91eca949f0641a"
+    assert r["body"] == Path("tests/fixtures/sf_wallet_gov_root_cert_abandon_art_testnet.pem").read_text()
+
+
+@pytest.mark.parametrize("change, needle", [
+    (lambda e: {**e, "file": "root-" + "0" * 40 + ".pem"}, "does not match"),
+    (lambda e: {**e, "file": "../root-591c511984a2d73c6bee1f4dc149d48f7f97fc55.pem"}, "file name"),
+    (lambda e: {**e, "file": "x/y.pem"}, "file name"),
+    (lambda e: {**e, "kind": "mystery"}, "kind"),
+    (lambda e: {**e, "sf7_export": 2}, "version"),
+    (lambda e: {**e, "body": "not a certificate"}, "certificate"),
+])
+def test_inspect_export_refuses_bad_envelopes(change, needle):
+    import json
+    bad = json.dumps(change(json.loads(_root_cert_envelope())))
+    r = _inspect(bad)
+    assert r["error"] and needle in r["error"]
+
+
+def test_inspect_export_ignores_non_envelope_json():
+    r = _inspect('{"signer_vk": "", "sig": "00"}')
+    assert r is None
+
+
+def test_scanner_page_handles_export_envelopes():
+    from pathlib import Path
+    html = (Path(TOOL_DIR) / "index.html").read_text()
+    assert "BBQrDecode.inspectExport(" in html
+    assert 'id="saveExport"' in html
+
+
+def _der(tag: int, content: bytes) -> bytes:
+    n = len(content)
+    if n < 0x80:
+        length = bytes([n])
+    else:
+        b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+        length = bytes([0x80 | len(b)]) + b
+    return bytes([tag]) + length + content
+
+
+def _cert_with_decoy_key(real_vk: bytes, decoy_vk: bytes) -> bytes:
+    """ A certificate-shaped DER whose issuer name hides a decoy
+        "03 82 07 a1 00 + 1952 bytes" before the real SubjectPublicKeyInfo. """
+    oid_ml_dsa_65 = bytes.fromhex("0609608648016503040312")
+    alg = _der(0x30, oid_ml_dsa_65)
+    spki = _der(0x30, alg + _der(0x03, b"\x00" + real_vk))
+    issuer = _der(0x30, _der(0x04, _der(0x03, b"\x00" + decoy_vk)))
+    tbs = _der(0x30,
+               _der(0xA0, _der(0x02, b"\x02"))       # version v3
+               + _der(0x02, b"\x40" + b"\x11" * 15)  # serial
+               + alg + issuer
+               + _der(0x30, b"")                     # validity (shape only)
+               + _der(0x30, b"")                     # subject
+               + spki)
+    return _der(0x30, tbs + alg + _der(0x03, b"\x00" + b"\x55" * 10))
+
+
+def test_cert_subject_vk_walks_the_der_and_ignores_a_decoy_key():
+    import json
+    real, decoy = b"\x01" * 1952, b"\x02" * 1952
+    der = _cert_with_decoy_key(real, decoy)
+    out = _node(f"""
+const d = require('./bbqr-decode.js');
+const der = Uint8Array.from(Buffer.from('{der.hex()}', 'hex'));
+const vk = d.certSubjectVk(der);
+process.stdout.write(vk ? Buffer.from(vk).toString('hex') : 'null');
+""")
+    assert out == real.hex()
+
+
+def test_cert_subject_vk_refuses_a_non_ml_dsa_key():
+    der = _cert_with_decoy_key(b"\x01" * 1952, b"\x02" * 1952).replace(
+        bytes.fromhex("0609608648016503040312"), bytes.fromhex("0609608648016503040311"))
+    out = _node(f"""
+const d = require('./bbqr-decode.js');
+process.stdout.write(String(d.certSubjectVk(Uint8Array.from(Buffer.from('{der.hex()}', 'hex')))));
+""")
+    assert out == "null"
+
+
+@pytest.mark.parametrize("change, needle", [
+    (lambda e: {**e, "body": "-----BEGIN CERTIFICATE-----\nA=A=\n-----END CERTIFICATE-----\n"}, "certificate"),
+    (lambda e: {**e, "body": e["body"].replace("\n", "", 1).replace("-----BEGIN CERTIFICATE-----", "-----BEGIN CERTIFICATE-----\n", 1)[:0] + e["body"].replace("\n", "\n\n", 2)}, "canonical"),
+    (lambda e: {**e, "file": "a" * 90 + ".pem"}, "file name"),
+    (lambda e: {**e, "file": "root-..pem"}, "file name"),
+])
+def test_inspect_export_refuses_malformed_bodies_and_names(change, needle):
+    import json
+    r = _inspect(json.dumps(change(json.loads(_root_cert_envelope()))))
+    assert r["error"] and needle in r["error"]
+    assert isinstance(r["body"], str)  # the page can still show what it refused

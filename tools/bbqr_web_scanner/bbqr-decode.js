@@ -72,6 +72,132 @@ async function vkSummary(hexText) {
   };
 }
 
+// ─── Export envelopes from the device (models/sevenf/export_envelope.py) ───
+// {"sf7_export": 1, "kind": ..., "file": ..., "body": <exact file contents>}.
+// The page saves `body` verbatim under `file`, after checking `file` against
+// `body` wherever the name can be derived from the content.
+
+// No paths, no hidden files, no "..", bounded length.
+const SAFE_FILE_NAME = /^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+const OID_ML_DSA_65 = [0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12];  // 2.16.840.1.101.3.4.3.18
+
+function bytesToHexStr(bytes) {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function pemCertToDer(pem) {
+  const m = /^-----BEGIN CERTIFICATE-----\n([A-Za-z0-9+/=\n]+)-----END CERTIFICATE-----\n?$/.exec(String(pem));
+  if (!m) return null;
+  try {
+    const bin = atob(m[1].replace(/\n/g, ""));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  } catch (e) {
+    return null;  // malformed base64
+  }
+}
+
+// PEM exactly as sf-wallet-gov (and the device's der_to_pem) writes it:
+// 64-character lines and a trailing newline.
+function derToPem(der) {
+  let bin = "";
+  for (const b of der) bin += String.fromCharCode(b);
+  const b64 = btoa(bin);
+  const lines = b64.match(/.{1,64}/g) || [];
+  return ["-----BEGIN CERTIFICATE-----", ...lines, "-----END CERTIFICATE-----"].join("\n") + "\n";
+}
+
+// Minimal DER reader: {tag, off (of the tag), start, end} of the TLV at `off`.
+function readTlv(b, off) {
+  if (off + 2 > b.length) return null;
+  const tag = b[off];
+  let len = b[off + 1];
+  let p = off + 2;
+  if (len & 0x80) {
+    const n = len & 0x7f;
+    if (n < 1 || n > 3 || p + n > b.length) return null;
+    len = 0;
+    for (let i = 0; i < n; i++) len = len * 256 + b[p + i];
+    p += n;
+  }
+  if (p + len > b.length) return null;
+  return { tag, off, start: p, end: p + len };
+}
+
+function derChildren(b, tlv) {
+  const out = [];
+  for (let o = tlv.start; o < tlv.end;) {
+    const t = readTlv(b, o);
+    if (!t || t.end > tlv.end) return null;
+    out.push(t);
+    o = t.end;
+  }
+  return out;
+}
+
+// The certificate's subject key, found by walking the structure (RFC 5280:
+// Certificate -> tbsCertificate -> [version] serial sigAlg issuer validity
+// subject subjectPublicKeyInfo) -- not by searching for a byte pattern,
+// which a decoy earlier in the certificate could satisfy. Null unless the
+// key is ML-DSA-65 (OID 2.16.840.1.101.3.4.3.18) and 1952 bytes long.
+function certSubjectVk(der) {
+  const cert = readTlv(der, 0);
+  if (!cert || cert.tag !== 0x30 || cert.end !== der.length) return null;
+  const top = derChildren(der, cert);
+  if (!top || top.length !== 3 || top[0].tag !== 0x30) return null;
+  let tbs = derChildren(der, top[0]);
+  if (!tbs) return null;
+  if (tbs.length && tbs[0].tag === 0xa0) tbs = tbs.slice(1);  // explicit version
+  if (tbs.length < 6) return null;
+  const spki = tbs[5];
+  if (spki.tag !== 0x30) return null;
+  const parts = derChildren(der, spki);
+  if (!parts || parts.length !== 2 || parts[0].tag !== 0x30 || parts[1].tag !== 0x03) return null;
+  const alg = derChildren(der, parts[0]);
+  if (!alg || alg.length < 1) return null;
+  const oid = der.slice(alg[0].off, alg[0].end);
+  if (oid.length !== OID_ML_DSA_65.length || !OID_ML_DSA_65.every((x, i) => oid[i] === x)) return null;
+  const bits = parts[1];
+  if (bits.end - bits.start !== 1953 || der[bits.start] !== 0x00) return null;
+  return der.slice(bits.start + 1, bits.end);
+}
+
+async function inspectExport(jsonText) {
+  let obj;
+  try {
+    obj = JSON.parse(jsonText);
+  } catch (e) {
+    return null;
+  }
+  if (!obj || typeof obj !== "object" || !("sf7_export" in obj)) return null;  // not an envelope
+
+  const out = {
+    kind: obj.kind,
+    file: obj.file,
+    body: typeof obj.body === "string" ? obj.body : JSON.stringify(obj.body),
+    ski: null,
+    pin: null,
+    error: null,
+  };
+  const fail = (msg) => ({ ...out, error: msg });
+  if (obj.sf7_export !== 1) return fail(`unsupported export version ${JSON.stringify(obj.sf7_export)}`);
+  if (typeof obj.file !== "string" || !SAFE_FILE_NAME.test(obj.file)) return fail(`unsafe file name ${JSON.stringify(obj.file)}`);
+  if (typeof obj.body !== "string") return fail("export has no body");
+
+  if (obj.kind === "root-cert") {
+    const der = pemCertToDer(obj.body);
+    const vk = der && certSubjectVk(der);
+    if (!vk) return fail("body is not an ML-DSA-65 certificate");
+    if (derToPem(der) !== obj.body) return fail("body is not canonical PEM (64-character lines, trailing newline)");
+    const vkHex = bytesToHexStr(vk);
+    out.pin = await pin(vkHex);
+    out.ski = out.pin.slice(0, 40);
+    const expected = `root-${out.ski}.pem`;
+    if (obj.file !== expected) return fail(`file name ${obj.file} does not match the certificate (expected ${expected})`);
+    return out;
+  }
+  return fail(`unsupported export kind ${JSON.stringify(obj.kind)}`);
+}
+
 // saveMethod(): how the page saves a file under the name it computed.
 // Desktop Chrome/Edge have a folder picker (save straight into
 // governance/<role>/outbox); iPhone Safari has none but can share a named
@@ -208,6 +334,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, vkSummary, saveMethod };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle, vkSummary, saveMethod, inspectExport, certSubjectVk };
 
 });

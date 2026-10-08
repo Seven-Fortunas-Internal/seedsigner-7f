@@ -355,8 +355,12 @@ class SevenFExportRootCertQRView(View):
             self.certificate.tbs_bytes, self.certificate.signature, self.certificate.public_key,
         )
 
+        from seedsigner.models.sevenf.export_envelope import root_cert_export
+
+        # root-<ski>.pem exactly as sign-root-cert writes it, in an envelope
+        # that tells the host page the file name (export_envelope.py).
         self.run_screen(
             QRDisplayScreen,
-            qr_encoder=BBQrEncoder(data=cert_der, file_type="B"),  # 'B': BBQr generic binary
+            qr_encoder=BBQrEncoder(data=root_cert_export(cert_der, self.certificate.public_key), file_type="J"),
         )
         return Destination(MainMenuView, skip_current_view=True)
