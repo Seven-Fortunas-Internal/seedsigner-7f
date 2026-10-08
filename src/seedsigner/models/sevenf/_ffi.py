@@ -81,6 +81,7 @@ class ErrCode(IntEnum):
     CSR_VERIFY_FAILED = -23
     CERT_PARSE_FAILED = -24
     BAD_RECIPIENT_TAG = -25
+    BAD_ADDRESS = -26
 
 
 def err_code_name(code: int) -> str:

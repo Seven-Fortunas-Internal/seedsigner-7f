@@ -47,14 +47,18 @@ verify_tool = _load_module("verify_sevenf_signature")
 def signed_genesis_config(tmp_path):
     from seedsigner.models.sevenf import genesis_config, root_ceremony
 
-    canonical_bytes = gen_tool.build_genesis_config()
+    # The artifact is the coordinator's JSON; the device signs the canonical
+    # bytes rebuilt from its fields.
+    original_json = gen_tool.build_genesis_config()
+    f = genesis_config.parse_genesis_config_json(original_json)
+    canonical_bytes = genesis_config.build_canonical_bytes(f.chain_kind, f.timestamp, f.message, f.consensus)
     root_keys = root_ceremony.derive_root_ceremony_keys(gen_tool.root_seed().seed_bytes, gen_tool.CHAIN_KIND)
     _, sig = mldsa.derive_and_sign(
         gen_tool.root_seed().seed_bytes, "root/testnet/0/ml-dsa/v1", canonical_bytes,
     )
     signed_json = genesis_config.build_root_sig_json(root_keys.root_ca.public_key, sig, with_vk=True)
 
-    original_paths = gen_tool.render_bbqr("original", canonical_bytes, tmp_path)
+    original_paths = gen_tool.render_bbqr("original", original_json, tmp_path)
     signed_paths = gen_tool.render_bbqr("signed", json.dumps(signed_json).encode("utf-8"), tmp_path)
     return original_paths, signed_paths
 

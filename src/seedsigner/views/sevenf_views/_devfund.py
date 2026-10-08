@@ -12,7 +12,7 @@ from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.models.seed import Seed
 from seedsigner.models.sevenf import devfund_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.devfund_config import DevFundConfigError
+from seedsigner.models.sevenf.devfund_config import DevFundConfigError, DevFundConfigJsonError
 from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
@@ -60,13 +60,25 @@ class SevenFScanDevFundConfigView(ScanView):
 
 
     def _handle_complete_scan(self):
-        canonical_bytes = self.decoder.get_sevenf_bbqr_data()
+        # The coordinator's real artifact is devfund-unsigned.json
+        # (sf-root-coordinator prepare-devfund); the bytes signed are rebuilt
+        # from its parsed fields, exactly as sf-wallet-gov sign-devfund does.
+        payload = self.decoder.get_sevenf_bbqr_data()
 
         try:
+            json_fields = devfund_config.parse_devfund_config_json(payload)
+            canonical_bytes = devfund_config.build_canonical_bytes(
+                json_fields.network, json_fields.recipient, json_fields.effective_block, json_fields.timestamp)
+            # Review what the Rust parser reads back out of the exact bytes to
+            # be signed, and refuse if that disagrees with the JSON (same as
+            # the genesis path, plugin._canonical_bytes_from_json).
             fields = devfund_config.parse_canonical_bytes(canonical_bytes)
-        except DevFundConfigError as e:
+        except (DevFundConfigJsonError, DevFundConfigError) as e:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't parse this as a devfund-config: {}").format(e)))
+        if fields != json_fields:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't parse this as a devfund-config: the bytes to sign don't match the file")))
 
         return Destination(
             SevenFCertRequestReviewFieldView,
@@ -89,7 +101,9 @@ class SevenFConfirmSignDevFundView(View):
     """ Final review step for devfund-config signing: confirms which chain
         and which address the signature will be attributed to -- the
         signing-identity check, distinct from the per-field content review
-        that already happened on the preceding pages.
+        that already happened on the preceding pages. Labelled "Root key":
+        the devfund-config is Root-signed (sf-wallet-gov sign-devfund), and
+        since 7fchain 89d3d39 a separate dev-fund key exists that this is not.
 
         CORRECTED 2026-10-03 (R27 re-port, adversarial review): this
         docstring used to claim the devfund address differs from the Root
@@ -126,7 +140,7 @@ class SevenFConfirmSignDevFundView(View):
             SevenFConfirmSignScreen,
             chain_kind_name=self.chain_kind.name.lower(),
             address=self.devfund_address,
-            signing_role_label=_("devfund key"),
+            signing_role_label=_("Root key"),
         )
 
         if selected_menu_num == RET_CODE__BACK_BUTTON:
@@ -166,7 +180,7 @@ class SevenFDevFundConfigSignedView(View):
             title=_("Devfund Config Signed"),
             show_back_button=False,
             status_headline=_("Success!"),
-            text=_("The devfund config has been signed with the devfund key."),
+            text=_("The devfund config has been signed with your Root key."),
             button_data=[ButtonOption("OK")],
         )
         return Destination(SevenFExportSignedDevFundConfigQRView, view_args=dict(artifact=self.artifact))

@@ -229,8 +229,8 @@ class DecodeQR:
 
     def get_sevenf_bbqr_data(self) -> bytes | None:
         """ Returns the raw decoded bytes of a scanned 7F ceremony artefact
-            (genesis-config canonical bytes today; devfund-config etc. once
-            those parsers exist) -- self.decoder.file_type distinguishes
+            (the coordinator's genesis-/devfund-unsigned.json, a Root
+            certificate or a Deputy CSR in DER) -- self.decoder.file_type distinguishes
             which artefact it claims to be, but callers must not trust that
             claim over independently re-validating the bytes themselves
             (e.g. genesis_config.parse_canonical_bytes()'s own domain-tag

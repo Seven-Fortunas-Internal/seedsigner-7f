@@ -53,8 +53,9 @@ _SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(_SRC))
 
 from seedsigner.models.decode_qr import DecodeQR  # noqa: E402
-from seedsigner.models.sevenf.genesis_config import GenesisConfigError, parse_canonical_bytes as parse_genesis  # noqa: E402
-from seedsigner.models.sevenf.devfund_config import DevFundConfigError, parse_canonical_bytes as parse_devfund  # noqa: E402
+from seedsigner.models.sevenf import devfund_config, genesis_config  # noqa: E402
+from seedsigner.models.sevenf.genesis_config import GenesisConfigError, GenesisConfigJsonError, parse_canonical_bytes as parse_genesis  # noqa: E402
+from seedsigner.models.sevenf.devfund_config import DevFundConfigError, DevFundConfigJsonError, parse_canonical_bytes as parse_devfund  # noqa: E402
 
 
 def _decode_bbqr_images(paths: list[Path]) -> bytes:
@@ -83,7 +84,19 @@ def _identify_and_parse_message(data: bytes) -> tuple[str, bytes]:
     """ Self-validating, same doctrine as every on-device scan handler in
         this codebase: try each known artefact type and trust whichever one
         actually parses, never a file-type claim. Returns (kind, the exact
-        bytes that were signed). """
+        bytes that were signed). The coordinator's JSON files are what the
+        device scans; the signed bytes are rebuilt from their fields, as the
+        device does. Raw canonical bytes are still accepted. """
+    try:
+        f = genesis_config.parse_genesis_config_json(data)
+        return "genesis-config", genesis_config.build_canonical_bytes(f.chain_kind, f.timestamp, f.message, f.consensus)
+    except GenesisConfigJsonError:
+        pass
+    try:
+        f = devfund_config.parse_devfund_config_json(data)
+        return "devfund-config", devfund_config.build_canonical_bytes(f.network, f.recipient, f.effective_block, f.timestamp)
+    except DevFundConfigJsonError:
+        pass
     try:
         parse_genesis(data)
         return "genesis-config", data

@@ -60,14 +60,21 @@ def _round_trip(payload: bytes) -> bytes:
     return got
 
 
-def test_genesis_config_round_trips_and_parses():
+def test_genesis_config_is_coordinator_shaped_json_the_device_accepts():
+    """ The device's genesis scan reads the coordinator's genesis-unsigned.json
+        (parse_genesis_config_json), so the test artifact must be that shape,
+        with prepare-genesis's default consensus values. """
     got = _round_trip(tool.build_genesis_config())
-    genesis_config.parse_canonical_bytes(got)
+    fields = genesis_config.parse_genesis_config_json(got)
+    assert fields.consensus == genesis_config.ConsensusParams(420, 1500, 70000)
 
 
-def test_devfund_config_round_trips_and_parses():
+def test_devfund_config_is_coordinator_shaped_json_the_device_accepts():
+    """ Same for devfund-unsigned.json: version 2, multisig recipient, as
+        prepare-devfund --threshold 6 --vk ... writes it. """
     got = _round_trip(tool.build_devfund_config())
-    devfund_config.parse_canonical_bytes(got)
+    fields = devfund_config.parse_devfund_config_json(got)
+    assert fields.recipient.tag == devfund_config.DevfundRecipient.MULTISIG
 
 
 def test_root_cert_round_trips_and_parses():

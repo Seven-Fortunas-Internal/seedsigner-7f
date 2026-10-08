@@ -43,13 +43,17 @@ from seedsigner.models.encode_qr import BBQrEncoder, CompactSeedQrEncoder  # noq
 from seedsigner.models.settings_definition import SettingsConstants  # noqa: E402
 from seedsigner.models.sevenf.constants import ChainKind  # noqa: E402
 from seedsigner.models.sevenf import cert_request, root_ceremony  # noqa: E402
-from seedsigner.models.sevenf.genesis_config import ConsensusParams  # noqa: E402
 from seedsigner.models.sevenf import genesis_config, devfund_config  # noqa: E402
 
 ROOT_TEST_MNEMONIC = ["abandon"] * 23 + ["art"]
 DEPUTY_TEST_PASSPHRASE = "sevenf-deputy-test"
 CHAIN_KIND = ChainKind.TESTNET
-TEST_DEVFUND_ADDRESS = "t1testdevfundaddressxxxxxxxxxxxxxxxxxxxxxxx"
+# A multisig commitment from the 2026-10-07 end-to-end sandbox run (nine
+# throwaway dev-fund keys, 6-of-9) -- test data, not a real ceremony's.
+TEST_DEVFUND_COMMITMENT = (
+    "11dab78bc023fa02f2d60db1e5deb9e702836ff2b609d30e74b1b808983d361a"
+    "7a83b8583bae657e7aabe3fd3be4f01ca64caea839faa207c7a7da4253a41ddc"
+)
 
 QR_WIDTH = 480
 QR_HEIGHT = 480
@@ -99,23 +103,33 @@ def build_deputy_csr_der(deputy_keys, deputy_seed: Seed) -> bytes:
 
 
 def build_genesis_config() -> bytes:
-    return genesis_config.build_canonical_bytes(
-        CHAIN_KIND,
-        int(time.time()),
-        "7F testnet genesis -- hardware test artifact, not a real launch",
-        ConsensusParams(
-            target_block_time_secs=30,
-            difficulty_adjustment_interval_blocks=2016,
-            blocks_per_decay_period=210000,
-        ),
-    )
+    """ genesis-unsigned.json as `sf-root-coordinator prepare-genesis` writes it
+        (7fchain 416f576), default consensus values -- the file a Root scans. """
+    return json.dumps({
+        "version": genesis_config.SCHEMA_VERSION,
+        "chain_kind": CHAIN_KIND.name.lower(),
+        "timestamp": int(time.time()),
+        "message": "7F testnet genesis -- hardware test artifact, not a real launch",
+        "derivation_scheme": genesis_config.DERIVATION_SCHEME_V1,
+        "consensus": {
+            "target_block_time_secs": 420,
+            "difficulty_adjustment_interval_blocks": 1500,
+            "blocks_per_decay_period": 70000,
+        },
+        "signatures": [],
+    }, indent=2).encode()
 
 
 def build_devfund_config() -> bytes:
-    recipient = devfund_config.DevfundRecipient(devfund_config.DevfundRecipient.ADDRESS, TEST_DEVFUND_ADDRESS)
-    return devfund_config.build_canonical_bytes(
-        CHAIN_KIND, recipient, 100, int(time.time()),
-    )
+    """ devfund-unsigned.json as `prepare-devfund --threshold 6 --vk ...` writes it. """
+    return json.dumps({
+        "version": devfund_config.DEVFUND_SCHEMA_VERSION,
+        "network": CHAIN_KIND.name.lower(),
+        "recipient": {"kind": "multisig", "commitment": TEST_DEVFUND_COMMITMENT},
+        "effective_block": 0,
+        "timestamp": int(time.time()),
+        "signatures": [],
+    }, indent=2).encode()
 
 
 def render_seed_qr(name: str, mnemonic: list[str], out_dir: Path) -> Path:
@@ -223,7 +237,8 @@ def main():
         "deputy_test_mnemonic": " ".join(ROOT_TEST_MNEMONIC) + f" (passphrase: {DEPUTY_TEST_PASSPHRASE})",
         "root_ca_address": root_keys.root_ca.address,
         "root_ca_public_key_hex": root_keys.root_ca.public_key.hex(),
-        "devfund_address_derived_from_root_seed": root_keys.devfund.address,
+        # The devfund-config is signed with the ROOT key (sf-wallet-gov
+        # sign-devfund), so its confirm screen shows root_ca_address above.
         "deputy_public_key_hex": deputy_keys.root_ca.public_key.hex(),
         "artifacts": {},
     }

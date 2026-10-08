@@ -1687,11 +1687,18 @@ class TestSevenFCertRequestReviewFieldView(FlowTest):
 
 
 
+def _sample_devfund_json() -> bytes:
+    """ The coordinator's real devfund-unsigned.json (7fchain 416f576). """
+    from test_sevenf_devfund_config import REAL_DEVFUND_UNSIGNED_JSON
+    return REAL_DEVFUND_UNSIGNED_JSON
+
+
 def _sample_devfund_canonical_bytes() -> bytes:
-    from seedsigner.models.sevenf.devfund_config import DevfundRecipient
+    """ The bytes the device signs for _sample_devfund_json(). """
     from seedsigner.models.sevenf.devfund_config import build_canonical_bytes as build_devfund_canonical_bytes
-    recipient = DevfundRecipient(DevfundRecipient.ADDRESS, "t1devfundexampleaddress")
-    return build_devfund_canonical_bytes(ChainKind.TESTNET, recipient, 12_345, 1_790_555_198)
+    from seedsigner.models.sevenf.devfund_config import parse_devfund_config_json
+    f = parse_devfund_config_json(_sample_devfund_json())
+    return build_devfund_canonical_bytes(f.network, f.recipient, f.effective_block, f.timestamp)
 
 
 class TestSevenFDevFundConfigSigningFlow(FlowTest):
@@ -1750,7 +1757,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             with the SAME key as Root, confirmed against 7fchain's real
             sf-root.rs. """
         seed = self.seed_fixture()
-        canonical_bytes = _sample_devfund_canonical_bytes()
+        devfund_json = _sample_devfund_json()
         keys = derive_root_ceremony_keys(seed.seed_bytes, ChainKind.TESTNET)
 
         captured = {}
@@ -1764,7 +1771,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
                 FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_SCAN_DEVFUND_CONFIG),
                 FlowStep(
                     sevenf_views.SevenFScanDevFundConfigView,
-                    before_run=_load_genesis_config_into_decoder(canonical_bytes),
+                    before_run=_load_genesis_config_into_decoder(devfund_json),
                     screen_return_value=0,
                 ),
                 FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0),  # Chain
@@ -1809,14 +1816,13 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         assert len(artifact.signature) == len(expected_sig) == 3309
 
 
-    def test_confirm_sign_screen_labels_the_devfund_key_not_root_ca(self):
-        """ Regression test for 7f-review-devfund-confirm-screen-wrong-label
-            (found by the full-project adversarial review's UI/UX
-            dimension, 2026-10-03): the confirm screen used to hardcode
-            "signing as Root CA for" even when signing with the devfund key
-            -- the one screen the hardware walkthrough singles out as the
-            flagship wrong-key check (Step 6), undermined by its own label
-            contradicting what it was checking for. """
+    def test_confirm_sign_screen_labels_the_root_key(self):
+        """ The devfund-config is signed with the ROOT key (sf-wallet-gov
+            sign-devfund: load_signer(Role::Root, ...); runbook Step 6 "signed
+            with your Root key too"). Since 7fchain 89d3d39 a separate dev-fund
+            key really exists, so the old "devfund key" label (from
+            7f-review-devfund-confirm-screen-wrong-label, 2026-10-03, when the
+            two were the same key) now names the wrong key. """
         from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
 
         seed = self.seed_fixture()
@@ -1834,7 +1840,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             mp.setattr(view, "run_screen", fake_run_screen)
             view.run()
 
-        assert captured["signing_role_label"] == "devfund key"
+        assert captured["signing_role_label"] == "Root key"
 
 
     def test_scan_rejects_a_payload_that_isnt_valid_devfund_config(self):
@@ -1853,6 +1859,72 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             ],
             initial_destination_view_args=dict(seed=seed),
         )
+
+
+    def test_scan_signs_exactly_the_bytes_sf_wallet_gov_signs(self):
+        """ The real coordinator JSON goes in; the tbs handed to the confirm
+            view hashes to the canonical digest sf-wallet-gov sign-devfund
+            printed for the same file. """
+        import hashlib
+        from test_sevenf_devfund_config import REAL_DEVFUND_DIGEST
+
+        seed = self.seed_fixture()
+        view = sevenf_views.SevenFScanDevFundConfigView(seed=seed)
+        _load_genesis_config_into_decoder(_sample_devfund_json())(view)
+        destination = view._handle_complete_scan()
+
+        assert destination.View_cls == sevenf_views.SevenFCertRequestReviewFieldView
+        args = destination.view_args["confirmed_view_args"]
+        assert args["chain_kind"] == ChainKind.TESTNET
+        assert hashlib.sha256(args["tbs_bytes"]).hexdigest()[:32] == REAL_DEVFUND_DIGEST
+
+
+    def test_scan_refuses_if_the_signed_bytes_dont_parse_back_to_the_reviewed_fields(self):
+        """ As in the genesis path (plugin._canonical_bytes_from_json): the
+            fields shown are the ones the Rust parser reads back out of the
+            exact bytes to be signed; any disagreement is refused. """
+        from seedsigner.models.sevenf import devfund_config
+        seed = self.seed_fixture()
+        view = sevenf_views.SevenFScanDevFundConfigView(seed=seed)
+        _load_genesis_config_into_decoder(_sample_devfund_json())(view)
+        real = devfund_config.parse_canonical_bytes
+
+        def tampered(data, *a, **kw):
+            f = real(data, *a, **kw)
+            return devfund_config.DevFundConfigFields(f.network, f.recipient, f.effective_block + 1, f.timestamp)
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(devfund_config, "parse_canonical_bytes", tampered)
+            destination = view._handle_complete_scan()
+        assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
+
+
+    def test_scan_refuses_raw_canonical_bytes(self):
+        """ Raw canonical bytes are not what the coordinator sends -- refused,
+            not guessed at. """
+        seed = self.seed_fixture()
+        view = sevenf_views.SevenFScanDevFundConfigView(seed=seed)
+        _load_genesis_config_into_decoder(_sample_devfund_canonical_bytes())(view)
+        destination = view._handle_complete_scan()
+        assert destination.View_cls == sevenf_views.SevenFUnsupportedArtefactView
+
+
+    def test_signed_screen_says_root_key(self):
+        from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
+        seed = self.seed_fixture()
+        pk, sig = sign_with_devfund(seed.seed_bytes, ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True)
+        view = sevenf_views.SevenFDevFundConfigSignedView(artifact=sevenf_views.SevenFSignedArtifact(public_key=pk, signature=sig))
+        captured = {}
+
+        def fake_run_screen(screen_cls, **kwargs):
+            captured.update(kwargs)
+            return 0
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+        assert "Root key" in captured["text"]
+        assert "devfund key" not in captured["text"]
 
 
     def test_back_button_on_confirm_sign_screen_returns_to_back_stack_without_signing(self):
