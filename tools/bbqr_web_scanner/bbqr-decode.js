@@ -29,11 +29,12 @@ function fromBase36Pair(pair) {
 // hex string's own UTF-8 bytes), truncated to the first 20 bytes, hex-encoded
 // (40 chars). Byte-for-byte port of 7fchain's x509::key_id() (RFC 7093
 // method 1) / review_format.ski() (this device's own Python port): the id
-// sf-wallet-gov prints and names every governance file by (7fchain ce04ae9). Uses the Web Crypto API (crypto.subtle),
+// sf-wallet-gov prints and names every governance file by (7fchain ce04ae9).
+// Uses the Web Crypto API (crypto.subtle),
 // present natively in both browsers (secure context -- same requirement
 // this page's camera access already has) and Node 19+, so no new
 // dependency. Returns null for input that isn't well-formed hex.
-async function ski(hexText) {
+async function sha256OfHex(hexText) {
   const clean = String(hexText).trim().toLowerCase();
   if (!/^[0-9a-f]+$/.test(clean) || clean.length % 2 !== 0) return null;
   const bytes = new Uint8Array(clean.length / 2);
@@ -41,9 +42,30 @@ async function ski(hexText) {
     bytes[i] = parseInt(clean.substr(i * 2, 2), 16);
   }
   const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest).slice(0, 20))
+  return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+async function ski(hexText) {
+  const digest = await sha256OfHex(hexText);
+  return digest === null ? null : digest.slice(0, 40);  // 20 bytes
+}
+
+// pin(): the full SHA-256 of the raw key, 64 hex -- 7fchain's x509::vk_pin(),
+// the "root pin" a federation member reports over a second channel
+// (ceremony-federation-member.md Step 4). The ski is its first 40 hex.
+async function pin(hexText) {
+  return sha256OfHex(hexText);
+}
+
+// vkBundle(): everything a member hands the coordinator for one key, in one
+// paste, labelled the way sf-wallet-gov prints it. null for non-hex input.
+async function vkBundle(hexText) {
+  const digest = await sha256OfHex(hexText);
+  if (digest === null) return null;
+  const id = digest.slice(0, 40);
+  return `subject key id: ${id}\npin: ${digest}\nfile: ${id}.vk\nvk: ${String(hexText).trim().toLowerCase()}\n`;
 }
 
 // RFC 4648 base32 decode, matching Python's base64.b32decode (uppercase
@@ -163,6 +185,6 @@ class BBQrSession {
   }
 }
 
-return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski };
+return { fromBase36Pair, base32Decode, hexDecode, concatBytes, reconstructPayload, BBQrSession, ski, pin, vkBundle };
 
 });

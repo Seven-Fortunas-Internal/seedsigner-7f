@@ -52,13 +52,14 @@
   <button id="torch" class="secondary" hidden>Torch: off</button>
   <button id="copy" class="secondary" hidden>Copy result</button>
   <button id="copyVk" class="secondary" hidden>Copy VK</button>
+  <button id="copyAll" class="secondary" hidden>Copy all</button>
   <button id="copyId" class="secondary" hidden>Copy ID</button>
 </div>
 <div id="result"></div>
 
 <script src="jsQR.min.js"></script>
 <script src="pako.min.js"></script>
-<script src="bbqr-decode.js?v=20261007b"></script>
+<script src="bbqr-decode.js?v=20261007c"></script>
 <script>
 const session = new BBQrDecode.BBQrSession();
 const statusEl = document.getElementById("status");
@@ -70,6 +71,7 @@ const resultEl = document.getElementById("result");
 const copyBtn = document.getElementById("copy");
 const copyVkBtn = document.getElementById("copyVk");
 const copyIdBtn = document.getElementById("copyId");
+const copyAllBtn = document.getElementById("copyAll");
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
 const capture = document.getElementById("capture");
@@ -88,6 +90,7 @@ let detectionTimestamps = []; // ms timestamps of ticks where jsQR found any cod
 let lastResult = null; // { index, isNew, at }
 let lastVkText = null;
 let lastIdText = null;
+let lastBundleText = null;
 
 function recordDetection(found, now) {
   if (found) detectionTimestamps.push(now);
@@ -173,12 +176,13 @@ function setStatus(text, cls) {
 // views/sevenf_views/_root_cert.py and _genesis.py are the only two 'U'
 // export sites, both vk hex) -- gate on that exact shape so a decoded value
 // that happens to also be plain hex text, but isn't a vk, doesn't get a
-// meaningless fingerprint shown next to it.
+// meaningless subject key id / pin shown next to it.
 const VK_HEX_LEN = 1952 * 2;
 
 async function renderResult(bytes) {
   let text;
-  let fingerprint = null;
+  let vkInfo = null;    // {id, pin, bundle} for a well-formed vk
+  let vkError = null;   // why vkInfo couldn't be computed
   if (session.fileType === "J") {
     try {
       const obj = JSON.parse(new TextDecoder().decode(bytes));
@@ -198,27 +202,39 @@ async function renderResult(bytes) {
       // resultEl.textContent was ever set, with no visible error at all --
       // the scan looked complete but nothing displayed.
       try {
-        fingerprint = await BBQrDecode.ski(text);
+        const [id, pinHex, bundle] = await Promise.all([
+          BBQrDecode.ski(text), BBQrDecode.pin(text), BBQrDecode.vkBundle(text),
+        ]);
+        if (id && pinHex && bundle) vkInfo = { id, pin: pinHex, bundle };
       } catch (e) {
-        console.warn("subject key id computation failed:", e.message);
-        fingerprint = `(unavailable: ${e.message} -- try a hard refresh)`;
+        console.warn("subject key id / pin computation failed:", e.message);
+        vkError = `(subject key id and pin unavailable: ${e.message} -- try a hard refresh)`;
       }
     }
   } else {
     text = `file_type=${session.fileType}, ${bytes.length} bytes\n\nhex:\n${bytesToHex(bytes)}`;
   }
-  resultEl.textContent = fingerprint ? `Subject key id: ${fingerprint}\n\n${text}` : text;
+  if (vkInfo) {
+    resultEl.textContent = `Subject key id: ${vkInfo.id}\nPin: ${vkInfo.pin}\nFile: ${vkInfo.id}.vk\n\n${text}`;
+  } else {
+    resultEl.textContent = vkError ? `${vkError}\n\n${text}` : text;
+  }
   setStatus(`Complete -- ${bytes.length} bytes decoded.`, "ok");
 
-  // A vk result has two genuinely separate things worth copying on their
-  // own -- the full 3904-char hex to send/import somewhere, and the short
-  // 40-char id to read aloud or paste into a message confirming a match --
-  // so it gets its own pair of buttons instead of the generic "copy
-  // everything" one, which would otherwise copy both concatenated together.
-  if (fingerprint) {
-    lastVkText = text;
-    lastIdText = fingerprint;
+  // A vk result gets its own buttons: "Copy all" is everything a member
+  // hands the coordinator for one key (ski, pin, file name, vk -- the
+  // labels sf-wallet-gov prints), "Copy VK" is the bare hex for the .vk file,
+  // "Copy ID" the 40-char ski to read aloud. Shown only when the ids were
+  // actually computed, so no button can copy an error message.
+  if (vkInfo) {
+    // Exactly what sf-wallet-gov writes to a .vk file: lowercase hex plus a
+    // trailing newline (main.rs: so `cat *.vk` can't join two keys).
+    lastVkText = `${text.trim().toLowerCase()}\n`;
+    lastIdText = vkInfo.id;
+    lastBundleText = vkInfo.bundle;
     copyBtn.hidden = true;
+    copyAllBtn.hidden = false;
+    copyAllBtn.textContent = "Copy all";
     copyVkBtn.hidden = false;
     copyVkBtn.textContent = "Copy VK";
     copyIdBtn.hidden = false;
@@ -226,6 +242,7 @@ async function renderResult(bytes) {
   } else {
     copyBtn.hidden = false;
     copyBtn.textContent = "Copy result";
+    copyAllBtn.hidden = true;
     copyVkBtn.hidden = true;
     copyIdBtn.hidden = true;
   }
@@ -263,8 +280,10 @@ document.getElementById("reset").addEventListener("click", () => {
   copyBtn.hidden = true;
   copyVkBtn.hidden = true;
   copyIdBtn.hidden = true;
+  copyAllBtn.hidden = true;
   lastVkText = null;
   lastIdText = null;
+  lastBundleText = null;
 });
 
 // For a long hex value (e.g. a 1952-byte ML-DSA-65 verification key, 3904 hex
@@ -274,8 +293,8 @@ document.getElementById("reset").addEventListener("click", () => {
 // (HTTPS or localhost), same requirement this page's camera access already
 // has (see README.md) -- no new deployment constraint.
 //
-// Shared by all three copy buttons (generic "copy everything", and the vk
-// result's separate "copy just the vk" / "copy just the id") -- getText is
+// Shared by every copy button (generic "copy result", and the vk result's
+// "copy all" / "copy just the vk" / "copy just the id") -- getText is
 // called at click time, not bind time, so it always reads whatever the most
 // recent scan produced rather than a stale closed-over value.
 function wireCopyButton(btn, label, getText) {
@@ -294,6 +313,7 @@ function wireCopyButton(btn, label, getText) {
 wireCopyButton(copyBtn, "Copy result", () => resultEl.textContent);
 wireCopyButton(copyVkBtn, "Copy VK", () => lastVkText);
 wireCopyButton(copyIdBtn, "Copy ID", () => lastIdText);
+wireCopyButton(copyAllBtn, "Copy all", () => lastBundleText);
 
 // Continuous autofocus and torch are both device-gated (iPhones and most
 // laptop webcams expose neither) -- every call here is guarded by a real
