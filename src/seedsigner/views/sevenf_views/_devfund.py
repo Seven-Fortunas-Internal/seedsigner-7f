@@ -123,12 +123,14 @@ class SevenFDevFundReviewStartView(View):
 
 
     def run(self):
-        # sf-wallet-gov validate_devfund: already signed by this Root key.
+        # sf-wallet-gov validate_devfund: already signed by this Root key. The
+        # refusal replaces this screenless view (see the genesis review start).
         public_key = root_ceremony.derive_root_ceremony_keys(
             root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).root_ca.public_key
         if genesis_config.already_signed_by(self.signer_vks, public_key):
             return Destination(SevenFAlreadySignedView, view_args=dict(
-                what=_("dev-fund definition"), subject_key_id=subject_key_id_with_index(public_key, self.key_index)))
+                what=_("dev-fund definition"), subject_key_id=subject_key_id_with_index(public_key, self.key_index)),
+                skip_current_view=True)
         return Destination(
             SevenFCertRequestReviewFieldView,
             view_args=dict(

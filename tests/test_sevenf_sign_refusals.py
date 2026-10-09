@@ -183,3 +183,79 @@ def test_the_already_signed_screen_says_nothing_to_do():
         destination = view.run()
     assert "already signed" in captured["text"] and "Nothing to do" in captured["text"]
     assert destination.View_cls is BackStackView
+
+
+# --- views: leaving a refusal (execution-stage review 2026-10-08) -------------------
+# Through the Controller's real back stack, from the seed menu: a refusal's OK
+# (or "Don't sign") must lead back to the seed menu. It used to land on the
+# review-start redirect, which showed the same refusal again, forever; on a
+# non-default consensus the only way out was to sign.
+
+from unittest.mock import MagicMock
+
+from base import FlowStep
+from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
+from seedsigner.views import seed_views
+from seedsigner.views.view import MainMenuView
+
+
+class TestLeavingARefusal(FlowTest):
+    def setup_method(self):
+        super().setup_method()
+        self.controller.active_chain_id = "sevenf"
+        self.seed = Seed(ABANDON_ART)
+        self.controller.storage.seeds.append(self.seed)
+
+    def _scan_steps(self, payload: bytes, menu_option, scan_view):
+        def fake_decoder(view):
+            decoder = MagicMock(is_complete=True, is_sevenf_bbqr=True)
+            decoder.get_sevenf_bbqr_data.return_value = payload
+            view.decoder = decoder
+        # From the main menu, so the seed menu is on the back stack (the test
+        # harness never pushes the sequence's first view).
+        return [
+            FlowStep(MainMenuView, button_data_selection=MainMenuView.SEEDS),
+            FlowStep(seed_views.SeedsMenuView, screen_return_value=0),
+            FlowStep(seed_views.SeedOptionsView, button_data_selection=menu_option),
+            FlowStep(scan_view, before_run=fake_decoder, screen_return_value=0),
+            FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),
+        ]
+
+    def _genesis_steps(self, payload: bytes):
+        return self._scan_steps(payload, seed_views.SeedOptionsView.SEVENF_SCAN_GENESIS_CONFIG,
+                                sevenf_views.SevenFScanGenesisConfigView) + [
+            FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True)]
+
+    def test_already_signed_ok_returns_to_the_seed_menu(self):
+        self.run_sequence(self._genesis_steps(_genesis((_root_vk_hex(),))) + [
+            FlowStep(sevenf_views.SevenFAlreadySignedView, screen_return_value=0),
+            FlowStep(seed_views.SeedOptionsView),
+        ]
+        )
+
+    def test_dont_sign_returns_to_the_seed_menu(self):
+        odd = _genesis(consensus={**DEFAULTS, "blocks_per_decay_period": 5})
+        self.run_sequence(self._genesis_steps(odd) + [
+            FlowStep(sevenf_views.SevenFNonDefaultConsensusView, screen_return_value=0),   # Don't sign
+            FlowStep(seed_views.SeedOptionsView),
+        ]
+        )
+
+    def test_back_from_the_review_after_sign_anyway_returns_to_the_seed_menu(self):
+        odd = _genesis(consensus={**DEFAULTS, "blocks_per_decay_period": 5})
+        self.run_sequence(self._genesis_steps(odd) + [
+            FlowStep(sevenf_views.SevenFNonDefaultConsensusView, screen_return_value=1),   # Sign anyway
+            FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True),
+            FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=RET_CODE__BACK_BUTTON),
+            FlowStep(seed_views.SeedOptionsView),
+        ]
+        )
+
+    def test_devfund_already_signed_ok_returns_to_the_seed_menu(self):
+        self.run_sequence(self._scan_steps(_devfund((_root_vk_hex(),)), seed_views.SeedOptionsView.SEVENF_SCAN_DEVFUND_CONFIG,
+                                           sevenf_views.SevenFScanDevFundConfigView) + [
+            FlowStep(sevenf_views.SevenFDevFundReviewStartView, is_redirect=True),
+            FlowStep(sevenf_views.SevenFAlreadySignedView, screen_return_value=0),
+            FlowStep(seed_views.SeedOptionsView),
+        ]
+        )

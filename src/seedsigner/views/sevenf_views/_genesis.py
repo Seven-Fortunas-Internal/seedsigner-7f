@@ -188,19 +188,23 @@ class SevenFGenesisReviewStartView(View):
     def run(self):
         # sf-wallet-gov validate_genesis, in its order (the parser has already
         # refused a wrong version, scheme or timestamp): already signed by this
-        # key, then non-default consensus unless explicitly accepted.
+        # key, then non-default consensus unless explicitly accepted. This view
+        # has no screen, so a refusal replaces it: Back from the refusal must
+        # not land here and show the same refusal again.
         state = self.state
         public_key = root_ceremony.derive_root_ceremony_keys(
             root_ceremony.seed_for_7f(state.seed), state.chain_kind, index=state.key_index).root_ca.public_key
         if genesis_config.already_signed_by(self.signer_vks, public_key):
             return Destination(SevenFAlreadySignedView, view_args=dict(
-                what=_("genesis definition"), subject_key_id=subject_key_id_with_index(public_key, state.key_index)))
+                what=_("genesis definition"), subject_key_id=subject_key_id_with_index(public_key, state.key_index)),
+                skip_current_view=True)
         nondefault = genesis_config.nondefault_consensus(self.fields)
         if nondefault and not self.accept_nondefault_consensus:
             return Destination(SevenFNonDefaultConsensusView, view_args=dict(
                 nondefault=nondefault,
                 review_start_args=dict(seed=state.seed, canonical_bytes=state.canonical_bytes,
-                                       key_index=state.key_index, signer_vks=self.signer_vks)))
+                                       key_index=state.key_index, signer_vks=self.signer_vks)),
+                skip_current_view=True)
         return Destination(
             SevenFGenesisReviewFieldView,
             view_args=dict(state=self.state, page_num=0),

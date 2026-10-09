@@ -110,14 +110,16 @@ class SevenFBuildRootSelfCertView(View):
         not_before = ceremony_now(self.controller)
         if not_before is None:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-                reason=_("The date and time haven't been confirmed; start again from the menu.")))
+                reason=_("The date and time haven't been confirmed; start again from the menu.")),
+                skip_current_view=True)
         days = cert_request.ROOT_DAYS
 
         try:
             tbs_bytes = cert_request.build_root_tbs(subject_vk, chain_kind, not_before, days, serial)
         except CertRequestError as e:
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
-                reason=_("Couldn't build the certificate body: {}").format(e)))
+                reason=_("Couldn't build the certificate body: {}").format(e)),
+                skip_current_view=True)
 
         # DAY = 86_400 seconds, matching cert_request.rs's own constant --
         # no clamping applies to a self-signed Root certificate (unlike

@@ -296,3 +296,26 @@ def test_signature_verifies_against_derived_pubkey():
     pk, sig = mldsa.derive_and_sign(FIXED_SEED, "root/testnet/0/ml-dsa/v1", message)
     assert len(pk) == ML_DSA_PK_LEN
     assert len(sig) == ML_DSA_SIG_LEN
+
+
+# --- the key comes from the path as written (execution-stage review 2026-10-08) -----
+# 7fchain's phrase_file::keypair_at runs HKDF over the caller's own string, and
+# its path rules accept leading zeros, so "007" and "7" are two different keys
+# upstream. These vk prefixes come from 7fchain 06a47ba's keypair_at itself
+# (a scratch crate linking sf-keytree), for "abandon" x 23 + "art", no
+# passphrase.
+UPSTREAM_VK_PREFIX = {
+    "root/testnet/7/ml-dsa/v1": "88db2dac0d4e942851ba4b4d20519dd5",
+    "root/testnet/007/ml-dsa/v1": "aae7be47e9ad2fe757bbf15e885bb4f9",
+    "root/testnet/7/ml-dsa/v01": "a2fdd45b34ad0819b47f4cae90d813d3",
+    "root/testnet/0/ml-dsa/v1": "cf7586cee76af9b1447b0fb77432c06e",
+}
+
+
+@pytest.mark.parametrize("path", sorted(UPSTREAM_VK_PREFIX))
+def test_the_key_is_7fchains_for_the_path_as_written(path):
+    from seedsigner.models.seed import Seed
+    from seedsigner.models.sevenf.root_ceremony import seed_for_7f
+    master = seed_for_7f(Seed(["abandon"] * 23 + ["art"])).seed_bytes
+    public_key, _ = mldsa.derive_pubkey(master, path)
+    assert public_key.hex()[:32] == UPSTREAM_VK_PREFIX[path]
