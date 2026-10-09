@@ -34,7 +34,7 @@
 """
 import ctypes
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
@@ -97,6 +97,9 @@ class GenesisConfigFields:
     timestamp: int
     message: str
     consensus: ConsensusParams
+    # The signer_vk of each signatures[] entry ("" for a keyless record), from
+    # the JSON only: never signed, so not compared with the canonical parse.
+    signer_vks: tuple[str, ...] = field(default=(), compare=False)
 
 
 # Fixed overhead per firmware/mldsa7f/src/ffi.rs's GENESIS_FIXED_OVERHEAD
@@ -328,7 +331,33 @@ def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
         timestamp=timestamp,
         message=message,
         consensus=consensus,
+        signer_vks=tuple(entry["signer_vk"] for entry in signatures_obj),
     )
+
+
+def already_signed_by(signer_vks: tuple[str, ...], public_key: bytes) -> bool:
+    """ sf-wallet-gov's "this Root has already signed this definition. Nothing
+        to do" (sign_ops.rs validate_genesis/validate_devfund): a non-empty
+        signer_vk equal to this key's, ignoring hex case. Another Root's
+        signature, or a keyless record, never blocks. """
+    mine = public_key.hex()
+    return any(vk and vk.lower() == mine for vk in signer_vks)
+
+
+_CONSENSUS_LABELS = (
+    ("Target block time", "target_block_time_secs"),
+    ("Difficulty adjustment interval", "difficulty_adjustment_interval_blocks"),
+    ("Blocks per decay period", "blocks_per_decay_period"),
+)
+
+
+def nondefault_consensus(fields: GenesisConfigFields) -> list[tuple[str, int, int]]:
+    """ (label, value, default) for each consensus parameter that is not this
+        network's default; sf-wallet-gov sign-genesis refuses any of them
+        without --accept-nondefault-consensus (sign_ops.rs validate_genesis). """
+    defaults = CONSENSUS_DEFAULTS[fields.chain_kind]
+    return [(label, getattr(fields.consensus, attr), getattr(defaults, attr))
+            for label, attr in _CONSENSUS_LABELS if getattr(fields.consensus, attr) != getattr(defaults, attr)]
 
 
 def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
@@ -362,7 +391,8 @@ def genesis_config_review_lines(fields: GenesisConfigFields) -> list[str]:
     return [f"{label}: {value}" for label, value in _labeled_values(fields)]
 
 
-def review_fields(fields: GenesisConfigFields, canonical_bytes: bytes | None = None) -> list[ReviewField]:
+def review_fields(fields: GenesisConfigFields, canonical_bytes: bytes | None = None,
+                  signatures_so_far: int | None = None) -> list[ReviewField]:
     """ The no-blind-signing field list for the on-device review screen, one
         ReviewField per field carried in the signed canonical bytes
         (sf-core::GenesisConfig). derivation_scheme is included even though
@@ -392,6 +422,8 @@ def review_fields(fields: GenesisConfigFields, canonical_bytes: bytes | None = N
             ))
         else:
             out.append(ReviewField(label=label, value=value))
+    if signatures_so_far is not None:
+        out.append(ReviewField(label="Signatures so far", value=str(signatures_so_far)))   # sf-wallet-gov's review prints it
     # The digest of the exact bytes being signed; callers pass them. Rebuilt
     # from the fields only when not given (tests, tooling).
     canonical = canonical_bytes if canonical_bytes is not None else build_canonical_bytes(fields.chain_kind, fields.timestamp, fields.message, fields.consensus)

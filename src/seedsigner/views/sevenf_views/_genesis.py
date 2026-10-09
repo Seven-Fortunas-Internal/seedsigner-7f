@@ -43,7 +43,7 @@ from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
 from ._common import (
-    refuse_on_unexpected_error, SevenFUnsupportedArtefactView, _review_pages,
+    refuse_on_unexpected_error, SevenFAlreadySignedView, SevenFUnsupportedArtefactView, _review_pages,
     key_index_review_field, refuse_unless_signed_by_shown_key, subject_key_id_with_index,
 )
 from ._key_index import SevenFSelectKeyIndexView
@@ -140,7 +140,7 @@ class SevenFScanGenesisConfigView(ScanView):
             view_args=dict(
                 role="root",
                 next_destination=SevenFGenesisReviewStartView,
-                next_view_args=dict(seed=self.seed, canonical_bytes=canonical_bytes),
+                next_view_args=dict(seed=self.seed, canonical_bytes=canonical_bytes, signer_vks=fields.signer_vks),
             ),
             skip_current_view=True,
         )
@@ -162,9 +162,13 @@ class SevenFGenesisReviewStartView(View):
         chain_kind as an independent argument; caught and fixed while
         wiring the real scan/export flow, before any scan entry point ever
         shipped a caller that could have supplied a mismatched value. """
-    def __init__(self, seed: Seed, canonical_bytes: bytes, key_index: int):
+    def __init__(self, seed: Seed, canonical_bytes: bytes, key_index: int,
+                 signer_vks: tuple[str, ...] = (), accept_nondefault_consensus: bool = False):
         super().__init__()
         fields = genesis_config.parse_canonical_bytes(canonical_bytes)
+        self.fields = fields
+        self.signer_vks = signer_vks
+        self.accept_nondefault_consensus = accept_nondefault_consensus
         self.state = SevenFGenesisCeremonyState(
             seed=seed,
             chain_kind=fields.chain_kind,
@@ -174,18 +178,65 @@ class SevenFGenesisReviewStartView(View):
             # tests share).
             review_fields=[
                 key_index_review_field(fields.chain_kind, key_index),
-                *genesis_config.review_fields(fields, canonical_bytes=canonical_bytes),
+                *genesis_config.review_fields(fields, canonical_bytes=canonical_bytes,
+                                              signatures_so_far=len(signer_vks)),
             ],
             key_index=key_index,
         )
 
 
     def run(self):
+        # sf-wallet-gov validate_genesis, in its order (the parser has already
+        # refused a wrong version, scheme or timestamp): already signed by this
+        # key, then non-default consensus unless explicitly accepted.
+        state = self.state
+        public_key = root_ceremony.derive_root_ceremony_keys(
+            root_ceremony.seed_for_7f(state.seed), state.chain_kind, index=state.key_index).root_ca.public_key
+        if genesis_config.already_signed_by(self.signer_vks, public_key):
+            return Destination(SevenFAlreadySignedView, view_args=dict(
+                what=_("genesis definition"), subject_key_id=subject_key_id_with_index(public_key, state.key_index)))
+        nondefault = genesis_config.nondefault_consensus(self.fields)
+        if nondefault and not self.accept_nondefault_consensus:
+            return Destination(SevenFNonDefaultConsensusView, view_args=dict(
+                nondefault=nondefault,
+                review_start_args=dict(seed=state.seed, canonical_bytes=state.canonical_bytes,
+                                       key_index=state.key_index, signer_vks=self.signer_vks)))
         return Destination(
             SevenFGenesisReviewFieldView,
             view_args=dict(state=self.state, page_num=0),
             skip_current_view=True,
         )
+
+
+
+class SevenFNonDefaultConsensusView(View):
+    """ sf-wallet-gov sign-genesis refuses a definition whose consensus is not
+        the network's default unless --accept-nondefault-consensus is passed
+        (sign_ops.rs validate_genesis): "a retuned definition is a different
+        chain". The default here is to refuse; signing anyway is a separate,
+        explicit choice, the device's form of that flag. """
+    def __init__(self, nondefault: list, review_start_args: dict):
+        super().__init__()
+        self.nondefault = nondefault
+        self.review_start_args = review_start_args
+
+
+    def run(self):
+        from seedsigner.gui.screens import DireWarningScreen
+        lines = [_("{}: {} (default {})").format(label, value, default) for label, value, default in self.nondefault]
+        selected = self.run_screen(
+            DireWarningScreen,
+            title=_("Genesis"),
+            show_back_button=False,
+            status_headline=_("Not the defaults"),
+            text="\n".join(lines) + "\n" + _("A different tempo is a different chain."),
+            button_data=[ButtonOption("Don't sign"), ButtonOption("Sign anyway (coordinator asked)")],
+        )
+        if selected != 1:
+            return Destination(BackStackView)
+        return Destination(SevenFGenesisReviewStartView,
+                           view_args=dict(**self.review_start_args, accept_nondefault_consensus=True),
+                           skip_current_view=True)
 
 
 

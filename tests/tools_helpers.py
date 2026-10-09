@@ -1,5 +1,29 @@
 """ Shared real 7fchain artifacts for tool tests. """
 
+
+# Minimal DER reader for the test-only certificate checks below.
+def _der_tlv(b: bytes, off: int) -> tuple[int, int, int, int]:
+    """ (tag, tag offset, content start, content end) of the TLV at `off`. """
+    tag, length, p = b[off], b[off + 1], off + 2
+    if length & 0x80:
+        n = length & 0x7F
+        if not 1 <= n <= 3:
+            raise ValueError("unsupported DER length")
+        length = int.from_bytes(b[p:p + n], "big")
+        p += n
+    if p + length > len(b):
+        raise ValueError("truncated DER")
+    return tag, off, p, p + length
+
+
+def _der_children(b: bytes, start: int, end: int) -> list[tuple[int, int, int, int]]:
+    out, off = [], start
+    while off < end:
+        t = _der_tlv(b, off)
+        out.append(t)
+        off = t[3]
+    return out
+
 # `sf-root-coordinator prepare-genesis` output, 7fchain 416f576 (2026-10-07 end-to-end run).
 REAL_GENESIS_JSON = b"""{
   "version": 1,
@@ -24,7 +48,6 @@ def parse_issued_cert(der: bytes):
     from calendar import timegm
     from datetime import datetime
     from types import SimpleNamespace
-    from seedsigner.models.sevenf.cert_request import _der_children, _der_tlv
     from seedsigner.models.sevenf.constants import ChainKind
 
     _, _, s, e = _der_tlv(der, 0)

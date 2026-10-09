@@ -110,6 +110,16 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             key_index=0, seed=seed, canonical_bytes=canonical_bytes,
         )
         destination = start_view.run()
+        # _sample_canonical_bytes() has a non-default difficulty interval
+        # (3500): refused, as sf-wallet-gov refuses it, until the operator
+        # explicitly chooses to sign anyway (--accept-nondefault-consensus).
+        assert destination.View_cls == sevenf_views.SevenFNonDefaultConsensusView
+        consensus_view = sevenf_views.SevenFNonDefaultConsensusView(**destination.view_args)
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(consensus_view, "run_screen", lambda screen_cls, **kw: 1)   # "Sign anyway (coordinator asked)"
+            destination = consensus_view.run()
+        assert destination.view_args["accept_nondefault_consensus"] is True
+        destination = sevenf_views.SevenFGenesisReviewStartView(**destination.view_args).run()
         assert destination.View_cls == sevenf_views.SevenFGenesisReviewFieldView
         assert destination.view_args["page_num"] == 0
         return destination.view_args["state"]
@@ -137,6 +147,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Target block time (5/7)
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Difficulty adj. interval (6/7)
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Blocks per decay period (7/7)
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Signatures so far
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Canonical digest
                 FlowStep(sevenf_views.SevenFConfirmSignView, screen_return_value=0),  # "Sign"
                 FlowStep(sevenf_views.SevenFGenesisSignedView, screen_return_value=0),  # "OK"
@@ -177,6 +188,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),
+                FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Signatures so far
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, screen_return_value=0),  # Canonical digest
                 FlowStep(sevenf_views.SevenFConfirmSignView, screen_return_value=0),
                 FlowStep(sevenf_views.SevenFGenesisSignedView, before_run=capture_before_home, screen_return_value=0),
@@ -1519,6 +1531,8 @@ class TestSevenFScanEntryPoint(FlowTest):
                 ),
                 FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),  # "Index 0 (default)"
                 FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True),
+                FlowStep(sevenf_views.SevenFNonDefaultConsensusView, screen_return_value=1),  # "Sign anyway (coordinator asked)"
+                FlowStep(sevenf_views.SevenFGenesisReviewStartView, is_redirect=True),
                 FlowStep(sevenf_views.SevenFGenesisReviewFieldView, before_run=capture_state, screen_return_value=0),
             ],
             initial_destination_view_args=dict(seed=seed),
@@ -1911,7 +1925,8 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         from seedsigner.models.sevenf import devfund_config
         from seedsigner.views.sevenf_views._common import _review_pages
         # +1: the "Root key" page (index and path) comes first.
-        review_pages = 1 + len(_review_pages(devfund_config.review_fields(devfund_config.parse_devfund_config_json(devfund_json))))
+        parsed = devfund_config.parse_devfund_config_json(devfund_json)
+        review_pages = 1 + len(_review_pages(devfund_config.review_fields(parsed, signatures_so_far=len(parsed.signer_vks))))
         assert review_pages > 7  # Root key + 5 signed fields + digest, the commitment split across pages
 
         captured = {}

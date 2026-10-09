@@ -43,6 +43,7 @@ from ._common import (
     SevenFCertRequestReviewFieldView,
     SevenFConfirmSignRootCertView,
     SevenFNotA7FPhraseView,
+    SevenFAlreadySignedView,
     SevenFRootCertSignedView,
     SevenFSignedCertificate,
     SevenFUnsupportedArtefactView,
@@ -63,6 +64,7 @@ from ._genesis import (
     SevenFGenesisReviewFieldView,
     SevenFGenesisReviewStartView,
     SevenFGenesisSignedView,
+    SevenFNonDefaultConsensusView,
     SevenFScanGenesisConfigView,
 )
 from ._key_index import (

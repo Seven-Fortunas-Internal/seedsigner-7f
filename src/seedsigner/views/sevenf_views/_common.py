@@ -407,3 +407,27 @@ class SevenFNotA7FPhraseView(View):
             button_data=[ButtonOption("OK")],
         )
         return Destination(BackStackView)
+
+
+
+class SevenFAlreadySignedView(View):
+    """ sf-wallet-gov's refusal (sign_ops.rs validate_genesis/validate_devfund):
+        "this Root has already signed this definition. Nothing to do". Shown
+        before the review, once the signing key is known. """
+    def __init__(self, what: str, subject_key_id: str):
+        super().__init__()
+        self.what = what
+        self.subject_key_id = subject_key_id
+
+
+    def run(self):
+        from seedsigner.gui.screens import WarningScreen
+        self.run_screen(
+            WarningScreen,
+            title=_("7F"),
+            show_back_button=False,
+            status_headline=_("Already signed"),
+            text=_("This Root key ({}) has already signed this {}. Nothing to do.").format(self.subject_key_id, self.what),
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(BackStackView)

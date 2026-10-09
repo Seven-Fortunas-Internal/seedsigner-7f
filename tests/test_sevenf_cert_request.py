@@ -1055,19 +1055,6 @@ def test_a_real_sf_wallet_gov_csr_is_still_accepted():
     assert verify_and_parse_csr_der(der).subject_vk
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda d: d[:3],                                  # truncated header
-    lambda d: d[:40],                                 # truncated body
-    lambda d: bytes([0x30, 0x80]) + d[2:],            # indefinite length
-    lambda d: bytes([0x30, 0x84, 0, 0, 0, 1]) + d,    # 4-byte length
-    lambda d: bytes([0x30, 0x00]),                    # empty
-])
-def test_csr_attribute_walk_refuses_malformed_der_without_crashing(mutate):
-    """ _csr_requests_extensions only runs after Rust has verified the CSR,
-        but must still fail with ValueError/IndexError -- never hang or raise
-        anything else -- on hostile DER. """
-    from pathlib import Path
-    from seedsigner.models.sevenf.cert_request import _csr_requests_extensions
-    der = (Path(__file__).parent / "fixtures" / "deputy_csr_requesting_ca_pathlen9.der").read_bytes()
-    with pytest.raises((ValueError, IndexError)):
-        _csr_requests_extensions(mutate(der))
+# The extensionRequest walk is in the library now (cert_request.rs
+# verify_and_parse_csr, sf-ca's issuing-CA policy), with its own tests there
+# (csr_policy_tests); hostile DER is refused by the same Rust parser.

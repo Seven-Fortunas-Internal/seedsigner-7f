@@ -17,7 +17,7 @@
 import ctypes
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
@@ -118,6 +118,9 @@ class DevFundConfigFields:
     recipient: DevfundRecipient
     effective_block: int
     timestamp: int
+    # The signer_vk of each signatures[] entry ("" for a keyless record), from
+    # the JSON only: never signed, so not compared with the canonical parse.
+    signer_vks: tuple[str, ...] = field(default=(), compare=False)
 
 
 # Fixed overhead per firmware/mldsa7f/src/ffi.rs's DEVFUND_FIXED_OVERHEAD
@@ -372,7 +375,8 @@ def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
             raise DevFundConfigJsonError(f"signatures[{i}] must be an object with string signer_vk and sig")
 
     return DevFundConfigFields(
-        network=network, recipient=recipient, effective_block=effective_block, timestamp=timestamp)
+        network=network, recipient=recipient, effective_block=effective_block, timestamp=timestamp,
+        signer_vks=tuple(entry["signer_vk"] for entry in signatures))
 
 
 def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
@@ -405,7 +409,8 @@ def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
     ]
 
 
-def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = None) -> list[ReviewField]:
+def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = None,
+                  signatures_so_far: int | None = None) -> list[ReviewField]:
     """ The no-blind-signing field list for the on-device review screen, one
         ReviewField per field carried in the signed canonical bytes
         (sf-core::DevFundConfig). Reuses models.review.ReviewField, same as
@@ -432,6 +437,8 @@ def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = N
                 out.append(ReviewField(
                     label="Recipient address", value=f"{network}, {layer}, {sig_type}", is_warning=other,
                     warning_detail=f"This address is on {network}, not {fields.network.name.lower()}." if other else None))
+    if signatures_so_far is not None:
+        out.append(ReviewField(label="Signatures so far", value=str(signatures_so_far)))   # sf-wallet-gov's review prints it
     # The digest of the exact bytes being signed; callers pass them. Rebuilt
     # from the fields only when not given (tests, tooling).
     canonical = canonical_bytes if canonical_bytes is not None else build_canonical_bytes(fields.network, fields.recipient, fields.effective_block, fields.timestamp)

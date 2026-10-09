@@ -82,6 +82,9 @@ class ErrCode(IntEnum):
     CERT_PARSE_FAILED = -24
     BAD_RECIPIENT_TAG = -25
     BAD_ADDRESS = -26
+    BAD_PATH = -27
+    SIGNATURE_SELF_CHECK_FAILED = -28
+    CSR_POLICY = -29
 
 
 def err_code_name(code: int) -> str:

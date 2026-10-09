@@ -10,7 +10,7 @@ from gettext import gettext as _
 from seedsigner.helpers.l10n import mark_for_translation as _mft
 from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.models.seed import Seed
-from seedsigner.models.sevenf import devfund_config, root_ceremony
+from seedsigner.models.sevenf import devfund_config, genesis_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.devfund_config import DevFundConfigError, DevFundConfigJsonError
 from seedsigner.views.scan_views import ScanView
@@ -19,7 +19,7 @@ from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 from seedsigner.models.review import ReviewField
 
 from ._common import (
-    refuse_on_unexpected_error, SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView,
+    refuse_on_unexpected_error, SevenFAlreadySignedView, SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView,
     key_index_review_field, refuse_unless_signed_by_shown_key, subject_key_id_with_index,
 )
 from ._key_index import SevenFSelectKeyIndexView
@@ -98,7 +98,9 @@ class SevenFScanDevFundConfigView(ScanView):
                     seed=self.seed,
                     chain_kind=fields.network,
                     canonical_bytes=canonical_bytes,
-                    review_fields=devfund_config.review_fields(fields, canonical_bytes=canonical_bytes),
+                    review_fields=devfund_config.review_fields(fields, canonical_bytes=canonical_bytes,
+                                                               signatures_so_far=len(json_fields.signer_vks)),
+                    signer_vks=json_fields.signer_vks,
                 ),
             ),
             skip_current_view=True,
@@ -110,8 +112,9 @@ class SevenFDevFundReviewStartView(View):
     """ After the Root key index: the review pages, with the signing key
         first (7f-signing-support-key-index-selector). """
     def __init__(self, seed: Seed, chain_kind: ChainKind, canonical_bytes: bytes,
-                 review_fields: list[ReviewField], key_index: int):
+                 review_fields: list[ReviewField], key_index: int, signer_vks: tuple[str, ...] = ()):
         super().__init__()
+        self.signer_vks = signer_vks
         self.seed = seed
         self.chain_kind = chain_kind
         self.canonical_bytes = canonical_bytes
@@ -120,6 +123,12 @@ class SevenFDevFundReviewStartView(View):
 
 
     def run(self):
+        # sf-wallet-gov validate_devfund: already signed by this Root key.
+        public_key = root_ceremony.derive_root_ceremony_keys(
+            root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).root_ca.public_key
+        if genesis_config.already_signed_by(self.signer_vks, public_key):
+            return Destination(SevenFAlreadySignedView, view_args=dict(
+                what=_("dev-fund definition"), subject_key_id=subject_key_id_with_index(public_key, self.key_index)))
         return Destination(
             SevenFCertRequestReviewFieldView,
             view_args=dict(
