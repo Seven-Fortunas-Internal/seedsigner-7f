@@ -35,8 +35,9 @@
     Deputy flow (see the Gate-1 plan's §2-§3 for the full reasoning, and its
     §9 for the adversarial review that shaped it) is: a Root receives (1)
     its OWN real, signed X.509 certificate (never reconstructed -- the one
-    real production path, `sign-deputy --csr`, requires and validates the
-    actual file) and (2) the Deputy's self-signed PKCS#10 CSR (proof of
+    real production path, `sf-wallet-gov sign-deputy-cert` (sign_ops.rs
+    cmd_sign_deputy_cert / validate_deputy_request), requires and validates
+    the actual file) and (2) the Deputy's self-signed PKCS#10 CSR (proof of
     possession, verified on-device -- the first time this device verifies
     rather than only signs). `chain_kind` is operator-supplied (a PKCS#10
     carries no network) and cross-checked against the real certificate's
@@ -49,7 +50,7 @@
     7f-signing-support-root-self-certification-pkcs10-rework): 7fchain
     commit `3bf7bfe` ("four MVP tasks on the Root ceremony", M-38) removed
     the JSON `CertRequest{role:"root"}` wire shape the same way `ea91758`
-    removed the Deputy one. The real current flow (`sf-root sign-root-cert`)
+    removed the Deputy one. The real current flow (`sf-wallet-gov sign-root-cert`)
     has no external input at all: the Root derives its own key, self-signs
     using its own wall-clock time and a fresh CSPRNG serial, and the real
     `issue()` function assembles a COMPLETE certificate in the same call
@@ -542,13 +543,13 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
 #
 # This device never builds a CSR as part of any production signing flow --
 # verify_and_parse_csr_der's own docstring confirms the device only ever
-# VERIFIES one; the real CSR-building happens on 7fchain's own sf-deputy
-# CLI, a different tool entirely. These two functions exist solely so
+# VERIFIES one; the real CSR-building happens on 7fchain's own
+# `sf-wallet-gov create-csr --role deputy`, a different tool entirely. These two functions exist solely so
 # tools/make_sevenf_test_qrs.py can generate a real, self-signed PKCS#10 CSR
 # for hardware testing (closes
 # 7f-signing-support-hardware-test-tooling-pkcs10-staleness) instead of the
 # retired JSON CertRequest{role:"deputy"} shape it used to fake. No view in
-# sevenf_views.py calls either of these.
+# views/sevenf_views/ calls either of these.
 
 def csr_info_der(subject_vk: bytes) -> bytes:
     """ The unsigned body of a PKCS#10 CertificationRequest -- the exact

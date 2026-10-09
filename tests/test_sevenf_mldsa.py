@@ -260,7 +260,7 @@ def test_derive_pubkey_rejects_an_out_of_range_written_address_length(monkeypatc
 def test_derive_and_sign_raises_mldsa_error_on_nonzero_return(monkeypatch):
     """ derive_and_sign's Python signature has no network/layer parameter
         to smuggle an invalid discriminant through (signing doesn't need
-        one -- matches sf-root sign-genesis's own call shape), so there is
+        one -- matches sf-wallet-gov sign_ops.rs sign_checked's own call shape), so there is
         no real-failure path reachable through valid Python-level inputs
         alone. Injects a fake nonzero return at the ctypes-call boundary
         instead, to exercise this function's own error-raising branch

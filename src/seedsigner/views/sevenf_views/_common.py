@@ -122,7 +122,8 @@ class SevenFUnsupportedArtefactView(View):
         e.g. a well-formed CertRequest whose subject_vk doesn't match this
         device's own derived key (the fail-closed refusal an adversarial
         security review required: "This request is for Root X, and this
-        database holds Root Y", mirroring sf-root.rs's own hard refusal).
+        database holds Root Y", mirroring sf-wallet-gov's own hard refusal in
+        sign_ops.rs validate_deputy_request).
         `headline` defaults to the original "Can't Parse This" wording so
         every existing call site is unaffected. """
     def __init__(self, reason: str, headline: str | None = None):

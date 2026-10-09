@@ -77,7 +77,7 @@ class SevenFGenesisCeremonyState:
 
 
 class SevenFScanGenesisConfigView(ScanView):
-    """ Scans the BBQr-encoded genesis-config the coordinator (sf-root)
+    """ Scans the BBQr-encoded genesis-config the coordinator (sf-root-coordinator)
         sends to this signer -- the real entry point into the ceremony.
         Overrides _handle_complete_scan() rather than duplicating ScanView's
         shared scan-screen scaffolding (same pattern as EvmScanSignRequestView,
@@ -90,12 +90,12 @@ class SevenFScanGenesisConfigView(ScanView):
 
         RESOLVED 2026-10-03 (7f-signing-support-genesis-wire-envelope-
         undefined): the scanned payload is the REAL coordinator artifact --
-        `sf-root prepare-genesis`'s JSON file -- not raw canonical bytes.
+        `sf-root-coordinator prepare-genesis`'s JSON file -- not raw canonical bytes.
         This view parses that JSON directly (genesis_config.
         parse_genesis_config_json()) and builds canonical bytes from the
         extracted fields internally; everything downstream
         (SevenFGenesisReviewStartView onward) is unchanged and still
-        operates on, and signs, the exact bytes `sf-root sign-genesis`
+        operates on, and signs, the exact bytes `sf-wallet-gov sign-genesis`
         would. """
     instructions_text = _mft("Scan genesis config")
     invalid_qr_type_message = _mft("Expected a genesis-config QR (BBQr, from the coordinator)")
@@ -422,8 +422,8 @@ class SevenFExportPubkeyQRView(View):
 class SevenFExportSignedConfigQRView(View):
     """ Exports the genesis-config signature as BBQr-encoded JSON -- the
         second export artifact. Matches sf-core::genesis_config::RootSig's
-        real, current on-wire shape exactly (genesis_config.build_root_sig_json()'s
-        own docstring has the field-by-field confirmation): only the
+        real, current on-wire shape exactly, as sf-wallet-gov sign-genesis
+        writes it (export_envelope.signature_export()): only the
         signature leaves the device per ceremony (D11), not the config
         again -- the coordinator that produced the unsigned config already
         has every other field. """

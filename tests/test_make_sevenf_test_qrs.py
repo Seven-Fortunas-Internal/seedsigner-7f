@@ -72,7 +72,8 @@ def test_genesis_config_is_coordinator_shaped_json_the_device_accepts():
 
 def test_devfund_config_is_coordinator_shaped_json_the_device_accepts():
     """ Same for devfund-unsigned.json: version 2, multisig recipient, as
-        prepare-devfund --threshold 6 --vk ... writes it. """
+        sf-root-coordinator prepare-devfund writes it from the nine keys in
+        governance/devfund/inbox. """
     got = _round_trip(tool.build_devfund_config())
     fields = devfund_config.parse_devfund_config_json(got)
     assert fields.recipient.tag == devfund_config.DevfundRecipient.MULTISIG

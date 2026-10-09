@@ -9,8 +9,9 @@ the same mldsa7f ctypes bridge and canonical-bytes builders
 (genesis_config.py, devfund_config.py, cert_request.py) and the same
 BBQrEncoder (encode_qr.py) the device itself would use to export an
 artifact -- so nothing about the wire format is guessed (D12). The only
-thing "fake" about these artifacts is that a human, not a real sf-root/
-sf-deputy coordinator, is standing in on the other end of the airgap.
+thing "fake" about these artifacts is that a human, not a real
+sf-root-coordinator / `sf-wallet-gov create-csr` run, is standing in on the
+other end of the airgap.
 
 See docs/7f-integration/root-ceremony-hardware-walkthrough.md for how to
 point a device's camera at the output.
@@ -92,7 +93,8 @@ def build_deputy_csr_der(deputy_keys, deputy_seed: Seed) -> bytes:
         7f-signing-support-hardware-test-tooling-pkcs10-staleness (no
         production device code builds a CSR -- verify_and_parse_csr_der's
         own docstring confirms the device only ever verifies one; the real
-        one comes from 7fchain's own sf-deputy CLI). Signed with the
+        one comes from 7fchain's own `sf-wallet-gov create-csr --role
+        deputy`). Signed with the
         Deputy's own derived key via root_ceremony.sign_with_root_ca -- a
         CSR is always self-signed (proof of possession), and this tool
         already reuses that same function/derivation path to derive the
@@ -122,7 +124,9 @@ def build_genesis_config() -> bytes:
 
 
 def build_devfund_config() -> bytes:
-    """ devfund-unsigned.json as `prepare-devfund --threshold 6 --vk ...` writes it. """
+    """ devfund-unsigned.json as `sf-root-coordinator prepare-devfund` writes
+        it: a 6-of-9 multisig over the nine keys it reads from
+        governance/devfund/inbox. """
     return json.dumps({
         "version": devfund_config.DEVFUND_SCHEMA_VERSION,
         "network": CHAIN_KIND.name.lower(),

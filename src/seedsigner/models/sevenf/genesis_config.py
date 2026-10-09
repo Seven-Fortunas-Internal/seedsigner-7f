@@ -19,14 +19,15 @@
     undefined): the "open question" firmware/mldsa7f/src/genesis_config.rs's
     own doc comment flagged -- whether a BBQr-scanned payload is exactly
     canonical_bytes or something wraps it first -- is now answered by direct
-    reading of 7fchain's real `sf-root prepare-genesis`/`sign-genesis`
-    (crates/sf-keytree/src/bin/sf-root.rs): the coordinator produces and
+    reading of 7fchain's real `sf-root-coordinator prepare-genesis`
+    (crates/sf-keytree/src/bin/sf-root-coordinator.rs) and `sf-wallet-gov
+    sign-genesis` (crates/sf-wallet-gov/src/sign_ops.rs): the coordinator produces and
     every Root consumes a JSON file (sf_core::genesis_config::GenesisConfig),
     never raw canonical bytes. `parse_genesis_config_json()` below parses
     that REAL artifact directly -- the same "port the real format, don't
     invent one" discipline as every other wire-format module in this
     package -- then calls build_canonical_bytes() to compute the exact same
-    bytes `sf-root sign-genesis` would sign. Patrick's own tooling needs no
+    bytes `sf-wallet-gov sign-genesis` would sign. Patrick's own tooling needs no
     change: it already produces this file today. parse_canonical_bytes()
     stays, both as the underlying primitive this module's own round trip
     uses and in case a future wire layer ever does carry bare canonical
@@ -40,7 +41,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, refuse_duplicate_fields, ski, strict_json_loads, visible_text
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, refuse_duplicate_fields, strict_json_loads, visible_text
 
 # Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
 # exactly -- display-only here (parse_canonical_bytes already enforces the
@@ -225,20 +226,19 @@ def _refuse_duplicates(obj, known: frozenset, where: str) -> None:
 
 def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
     """ Parse the REAL coordinator artifact: the genesis-config JSON file
-        `sf-root prepare-genesis` writes and `sf-root sign-genesis` reads
+        `sf-root-coordinator prepare-genesis` writes and `sf-wallet-gov sign-genesis` reads
         (sf_core::genesis_config::GenesisConfig), confirmed field-for-field
         against that real struct 2026-10-03 -- see this module's own
         "RESOLVED" docstring note. This is the actual scan-time entry point
-        now; see SevenFScanGenesisConfigView (views/sevenf_views.py) and
+        now; see SevenFScanGenesisConfigView (views/sevenf_views/) and
         SevenFPlugin.parse_sign_request/sign (chains/sevenf/plugin.py).
 
         `signatures`, if present (the file may already carry other Roots'
         detached signatures -- canonical_bytes never covers them, so
         signing a partly assembled file produces the same signature as
-        signing the bare one, confirmed against sf-root.rs's own
-        cmd_sign_genesis doc comment), is read but not used: this device
-        always exports its own detached signature-only artifact
-        (build_root_sig_json), never re-embeds into this file.
+        signing the bare one), is read but not used: this device always
+        exports its own detached signature-only artifact
+        (export_envelope.signature_export), never re-embeds into this file.
 
         Raises GenesisConfigJsonError for anything structurally wrong --
         not valid UTF-8/JSON, not an object, or a field missing/wrong-typed/
@@ -381,14 +381,9 @@ def nondefault_consensus(fields: GenesisConfigFields) -> list[tuple[str, int, in
 
 def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
     """ Single source of truth for both genesis_config_review_lines() and
-        review_fields() below, so the two can't drift out of sync with each
-        other the way genesis_config_review_lines() previously drifted from
-        firmware/mldsa7f/src/genesis_config.rs's render_lines() (silently
-        missing the "Derivation scheme" line -- caught only when building
-        review_fields() and comparing against the real Rust function this
-        was supposed to mirror). Order/content matches render_lines()
-        exactly: chain_kind, timestamp, message, derivation_scheme, then the
-        three consensus fields -- sf-core's own GenesisConfig field order. """
+        review_fields() below, so the two can't drift out of sync. Order:
+        chain_kind, timestamp, message, derivation_scheme, then the three
+        consensus fields -- sf-core's own GenesisConfig field order. """
     return [
         ("Chain", fields.chain_kind.name.lower()),
         ("Timestamp", _format_timestamp(fields.timestamp)),
@@ -404,9 +399,8 @@ def genesis_config_review_lines(fields: GenesisConfigFields) -> list[str]:
     """ Human-readable lines for the review screen -- plain UI formatting,
         not derivation/canonical-bytes logic (see this module's own
         docstring for why this is safe to implement in Python rather than
-        calling into Rust for it). Mirrors
-        firmware/mldsa7f/src/genesis_config.rs's render_lines() field
-        order/content for consistency, but is not required to call it. """
+        calling into Rust for it). Field order/content comes from
+        _labeled_values() above. """
     return [f"{label}: {value}" for label, value in _labeled_values(fields)]
 
 
@@ -448,37 +442,3 @@ def review_fields(fields: GenesisConfigFields, canonical_bytes: bytes | None = N
     canonical = canonical_bytes if canonical_bytes is not None else build_canonical_bytes(fields.chain_kind, fields.timestamp, fields.message, fields.consensus)
     out.append(ReviewField(label="Canonical digest", value=canonical_digest(canonical)))
     return out
-
-
-def build_root_sig_json(signer_vk: bytes, sig: bytes, *, with_vk: bool = False) -> dict:
-    """ The real, on-wire signature-export shape this device actually
-        produces -- 7fchain's crates/sf-core/src/genesis_config.rs's RootSig
-        struct, confirmed field-for-field against that real source (not
-        guessed) and against crates/sf-keytree/src/bin/sf-root.rs's own
-        `cmd_sign_genesis` (its output is exactly `RootSig{signer_vk, sig}`,
-        nothing else -- no header, no re-embedded config).
-
-        Only the signature leaves the device per ceremony (D11: a Root's
-        verification key is enrolled once and never sent again). `signer_vk`
-        therefore defaults to the empty string, mirroring sf-root.rs's own
-        `--with-vk` flag defaulting to false; the Root CA pubkey has its own
-        one-time enrollment export (SevenFExportPubkeyQRView) and does not
-        need to travel again inside every signature.
-
-        `sig` is hex-encoded the same way sf-root.rs's own `hex::encode(...)`
-        calls produce it -- Python's bytes.hex() matches that byte-for-byte
-        (lowercase, no separators, no prefix). """
-    return {
-        "signer_vk": signer_vk.hex() if with_vk else "",
-        "sig": sig.hex(),
-    }
-
-
-def root_sig_filename(signer_vk: bytes) -> str:
-    """ Matches sf-wallet-gov's sign-genesis output name, `<ski>.genesis`
-        (crates/sf-wallet-gov/src/sign_ops.rs, 7fchain ce04ae9) -- the stem
-        sf-root-coordinator pairs a keyless signature with `<ski>.vk` by.
-        Display-only here (this device exports over QR per R16, not to a
-        filesystem) but kept so an operator naming a manually-saved copy on
-        the receiving end uses the same convention. """
-    return f"{ski(signer_vk.hex())}.genesis"

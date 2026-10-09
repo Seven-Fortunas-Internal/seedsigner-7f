@@ -22,12 +22,10 @@ from seedsigner.models.sevenf.genesis_config import (
     GenesisConfigJsonError,
     _format_timestamp,
     build_canonical_bytes,
-    build_root_sig_json,
     genesis_config_review_lines,
     parse_canonical_bytes,
     parse_genesis_config_json,
     review_fields,
-    root_sig_filename,
 )
 from seedsigner.models.sevenf.review_format import group_hex_for_display, pin, ski
 
@@ -178,7 +176,7 @@ def test_parse_genesis_config_json_all_chain_kinds(chain_kind_str, expected):
 def test_parse_genesis_config_json_produces_the_same_canonical_bytes_as_build_canonical_bytes():
     """ The actual point of this parser: building canonical_bytes from its
         output must match calling build_canonical_bytes() with the same
-        values directly -- the exact bytes sf-root sign-genesis would sign
+        values directly -- the exact bytes sf-wallet-gov sign-genesis would sign
         for the same real JSON file. """
     doc = _sample_genesis_config_dict()
     fields = parse_genesis_config_json(json.dumps(doc).encode("utf-8"))
@@ -190,9 +188,9 @@ def test_parse_genesis_config_json_produces_the_same_canonical_bytes_as_build_ca
 def test_parse_genesis_config_json_ignores_present_signatures():
     """ A partly-assembled file (other Roots already signed) must parse
         identically to a bare one -- canonical_bytes never covers
-        `signatures`, confirmed against sf-root.rs's own cmd_sign_genesis
-        doc comment ("signing a partly assembled file gives the same
-        signature as signing the bare one"). """
+        `signatures` (sf-core genesis_config.rs canonical_bytes), so signing
+        a partly assembled file gives the same signature as signing the
+        bare one. """
     bare = _sample_genesis_config_dict()
     partly_signed = _sample_genesis_config_dict(signatures=[{"signer_vk": "ab" * 976, "sig": "cd" * 1654}])
     fields_bare = parse_genesis_config_json(json.dumps(bare).encode("utf-8"))
@@ -243,7 +241,7 @@ def test_parse_genesis_config_json_rejects_float_version():
     """ Regression test, adversarial review 2026-10-03: `1.0 == 1` in
         Python, so a bare `version != SCHEMA_VERSION` check (missing the
         isinstance guard every other scalar field check here has) silently
-        accepted a JSON float where the real sf-root's serde deserialization
+        accepted a JSON float where sf-core's serde deserialization
         of a `u8` field would reject one outright. """
     doc = _sample_genesis_config_dict(version=1.0)
     with pytest.raises(GenesisConfigJsonError, match="version"):
@@ -383,13 +381,10 @@ def test_build_canonical_bytes_raises_on_nonzero_return(monkeypatch):
 
 
 def test_genesis_config_review_lines_contains_all_fields():
-    """ Regression test for a real bug: this function's own docstring claims
-        to mirror firmware/mldsa7f/src/genesis_config.rs's render_lines(),
-        but the original Python port silently dropped the "Derivation
-        scheme" line (6 lines instead of Rust's 7) -- caught only while
-        building review_fields() below and comparing against the real Rust
-        function. Asserting len == 7 and the scheme string itself pins that
-        this can't silently regress again. """
+    """ Regression test for a real bug: the original Python port silently
+        dropped the "Derivation scheme" line (6 lines instead of 7). Asserting
+        len == 7 and the scheme string itself pins that this can't silently
+        regress again; the field order comes from _labeled_values(). """
     consensus = _sample_consensus()
     bytes_ = build_canonical_bytes(ChainKind.TESTNET, 1_790_555_198, "cross-check fixture", consensus)
     fields = parse_canonical_bytes(bytes_)
@@ -438,39 +433,6 @@ def test_review_fields_includes_derivation_scheme():
     assert scheme_fields[0].value == DERIVATION_SCHEME_V1
 
 
-def test_build_root_sig_json_matches_real_sf_core_root_sig_shape():
-    """ Field names must match 7fchain's real
-        crates/sf-core/src/genesis_config.rs::RootSig struct exactly, and the
-        payload must NOT re-embed the config -- confirmed against
-        crates/sf-keytree/src/bin/sf-root.rs::cmd_sign_genesis's real, current
-        output (commit 3bb5da3), which is exactly `RootSig{signer_vk, sig}`
-        and nothing else. `signer_vk` defaults to empty per D11 (the key is
-        enrolled once and never resent), mirroring that command's own
-        `--with-vk` flag defaulting to false. """
-    signer_vk = bytes([0xAB, 0xCD] * 16)
-    sig = bytes([0x12, 0x34] * 8)
-
-    doc = build_root_sig_json(signer_vk, sig)
-
-    assert doc == {
-        "signer_vk": "",
-        "sig": "1234" * 8,
-    }
-    # JSON-serializable -- this is the actual export payload's real shape.
-    import json
-    json.dumps(doc)
-
-
-def test_build_root_sig_json_with_vk_includes_the_hex_key():
-    signer_vk = bytes([0xAB, 0xCD] * 16)
-    sig = bytes([0x12, 0x34] * 8)
-
-    doc = build_root_sig_json(signer_vk, sig, with_vk=True)
-
-    assert doc["signer_vk"] == "abcd" * 16
-    assert doc["sig"] == "1234" * 8
-
-
 def test_ski_matches_real_x509_key_id_convention():
     """ Pinned against 7fchain's shared-crypto x509::key_id()
         (`Sha256::digest(vk)[..20]`, RFC 7093 method 1) -- the Subject Key
@@ -508,31 +470,6 @@ def test_group_hex_for_display_wraps_a_pin_into_sixteen_groups():
     value = "591c511984a2d73c6bee1f4dc149d48f7f97fc55ad607b821b91eca949f0641a"
     shown = group_hex_for_display(value)
     assert shown.split(" ") == [value[i:i + 4] for i in range(0, 64, 4)]
-
-
-def test_root_sig_filename_matches_real_sf_wallet_gov_convention():
-    """ Pinned against crates/sf-wallet-gov/src/sign_ops.rs's sign-genesis
-        output naming, `<ski>.genesis` (7fchain ce04ae9). The coordinator pairs
-        a signature carrying no key with `<ski>.vk` by this stem, so a
-        20-hex-named file is refused at assembly. """
-    signer_vk = bytes.fromhex("ab" * 1952)  # ML_DSA_PK_LEN
-    import hashlib
-    expected = hashlib.sha256(signer_vk).digest()[:20].hex()
-    assert root_sig_filename(signer_vk) == f"{expected}.genesis"
-    # Pinned literal; its first 20 hex are the old pinned sf-core root_id for
-    # this same key (f818b47b772449955fed), as 416f576 says: the id is the
-    # ski's first half.
-    assert root_sig_filename(signer_vk) == "f818b47b772449955fed6b7652624ca7d298d502.genesis"
-
-
-def test_root_sig_filename_uses_hex_not_raw_bytes():
-    """ A signer_vk that would not survive a naive str() round-trip --
-        confirms the filename is built from the hex encoding, not from
-        bytes.decode() or similar, which would raise on arbitrary bytes. """
-    signer_vk = bytes([0x00, 0xff, 0x10] * 20)
-    filename = root_sig_filename(signer_vk)
-    assert filename.endswith(".genesis")
-    assert filename == f"{ski(signer_vk.hex())}.genesis"
 
 
 def test_format_timestamp_shows_both_raw_value_and_utc_interpretation():

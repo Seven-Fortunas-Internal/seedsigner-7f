@@ -35,7 +35,7 @@ FIXED_SEED = bytes([0x2A] * 64)
 
 
 def _sample_genesis_config_json(chain_kind_str: str = "testnet", **overrides) -> bytes:
-    """ The REAL coordinator artifact (sf-root prepare-genesis's JSON file)
+    """ The REAL coordinator artifact (sf-root-coordinator prepare-genesis's JSON file)
         -- see genesis_config.py's own "RESOLVED" docstring note. """
     doc = dict(
         version=1,

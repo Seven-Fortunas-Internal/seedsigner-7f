@@ -28,11 +28,11 @@
       caller.
 
     RESOLVED 2026-10-03 (7f-signing-support-genesis-wire-envelope-undefined):
-    `payload` is the REAL coordinator artifact -- `sf-root prepare-genesis`'s
+    `payload` is the REAL coordinator artifact -- `sf-root-coordinator prepare-genesis`'s
     JSON file -- not raw canonical bytes. Both methods below parse it with
     genesis_config.parse_genesis_config_json() and, where signing is
     involved, build canonical bytes from the extracted fields before
-    signing, so the signature covers the exact bytes `sf-root sign-genesis`
+    signing, so the signature covers the exact bytes `sf-wallet-gov sign-genesis`
     would sign for the same file.
 """
 from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signature
@@ -57,7 +57,7 @@ def _canonical_bytes_from_json(payload: bytes) -> tuple[bytes, genesis_config.Ge
         it, then re-parse those bytes through the Rust FFI's own
         parse_canonical_bytes() before returning -- the same build-then-
         reparse round trip SevenFScanGenesisConfigView/
-        SevenFGenesisReviewStartView already do (views/sevenf_views.py),
+        SevenFGenesisReviewStartView already do (views/sevenf_views/),
         added here for the same reason (adversarial review, 2026-10-03):
         the FFI-verified fields are what get shown for review and what get
         signed, not a second, independently-interpreted copy of the JSON
@@ -87,7 +87,7 @@ class SevenFPlugin:
 
     def parse_sign_request(self, payload: bytes) -> ParsedRequest:
         """ `payload` is the genesis-config JSON file the coordinator's
-            `sf-root prepare-genesis` produces (received over BBQr) -- see
+            `sf-root-coordinator prepare-genesis` produces (received over BBQr) -- see
             genesis_config.py's own docstring for the parser's
             self-validation. """
         canonical, fields = _canonical_bytes_from_json(payload)
@@ -115,7 +115,7 @@ class SevenFPlugin:
     def encode_response(self, signature: Signature) -> bytes:
         """ Generic hex encoding, matching EvmPlugin.encode_response()'s own
             triviality -- the real export formats (signature-only JSON, BBQr)
-            are built directly by sevenf_views.py's export views via
-            genesis_config.build_root_sig_json(), not routed through this
+            are built directly by views/sevenf_views/'s export views via
+            export_envelope.signature_export(), not routed through this
             generic method. """
         return signature.signature_bytes.hex().encode()

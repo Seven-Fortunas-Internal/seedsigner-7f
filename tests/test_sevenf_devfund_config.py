@@ -15,7 +15,6 @@ from seedsigner.models.sevenf.devfund_config import (
     DevFundConfigError,
     DevfundRecipient,
     build_canonical_bytes,
-    build_root_sig_json,
     parse_canonical_bytes,
     review_fields,
 )
@@ -139,25 +138,14 @@ def test_review_fields_shows_multisig_kind():
     assert values["Recipient"].replace(" ", "") == "ab" * 64  # shown grouped in fours so it wraps
 
 
-def test_build_root_sig_json_matches_the_shared_rootsig_shape():
-    """ Same {signer_vk, sig} shape genesis_config.py's own
-        build_root_sig_json() produces -- confirmed against sf-core's real
-        DevFundConfig.signatures doc comment ("Same shape and same rules as
-        GenesisConfig::signatures"), not independently invented. """
-    sig_json = build_root_sig_json(b"\xab" * 1952, b"\xcd" * 3309)
-    assert sig_json == {"signer_vk": "", "sig": "cd" * 3309}
-
-    sig_json_with_vk = build_root_sig_json(b"\xab" * 1952, b"\xcd" * 3309, with_vk=True)
-    assert sig_json_with_vk["signer_vk"] == "ab" * 1952
-
-
 # ─── parse_devfund_config_json: the coordinator's real artifact ──────────
 
 # Byte-for-byte what `sf-root-coordinator prepare-devfund --chain-kind testnet
 # --threshold 6 --vk ...x9` wrote at 7fchain 416f576 (2026-10-07 end-to-end
 # run). `sf-wallet-gov sign-devfund` on this exact file printed
 # `canonical digest 4216a1c800e3309b28b372c4fa3c290b` (SHA-256 of the signed
-# bytes, first 16 bytes).
+# bytes, first 16 bytes). Those flags were removed upstream in 07b2c02;
+# prepare-devfund now reads the nine keys from governance/devfund/inbox.
 REAL_DEVFUND_UNSIGNED_JSON = b"""{
   "version": 2,
   "network": "testnet",

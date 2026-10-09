@@ -38,7 +38,7 @@ class SevenFSignedArtifact:
 
 
 class SevenFScanDevFundConfigView(ScanView):
-    """ Scans the BBQr-encoded devfund-config the coordinator (sf-root)
+    """ Scans the BBQr-encoded devfund-config the coordinator (sf-root-coordinator)
         sends to this signer -- R11's "development-fund configuration"
         artefact, the third of the three signable artefacts that section
         requires (genesis config and Deputy certificates are the other
@@ -161,8 +161,8 @@ class SevenFConfirmSignDevFundView(View):
         confirm screen, "different derived keys off the same seed." That
         was the exact bug root_ceremony.py's own BUG FIX note fixed --
         devfund and Root CA are now the SAME key (confirmed against
-        7fchain's real sf-root.rs: cmd_sign_genesis/cmd_sign_devfund both
-        call the byte-identical root_key_from_file()). This screen still
+        7fchain's sf-wallet-gov sign_ops.rs: cmd_sign_genesis/cmd_sign_devfund
+        both take their key from load_signer(Role::Root, ...)). This screen still
         shows `keys.devfund.address` (now always equal to
         `keys.root_ca.address`) -- kept as a separate View/confirm screen
         from SevenFConfirmSignRootCertView for artefact-type clarity
@@ -246,10 +246,10 @@ class SevenFDevFundConfigSignedView(View):
 class SevenFExportSignedDevFundConfigQRView(View):
     """ Exports the devfund-config signature as BBQr-encoded JSON. Matches
         sf-core::genesis_config::RootSig's real, current on-wire shape --
-        the exact same shape genesis-config signatures use
-        (devfund_config.build_root_sig_json()'s own docstring has the
-        confirmation: "Same shape and same rules as GenesisConfig::signatures"
-        per sf-core's own DevFundConfig.signatures doc comment). Only the
+        the exact same shape genesis-config signatures use ("Same shape and
+        same rules as GenesisConfig::signatures", per sf-core's own
+        DevFundConfig.signatures doc comment), built by
+        export_envelope.signature_export(). Only the
         signature leaves the device per ceremony (D11), matching every
         other export in this package. """
     def __init__(self, artifact: SevenFSignedArtifact):

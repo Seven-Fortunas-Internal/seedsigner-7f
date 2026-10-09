@@ -25,10 +25,9 @@ pytestmark = pytest.mark.skipif(
     reason="firmware/mldsa7f not built -- run `cargo build --release` in firmware/mldsa7f/ first",
 )
 
-# Real reference vector extracted directly from 7fchain's own
-# KeyDatabase::save_encrypted/load_encrypted (crates/sf-keytree/src/database.rs),
-# via a temporary #[test] added and immediately reverted in that checkout --
-# encrypts a KeyDatabase JSON containing one entry:
+# The frozen reference vector: every backup this format has ever written
+# must keep decrypting (a SeedSigner-only format, see encrypted_blob.py).
+# Encrypts a JSON document containing one entry:
 # path="m/deputy-ca/l1/testnet/0", seed_hex="ab"*64, under the 11-byte
 # passphrase below. Same vector firmware/mldsa7f's own encrypted_blob.rs and
 # ffi.rs test modules pin.
@@ -44,7 +43,7 @@ REFERENCE_ENVELOPE = """{
 }"""
 
 
-def test_decrypts_the_real_reference_vector_from_7fchain():
+def test_decrypts_the_frozen_reference_vector():
     import json
     plaintext = decrypt(REFERENCE_ENVELOPE, REFERENCE_PASSPHRASE)
     doc = json.loads(plaintext)
@@ -107,7 +106,7 @@ def test_decrypt_rejects_malformed_json():
 
 def test_encrypt_handles_a_realistic_small_plaintext():
     """ The actual shape this primitive's real callers produce: a small
-        KeyDatabase-style JSON document, well within ENCRYPTED_BLOB_MAX_LEN. """
+        JSON document, well within ENCRYPTED_BLOB_MAX_LEN. """
     import json
     plaintext = json.dumps({
         "version": 1,

@@ -60,7 +60,7 @@ def _sample_canonical_bytes() -> bytes:
 
 
 def _sample_genesis_config_json(chain_kind_str: str = "testnet", **overrides) -> bytes:
-    """ The REAL coordinator artifact (sf-root prepare-genesis's JSON file,
+    """ The REAL coordinator artifact (sf-root-coordinator prepare-genesis's JSON file,
         sf_core::genesis_config::GenesisConfig) -- what actually arrives
         over BBQr as of the genesis-wire-envelope fix, not raw
         canonical_bytes (see SevenFScanGenesisConfigView's own doc comment). """
@@ -345,18 +345,15 @@ class TestSevenFGenesisReviewFlow(FlowTest):
 
 
     def test_export_signed_config_qr_view_encodes_the_real_signed_json(self):
-        """ Confirms the exported QR carries the real build_root_sig_json()
-            output for THIS ceremony's actual signature (BBQr-encoded,
-            file_type 'J'), round-tripped through the real BBQr encoder/
-            decoder pair and re-parsed as JSON -- the actual export payload
-            an operator would hand to sf-node/sf-wallet, not a stand-in.
-            Per D11 / sf-root.rs's real cmd_sign_genesis (commit 3bb5da3),
-            this is signature-only: signer_vk stays empty (the key was
-            already enrolled separately), and the config fields are not
-            re-embedded. """
+        """ Confirms the exported QR carries the RootSig JSON for THIS
+            ceremony's actual signature (BBQr-encoded, file_type 'J'),
+            round-tripped through the real BBQr encoder/decoder pair and
+            re-parsed as JSON -- the actual export payload an operator would
+            hand to the coordinator, not a stand-in. As sf-wallet-gov
+            sign-genesis writes it (sign_ops.rs cmd_sign_genesis), this is
+            signature-only: signer_vk stays empty (the key was already
+            enrolled separately), and the config fields are not re-embedded. """
         import json
-
-        from seedsigner.models.sevenf.genesis_config import build_root_sig_json
 
         seed = self.seed_fixture()
         canonical_bytes = _sample_canonical_bytes()
@@ -390,7 +387,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
         assert envelope["kind"] == "genesis-sig"
         assert envelope["file"] == f"{ski(keys.root_ca.public_key.hex())}.genesis"
         decoded_json = json.loads(envelope["body"])
-        assert decoded_json == build_root_sig_json(keys.root_ca.public_key, signature)
+        assert decoded_json == {"signer_vk": "", "sig": signature.hex()}
         assert decoded_json["signer_vk"] == ""
         assert decoded_json["sig"] == signature.hex()
 
@@ -661,7 +658,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             destination = view.run()
 
         assert captured["title"] == "Root VK"
-        assert captured["status_headline"] == "Index 0: pin"
+        assert captured["status_headline"] == "Index 0: root pin"
         assert captured["text"] == group_hex_for_display(hashlib.sha256(keys.root_ca.public_key).hexdigest())
         assert destination.View_cls == sevenf_views.SevenFExportRootVkQRView
         assert destination.view_args["public_key"] == keys.root_ca.public_key
@@ -779,10 +776,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(ski_view, "run_screen", lambda *a, **kw: 0)
             dest = ski_view.run()
-        pin_view = dest.View_cls(**dest.view_args)
-        with pytest.MonkeyPatch().context() as mp:
-            mp.setattr(pin_view, "run_screen", lambda *a, **kw: 0)
-            dest = pin_view.run()
+        # No pin screen for a dev-fund key: sf-wallet-gov derive-vk prints none.
         assert dest.View_cls == sevenf_views.SevenFExportRootVkQRView
         export_view = dest.View_cls(**dest.view_args)
         captured = {}
@@ -1509,7 +1503,7 @@ class TestSevenFScanEntryPoint(FlowTest):
 
     def test_scan_genesis_config_view_accepts_a_real_payload_and_routes_to_review(self):
         """ End-to-end from a real BBQr-encoded genesis-config JSON file --
-            the actual coordinator artifact (sf-root prepare-genesis), not a
+            the actual coordinator artifact (sf-root-coordinator prepare-genesis), not a
             hand-built canonical_bytes handoff -- through the actual
             scan/decode machinery into the review flow's real entry point.
             Confirms the view builds canonical_bytes from the scanned JSON
@@ -1920,8 +1914,8 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             placeholder. BUG FIX, 2026-10-03 (R27): this used to also assert
             the devfund key differs from the Root key -- that was the bug
             (see root_ceremony.py's own BUG FIX note); devfund now signs
-            with the SAME key as Root, confirmed against 7fchain's real
-            sf-root.rs. """
+            with the SAME key as Root, as 7fchain's sf-wallet-gov does
+            (sign_ops.rs: load_signer(Role::Root, ...) for both). """
         seed = self.seed_fixture()
         devfund_json = _sample_devfund_json()
         keys = derive_root_ceremony_keys(seed_for_7f(seed), ChainKind.TESTNET, index=0)
@@ -2102,7 +2096,6 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
     def test_export_names_the_signature_file_by_the_signer_ski(self):
         """ <ski>.devfund in an export envelope, body exactly as sf-wallet-gov
             sign-devfund writes it. """
-        from seedsigner.models.sevenf.devfund_config import build_root_sig_json
         from seedsigner.models.sevenf.review_format import ski
         from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
         seed = self.seed_fixture()
@@ -2124,7 +2117,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         envelope = json.loads(d.decoder.get_data())
         assert envelope["kind"] == "devfund-sig"
         assert envelope["file"] == f"{ski(pk.hex())}.devfund"
-        assert envelope["body"] == json.dumps(build_root_sig_json(pk, sig), indent=2) + "\n"
+        assert envelope["body"] == json.dumps({"signer_vk": "", "sig": sig.hex()}, indent=2) + "\n"
 
 
     def test_back_button_on_confirm_sign_screen_returns_to_back_stack_without_signing(self):

@@ -70,7 +70,7 @@ def test_root_ca_matches_7fchains_real_canonical_vector():
         without sharing a real phrase.
 
         This is the single most direct proof this device derives the same
-        Root key sf-root itself would for the same seed -- the exact
+        Root key 7fchain itself would for the same seed -- the exact
         correctness question this whole file exists to answer, now checked
         against the real federation software's own pinned output rather than
         only against another run of our own port. """
@@ -91,7 +91,7 @@ def test_root_ca_matches_7fchains_real_canonical_vector():
         "Root public key no longer matches 7fchain's real pinned vector "
         "(sf-keytree/tests/path_vectors.rs::ROOT_TESTNET) for the canonical "
         "all-zero BIP-39 phrase at root/testnet/0/ml-dsa/v1 -- this device "
-        "would sign under a different key than sf-root expects."
+        "would sign under a different key than 7fchain expects."
     )
 
 
@@ -133,9 +133,9 @@ def test_devfund_key_matches_real_sf_wallet_gov_derive_vk():
 
 def test_root_ca_and_devfund_are_the_same_key():
     """ BUG FIX, 2026-10-03 (R27 re-port): this used to assert root_ca and
-        devfund differ -- that was the bug. Direct reading of 7fchain's
-        real sf-root.rs confirmed cmd_sign_genesis and cmd_sign_devfund
-        both call the byte-identical root_key_from_file(..., index 0):
+        devfund differ -- that was the bug. 7fchain's sf-wallet-gov
+        cmd_sign_genesis and cmd_sign_devfund (sign_ops.rs) both take their
+        key from load_signer(Role::Root, ...) at the same index:
         genesis-config and devfund-config are signed by the SAME Root
         key. See root_ceremony.py's own BUG FIX note. """
     keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
@@ -213,8 +213,8 @@ def test_sign_with_devfund_produces_a_verifiable_signature_shape():
 def test_sign_with_devfund_uses_the_same_key_as_sign_with_root_ca():
     """ BUG FIX, 2026-10-03 (R27 re-port): this used to assert the two
         signing functions use different keys -- that was the bug. Confirmed
-        against 7fchain's real sf-root.rs (cmd_sign_genesis/cmd_sign_devfund
-        both call the byte-identical root_key_from_file(..., index 0)): the
+        against 7fchain's sf-wallet-gov sign_ops.rs (cmd_sign_genesis/
+        cmd_sign_devfund both take load_signer(Role::Root, ...)): the
         same Root key signs both genesis-config and devfund-config. """
     message = b"same message, same intended signer"
     root_pk, _ = sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)

@@ -157,8 +157,8 @@ class SevenFSelectChainKindForRootEnrollmentView(View):
         7f-signing-support-standalone-pubkey-enrollment-menu-entry.
 
         This is the real enrollment operation (sf-wallet-gov's `derive-vk`
-        equivalent, decision C17 -- see the decision record in
-        7f-signing-support-enrollment-payload-vs-root-self-cert): no
+        equivalent; sign-root-cert also writes the same `<ski>.vk` beside the
+        certificate, sign_ops.rs cmd_sign_root_cert): no
         self-signature, no path, no fingerprint field, just the bare vk a
         coordinator compiles into a node's trust list. Previously only
         reachable as a side effect of SevenFExportPubkeyQRView being gated
@@ -308,6 +308,10 @@ class SevenFRootVkFingerprintView(View):
         if selected_menu_num == RET_CODE__BACK_BUTTON:
             return Destination(BackStackView)
 
+        # sf-wallet-gov prints a root pin for a Root key only (sign-root-cert);
+        # derive-vk prints none for a dev-fund key, so neither does the device.
+        if self.role != "root":
+            return Destination(SevenFExportRootVkQRView, view_args=dict(public_key=self.public_key, role=self.role))
         return Destination(
             SevenFVkPinView,
             view_args=dict(public_key=self.public_key, title=self.title, role=self.role, key_index=self.key_index),
@@ -316,8 +320,9 @@ class SevenFRootVkFingerprintView(View):
 
 
 class SevenFVkPinView(View):
-    """ Shows the vk's pin -- the full SHA-256 of the key, 7fchain's
-        x509::vk_pin() -- before the QR export. A member reports the pin over
+    """ Shows a Root key's root pin -- the full SHA-256 of the key, 7fchain's
+        x509::vk_pin(), as sf-wallet-gov sign-root-cert prints it -- before
+        the QR export (a dev-fund key has none). A member reports the pin over
         a second channel so the coordinator can confirm the key they received
         is the key the member holds (ceremony-federation-member.md Step 4).
         That check only means something if the pin is read off this device:
@@ -339,7 +344,7 @@ class SevenFVkPinView(View):
         selected_menu_num = self.run_screen(
             LargeIconStatusScreen,
             title=self.title,
-            status_headline=_("Index {}: pin").format(self.key_index),
+            status_headline=_("Index {}: root pin").format(self.key_index),
             text=group_hex_for_display(pin(self.public_key.hex())),
             button_data=[ButtonOption("Continue to QR")],
         )
@@ -355,19 +360,11 @@ class SevenFVkPinView(View):
 
 
 class SevenFExportRootVkQRView(View):
-    """ Exports an enrollment verification key -- the Root key or, via
-        SevenFSelectChainKindForDevfundEnrollmentView, the dev-fund key -- as
-        bare hex, BBQr-encoded ('U':
-        unicode/plain-text) -- the real enrollment artifact. No signature, no
-        certificate, no path, no fingerprint: matches 7fchain's own
-        sf-wallet-gov's `<ski>.vk` exactly (bare hex vk; see
-        sf-root-coordinator.rs's decision C17). Reuses
-        the identical export mechanic as _genesis.SevenFExportPubkeyQRView,
-        kept as its own small view rather than shared because the two have
-        different next destinations (that one returns to its own genesis
-        export menu; this one, like SevenFExportRootCertQRView, returns
-        straight to MainMenuView -- there's nothing else to do after a
-        standalone enrollment export). """
+    """ Exports an enrollment verification key -- the Root key, or the dev-fund
+        key -- as a role-tagged envelope (BBQr 'J', export_envelope.vk_export)
+        whose body is exactly sf-wallet-gov's `<ski>.vk` (lowercase hex and a
+        newline). Returns to the main menu: nothing else follows a standalone
+        enrollment export. """
     def __init__(self, public_key: bytes, role: str = "root"):
         super().__init__()
         self.public_key = public_key

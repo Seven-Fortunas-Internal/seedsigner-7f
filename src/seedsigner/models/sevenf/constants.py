@@ -3,15 +3,16 @@
 
     Values here mirror firmware/mldsa7f's own constants and the real 7fchain
     code they were ported from (sf-crypto/src/ml_dsa.rs, sf-crypto/src/address.rs,
-    sf-keytree/src/bin/sf-root.rs) -- kept in sync manually, not generated.
+    sf-keytree/src/path.rs, sf-wallet-gov/src/sign_ops.rs) -- kept in sync manually, not generated.
 """
 from dataclasses import dataclass
 from enum import IntEnum
 
 
 class ChainKind(IntEnum):
-    """ Matches sf-core::genesis_config::ChainKind and the `network` byte
-        firmware/mldsa7f/src/ffi.rs's decode_network() expects. """
+    """ Matches sf-crypto/src/address.rs's ChainKind (re-exported by
+        sf-core's genesis_config) and the chain-kind byte
+        firmware/mldsa7f/src/ffi.rs's decode_chain_kind() expects. """
     MAINNET = 0
     TESTNET = 1
     DEVNET = 2
@@ -87,9 +88,9 @@ def root_path(chain_kind: ChainKind, index: int = 0) -> str:
         -- see firmware/mldsa7f/src/derive.rs's doc comment for why. This
         single function replaces the old `root_ca_purpose_path()`,
         `devfund_purpose_path()`, and the separate `ML_DSA_LEAF_ROLE`
-        constant: `sf-root.rs`'s own `cmd_sign_genesis` and
-        `cmd_sign_devfund` both call the byte-identical
-        `root_key_from_file(...)` at the same index -- genesis-config and
+        constant: sf-wallet-gov's `cmd_sign_genesis` and `cmd_sign_devfund`
+        (sign_ops.rs) both take their key from
+        `load_signer(Role::Root, kind, index, ...)` -- genesis-config and
         devfund-config are signed by the SAME Root key, not two -- so the
         devfund-config SIGNING key is this path. The per-holder dev-fund key
         a member enrolls is a different key at devfund_path() below (7fchain

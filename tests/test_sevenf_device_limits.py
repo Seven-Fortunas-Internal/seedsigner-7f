@@ -91,3 +91,28 @@ def test_a_recipient_payload_past_u16_is_refused():
     doc["recipient"] = {"kind": "address", "address": "t1lswdehurp3f3puwsuytdwcqjx6e9q0g6cktcyam8w2rhhvf # " + "c" * 70_000}
     with pytest.raises(DevFundConfigJsonError):
         devfund_config.parse_devfund_config_json(json.dumps(doc).encode())
+
+
+# --- story port-web-page-pin-folders, device side (D-F2) ------------------------
+
+@pytest.mark.parametrize("role, next_view", [("root", "SevenFVkPinView"), ("devfund", "SevenFExportRootVkQRView")])
+def test_only_a_root_key_gets_a_pin_screen(role, next_view):
+    """ sf-wallet-gov prints the root pin for a Root key (sign-root-cert) and
+        no pin for a dev-fund key (derive-vk); the device does the same. """
+    from base import FlowTest  # noqa: F401  (test base before the Controller)
+    from seedsigner.views import sevenf_views
+    view = sevenf_views.SevenFRootVkFingerprintView(public_key=b"\x0b" * 1952, title="t", key_index=0, role=role)
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(view, "run_screen", lambda screen_cls, **kw: 0)
+        assert view.run().View_cls.__name__ == next_view
+
+
+def test_the_pin_screen_names_it_the_root_pin():
+    from base import FlowTest  # noqa: F401
+    from seedsigner.views import sevenf_views
+    view = sevenf_views.SevenFVkPinView(public_key=b"\x0b" * 1952, title="t", key_index=0, role="root")
+    captured = {}
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(view, "run_screen", lambda screen_cls, **kw: captured.update(kw) or 0)
+        view.run()
+    assert "root pin" in captured["status_headline"]

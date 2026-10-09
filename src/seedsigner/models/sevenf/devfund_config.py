@@ -403,9 +403,8 @@ def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
 
 
 def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
-    """ Single source of truth for review_fields() below -- matches
-        firmware/mldsa7f/src/devfund_config.rs's render_lines() field
-        order/content exactly: network, recipient kind, recipient payload,
+    """ Single source of truth for review_fields() below. Field order:
+        network, recipient kind, recipient payload,
         effective block, timestamp -- sf-core's own DevFundConfig field
         order (minus `signatures`, which this device produces rather than
         reads). Recipient kind is its own field, not folded into the
@@ -467,20 +466,3 @@ def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = N
     canonical = canonical_bytes if canonical_bytes is not None else build_canonical_bytes(fields.network, fields.recipient, fields.effective_block, fields.timestamp)
     out.append(ReviewField(label="Canonical digest", value=canonical_digest(canonical)))
     return out
-
-
-def build_root_sig_json(signer_vk: bytes, sig: bytes, *, with_vk: bool = False) -> dict:
-    """ The real, on-wire signature-export shape this device actually
-        produces -- 7fchain's crates/sf-core/src/genesis_config.rs's RootSig
-        struct, the SAME shape devfund signatures use ("Every Root signature
-        over devfund_config_canonical_bytes, in any order. Same shape and
-        same rules as GenesisConfig::signatures" -- that struct's own doc
-        comment). Identical to genesis_config.py's build_root_sig_json();
-        kept as its own function here (not imported from that module) so
-        this module has no cross-dependency on genesis_config.py for a
-        concept that's really owned by the shared RootSig wire format, not
-        by genesis specifically. """
-    return {
-        "signer_vk": signer_vk.hex() if with_vk else "",
-        "sig": sig.hex(),
-    }

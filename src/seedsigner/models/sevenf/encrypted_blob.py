@@ -4,16 +4,13 @@
     backed by src/encrypted_blob.rs). Used by the encrypted seed-file
     backup (requirements doc section 5.7, models/seed_backup.py) -- see
     that module for the higher-level flow; this module is just the
-    primitive. Previously also shared by the Root-to-Deputy child-seed
-    export, removed 2026-10-03
-    (7f-signing-support-deputy-seed-export-obsolete) once 7fchain's own
-    ceremony design dropped that handoff; this is the only caller left.
+    primitive.
 
-    The envelope JSON shape (version, algorithm, argon2_salt,
-    argon2_memory_kb, argon2_iterations, aes_nonce, ciphertext) is confirmed
-    field-for-field against 7fchain's real crates/sf-keytree/src/database.rs
-    -- an envelope this module produces is byte-for-byte interoperable with
-    that real code's own KeyDatabase::load_encrypted, and vice versa.
+    A SeedSigner-only format, frozen: it mirrors no 7fchain format, and a
+    backup is restored on a SeedSigner. The envelope JSON (version,
+    algorithm, argon2_salt, argon2_memory_kb, argon2_iterations, aes_nonce,
+    ciphertext) must not change, so every backup ever written stays
+    readable; the pinned reference vector in the tests holds it.
 """
 import ctypes
 
@@ -77,9 +74,7 @@ def encrypt(plaintext: bytes, passphrase: bytes) -> str:
 
 
 def decrypt(envelope_json: str, passphrase: bytes) -> bytes:
-    """ Decrypt an envelope produced by encrypt() (or by 7fchain's own
-        KeyDatabase::save_encrypted -- the formats are identical) under
-        `passphrase`, returning the plaintext bytes. Raises
+    """ Decrypt an envelope produced by encrypt() under `passphrase`, returning the plaintext bytes. Raises
         EncryptedBlobError on any failure (wrong passphrase, corrupt/
         tampered envelope, or malformed JSON) -- never returns garbage. """
     lib = _lib()

@@ -57,7 +57,8 @@ def signed_genesis_config(tmp_path):
     _, sig = mldsa.derive_and_sign(
         gen_tool.root_seed().seed_bytes, "root/testnet/0/ml-dsa/v1", canonical_bytes,
     )
-    signed_json = genesis_config.build_root_sig_json(root_keys.root_ca.public_key, sig, with_vk=True)
+    # RootSig as `sf-wallet-gov sign-genesis --with-vk` writes it.
+    signed_json = {"signer_vk": root_keys.root_ca.public_key.hex(), "sig": sig.hex()}
 
     original_paths = gen_tool.render_bbqr("original", original_json, tmp_path)
     signed_paths = gen_tool.render_bbqr("signed", json.dumps(signed_json).encode("utf-8"), tmp_path)

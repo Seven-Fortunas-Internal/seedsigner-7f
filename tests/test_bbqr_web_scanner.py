@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from seedsigner.models.encode_qr import BBQrEncoder
-from seedsigner.models.sevenf import genesis_config, mldsa, root_ceremony
+from seedsigner.models.sevenf import mldsa, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
 from sevenf_helpers import sevenf_seed_from_bytes
 
@@ -62,9 +62,9 @@ def test_decodes_a_real_multi_part_bbqr_payload_out_of_order(tmp_path):
     # A real genesis-config signature export -- large enough to span
     # multiple BBQr parts, exactly the case that matters for the scanner.
     root_keys = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0)
-    payload = json.dumps(genesis_config.build_root_sig_json(
-        root_keys.root_ca.public_key, b"\x11" * 3309, with_vk=True,
-    )).encode("utf-8")
+    payload = json.dumps({
+        "signer_vk": root_keys.root_ca.public_key.hex(), "sig": (b"\x11" * 3309).hex(),
+    }).encode("utf-8")
     encoder = BBQrEncoder(data=payload, file_type="J", bbqr_encoding="Z")
     segments = [encoder.next_part() for _ in range(encoder.seq_len())]
     assert len(segments) > 1, "test payload should need multiple BBQr parts"

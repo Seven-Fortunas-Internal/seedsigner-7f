@@ -1,16 +1,8 @@
 """
-    Shared review-field formatting helpers for the 7F ceremony flows --
-    extracted 2026-10-04 (7f-review-shared-helpers-deduplication, found by
-    the Python-code-quality and modularity dimensions of the full-project
-    adversarial review): format_timestamp() used to be copy-pasted
-    byte-for-byte across genesis_config.py and devfund_config.py with no
-    stated rationale (unlike build_root_sig_json's own deliberately-
-    documented duplication to avoid a cross-module "concept ownership"
-    dependency -- this is plain formatting utility, not derivation or
-    canonical-bytes logic, so no such rationale applies here), and
-    cert_request.py was already importing both helpers from genesis_config.py
-    as a third-module cross-import. All three artifact modules (genesis,
-    devfund, cert_request) now import from here instead.
+    Shared review-field formatting helpers for the 7F ceremony flows
+    (7f-review-shared-helpers-deduplication): plain formatting utilities,
+    not derivation or canonical-bytes logic, used by all three artifact
+    modules (genesis, devfund, cert_request).
 """
 import hashlib
 import json
@@ -47,9 +39,9 @@ def ski(vk_hex: str) -> str:
         `openssl x509 -text` reads it back), and every governance file is named
         by it (`<ski>.vk`, `<ski>.genesis`, `<ski>.devfund`, `root-<ski>.pem`).
         The coordinator pairs a keyless signature with its `.vk` by that stem.
-        Replaces the 20-hex sf-core root_id() this module used to port, which
-        is now internal to 7fchain (ledger, CSR common name) and shown to no
-        one. """
+        7fchain still shows the 20-hex sf-core root_id() in some error
+        messages (sign_ops.rs) and in a CSR common name (main.rs create-csr);
+        this device names keys by subject key id only. """
     vk = bytes.fromhex(vk_hex)
     return hashlib.sha256(vk).digest()[:20].hex()
 
