@@ -74,7 +74,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
-from seedsigner.models.sevenf.review_format import group_hex_for_display, format_timestamp as _format_timestamp, ski, utc_datetime
+from seedsigner.models.sevenf.review_format import group_hex_for_display, format_timestamp as _format_timestamp, pin, ski, utc_datetime
 
 # Must match firmware/mldsa7f/src/ffi.rs's CERT_TBS_MAX_LEN exactly --
 # display/sizing-only here (the FFI call itself fails loudly with a
@@ -544,6 +544,21 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
         ReviewField(label="Valid from", value=_validity_date(not_before)),
         ReviewField(label="Valid until", value=_validity_date(not_after)),
         ReviewField(label="Serial", value=group_hex_for_display(serial.hex())),   # 32 hex do not fit one line
+    ]
+
+
+def root_certificate_review_fields(root_cert: ParsedRootCertificate) -> list[ReviewField]:
+    """ A scanned Root certificate's own fields, for checking it before the
+        Deputy's request is scanned: the same identity a Root holder reads
+        out after sign-root-cert (subject key id and root pin), its chain
+        and its validity. Display only; nothing is signed from this list. """
+    vk_hex = root_cert.subject_vk.hex()
+    return [
+        ReviewField(label="Subject key id", value=group_hex_for_display(ski(vk_hex))),
+        ReviewField(label="Root pin", value=group_hex_for_display(pin(vk_hex))),
+        ReviewField(label="Chain", value=root_cert.chain_kind.name.lower()),
+        ReviewField(label="Valid from", value=_format_timestamp(root_cert.not_before)),
+        ReviewField(label="Valid until", value=_format_timestamp(root_cert.not_after)),
     ]
 
 

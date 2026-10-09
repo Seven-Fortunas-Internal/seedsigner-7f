@@ -7,9 +7,9 @@
 
     Confirm-sign and export of signing happen through _common.py's shared
     SevenFConfirmSignRootCertView/SevenFRootCertSignedView (also used by
-    Root self-certification) -- this module holds the four views specific
-    to Deputy cross-cert: chain selection, the two scans, and the
-    certificate export.
+    Root self-certification) -- this module holds the views specific
+    to Deputy cross-cert: chain selection, the two scans with a pause
+    between them, and the certificate export.
 """
 from gettext import gettext as _
 
@@ -115,7 +115,7 @@ class SevenFScanRootCertificateView(ScanView):
            explicit plan bullet, but the same reasoning applies
            unchanged: a well-formed artefact for the wrong identity is
            still not this device's business to sign). """
-    instructions_text = _mft("Scan the Root's own certificate")
+    instructions_text = _mft("Scan 1 of 2: your Root certificate")
     invalid_qr_type_message = _mft("Expected a Root certificate QR (BBQr, from the coordinator)")
 
 
@@ -166,11 +166,54 @@ class SevenFScanRootCertificateView(ScanView):
             ))
 
         return Destination(
-            SevenFScanDeputyCsrView,
+            SevenFRootCertificateAcceptedView,
             view_args=dict(seed=self.seed, chain_kind=self.chain_kind, key_index=self.key_index,
                            root_cert_der=data, root_cert=root_cert),
             skip_current_view=True,
         )
+
+
+
+class SevenFRootCertificateAcceptedView(View):
+    """ Between the two scans: says the Root certificate was read and waits
+        for a press. Without it the camera reopened for the Deputy's request
+        while the Root certificate's QR was still in front of it, read that
+        again and refused it (found on the dev unit 2026-10-09). Review
+        certificate shows the scanned certificate's own fields first and
+        comes back here. """
+    REVIEW = ButtonOption("Review certificate")
+    SCAN = ButtonOption("Scan request")
+
+    def __init__(self, seed: Seed, chain_kind: ChainKind, key_index: int, root_cert_der: bytes, root_cert):
+        super().__init__()
+        self.next_view_args = dict(seed=seed, chain_kind=chain_kind, key_index=key_index,
+                                   root_cert_der=root_cert_der, root_cert=root_cert)
+
+        if guard_active_chain(self, "sevenf"):
+            return
+
+
+    def run(self):
+        from seedsigner.gui.screens.screen import LargeIconStatusScreen
+
+        button_data = [self.REVIEW, self.SCAN]
+        choice = self.run_screen(
+            LargeIconStatusScreen,
+            title=_("Deputy Cross-Cert"),
+            status_headline=_("Root certificate read"),
+            text=_("Then show the Deputy's certificate request and press Scan request."),
+            button_data=button_data,
+        )
+        if choice == RET_CODE__BACK_BUTTON:
+            return Destination(BackStackView)
+        if button_data[choice] == self.REVIEW:
+            return Destination(SevenFCertRequestReviewFieldView, view_args=dict(
+                review_fields=cert_request.root_certificate_review_fields(self.next_view_args["root_cert"]),
+                page_title=_("Your Root certificate"),
+                confirmed_destination=SevenFRootCertificateAcceptedView,
+                confirmed_view_args=self.next_view_args,
+            ))
+        return Destination(SevenFScanDeputyCsrView, view_args=self.next_view_args, skip_current_view=True)
 
 
 
@@ -188,7 +231,7 @@ class SevenFScanDeputyCsrView(ScanView):
         certificate -- different Root, backdated, unexpectedly long-lived
         -- must be just as catchable as a wrong fingerprint) and the
         Deputy's own fields, via cert_request.deputy_cross_cert_v2_review_fields(). """
-    instructions_text = _mft("Scan the Deputy's certificate request")
+    instructions_text = _mft("Scan 2 of 2: Deputy's request")
     invalid_qr_type_message = _mft("Expected a Deputy certificate request QR (BBQr, from the coordinator)")
 
 

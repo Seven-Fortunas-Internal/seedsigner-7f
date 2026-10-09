@@ -118,8 +118,49 @@ class TestDeputyAtAnIndex(_IndexFlowTest):
 
     def test_sf_wallet_gov_index_1_root_cert_is_accepted_at_index_1(self):
         destination = self._scan_root_cert(self.seed_fixture(), 1)
-        assert destination.View_cls == sevenf_views.SevenFScanDeputyCsrView
+        assert destination.View_cls == sevenf_views.SevenFRootCertificateAcceptedView
         assert destination.view_args["key_index"] == 1
+
+
+    def test_the_device_waits_between_the_two_scans(self):
+        """ The camera does not reopen for the Deputy's request until the
+            operator presses: with no pause it read the Root certificate's QR,
+            still on the coordinator's screen, a second time (dev unit
+            2026-10-09). """
+        from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
+        from seedsigner.views.view import BackStackView
+
+        accepted = self._scan_root_cert(self.seed_fixture(), 1)
+        pause = sevenf_views.SevenFRootCertificateAcceptedView(**accepted.view_args)
+        shown = {}
+        scan = _run(pause, 1, shown)
+        assert [b.button_label for b in shown["button_data"]] == ["Review certificate", "Scan request"]
+        assert "Deputy's certificate request" in shown["text"]
+        assert scan.View_cls == sevenf_views.SevenFScanDeputyCsrView
+        assert scan.view_args == accepted.view_args
+        assert scan.skip_current_view
+
+        back = _run(sevenf_views.SevenFRootCertificateAcceptedView(**accepted.view_args), RET_CODE__BACK_BUTTON)
+        assert back.View_cls == BackStackView
+
+
+    def test_the_scanned_root_certificate_can_be_reviewed_before_the_second_scan(self):
+        """ Review certificate pages through the scanned certificate's own
+            subject key id, root pin, chain and validity, then comes back to
+            the same pause screen (Jorge, 2026-10-09). """
+        from seedsigner.models.sevenf.review_format import group_hex_for_display, pin
+
+        accepted = self._scan_root_cert(self.seed_fixture(), 1)
+        review = _run(sevenf_views.SevenFRootCertificateAcceptedView(**accepted.view_args), 0)
+        assert review.View_cls == sevenf_views.SevenFCertRequestReviewFieldView
+        root_cert = accepted.view_args["root_cert"]
+        fields = review.view_args["review_fields"]
+        assert [f.label for f in fields] == ["Subject key id", "Root pin", "Chain", "Valid from", "Valid until"]
+        assert fields[0].value == group_hex_for_display(ski(root_cert.subject_vk.hex()))
+        assert fields[1].value == group_hex_for_display(pin(root_cert.subject_vk.hex()))
+        assert fields[2].value == "testnet"
+        assert review.view_args["confirmed_destination"] == sevenf_views.SevenFRootCertificateAcceptedView
+        assert review.view_args["confirmed_view_args"] == accepted.view_args
 
 
     def test_sf_wallet_gov_index_1_root_cert_is_refused_at_index_0(self):

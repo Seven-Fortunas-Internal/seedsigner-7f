@@ -85,6 +85,7 @@ from ._root_cert import (
 )
 from ._deputy_cert import (
     SevenFExportDeputyCertQRView,
+    SevenFRootCertificateAcceptedView,
     SevenFScanDeputyCsrView,
     SevenFScanRootCertificateView,
     SevenFSelectChainKindForDeputyCrossCertView,
@@ -126,6 +127,7 @@ __all__ = [
     "SevenFConfirmDateTimeView",
     "SevenFSelectChainKindForDevfundEnrollmentView",
     "SevenFVkPinView",
+    "SevenFRootCertificateAcceptedView",
     "SevenFScanDeputyCsrView",
     "SevenFScanDevFundConfigView",
     "SevenFScanGenesisConfigView",

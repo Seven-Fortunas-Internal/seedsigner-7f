@@ -1163,6 +1163,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                         before_run=_load_cert_request_into_decoder(root_cert_der),
                         screen_return_value=0,
                     ),
+                    FlowStep(sevenf_views.SevenFRootCertificateAcceptedView, screen_return_value=1),  # "Scan request"
                     FlowStep(
                         sevenf_views.SevenFScanDeputyCsrView,
                         before_run=_load_cert_request_into_decoder(DEPUTY_CSR_DER),
@@ -2247,6 +2248,8 @@ class TestSevenFCeremonyClockGate(FlowTest):
     def _run_confirm_view(self, screen_returns):
         """ Drives SevenFConfirmDateTimeView with scripted screen results;
             returns (destination, list of (screen_cls name, kwargs)). """
+        from datetime import datetime
+        from seedsigner.views.sevenf_views import _clock as clock_views
         from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
         seed = self.seed_fixture()
         view = sevenf_views.SevenFConfirmDateTimeView(
@@ -2262,6 +2265,9 @@ class TestSevenFCeremonyClockGate(FlowTest):
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(view, "run_screen", fake_run_screen)
+            # The floor is the source's last edit time; pin it before these
+            # tests' fixed dates, or an edit made later that day fails them.
+            mp.setattr(clock_views.Version, "get_version_timestamp", classmethod(lambda cls: datetime(2026, 10, 1)))
             destination = view.run()
         return destination, shown, DateTimeFields
 
