@@ -405,7 +405,7 @@ class SevenFExportView(View):
 
 class SevenFExportPubkeyQRView(View):
     """ Exports the signing Root key as a role-tagged `<ski>.vk` envelope (the
-        same export as 7F: Enroll Root), so the web page files it in the Root
+        same export as Self-Certify Root's), so the web page files it in the Root
         folder: a bare key carries no role and could be saved as a dev-fund key. """
     def __init__(self, state: SevenFGenesisCeremonyState):
         super().__init__()

@@ -37,9 +37,11 @@ def test_the_camera_starts_only_on_from_device():
 def test_start_says_when_to_use_each_direction():
     start = _section("start")
     assert 'href="#from-device"' in start and 'href="#to-device"' in start
-    for menu in ("7F: Enroll Root (export VK)", "7F: Enroll Dev-fund (export VK)", "7F: Self-Certify Root",
-                 "7F: Sign Genesis Config", "7F: Sign Devfund Config", "7F: Cross-Certify Deputy"):
-        assert menu in start, menu
+    menus = ("7F: Self-Certify Root", "7F: Enroll Dev-fund (export VK)", "7F: Sign Genesis Config",
+             "7F: Sign Devfund Config", "7F: Cross-Certify Deputy")       # the device's order
+    positions = [start.index(menu) for menu in menus]
+    assert positions == sorted(positions)
+    assert "Enroll Root" not in start                                     # no separate Root enrollment
 
 
 def test_start_explains_how_pin_and_ski_are_derived():
