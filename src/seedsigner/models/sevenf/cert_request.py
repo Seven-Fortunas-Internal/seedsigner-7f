@@ -445,14 +445,14 @@ def deputy_cross_cert_v2_review_fields(
     return [
         ReviewField(
             label="Issuing Root: Subject key id", value=group_hex_for_display(ski(root_cert.subject_vk.hex())), is_warning=True,
-            warning_detail="Compare against the subject key id the Root's holder reported.",
+            warning_detail="Check with the Root holder.",
         ),
         ReviewField(label="Issuing Root: Valid from", value=_format_timestamp(root_cert.not_before)),
         ReviewField(label="Issuing Root: Valid until", value=_format_timestamp(root_cert.not_after)),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
         ReviewField(
             label="Deputy: Subject key id", value=group_hex_for_display(ski(csr.subject_vk.hex())), is_warning=True,
-            warning_detail="Compare against the subject key id the Deputy's holder reported.",
+            warning_detail="Check with Deputy's holder.",
         ),
         ReviewField(label="Deputy: Valid from", value=_validity_date(now)),
         ReviewField(label="Deputy: Valid for", value=f"{days} days"),
@@ -538,7 +538,7 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
     return [
         ReviewField(
             label="Subject key id", value=group_hex_for_display(ski(subject_vk.hex())), is_warning=True,
-            warning_detail="Read this subject key id to the coordinator: it must be your enrolled Root key's.",
+            warning_detail="Read it to the coordinator.",
         ),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
         ReviewField(label="Valid from", value=_validity_date(not_before)),

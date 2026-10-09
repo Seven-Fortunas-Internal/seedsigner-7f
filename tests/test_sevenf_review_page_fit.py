@@ -89,3 +89,26 @@ def test_a_long_word_is_never_broken_inside_an_escape():
     for line in out.split("\n"):
         assert not line.endswith("\\") or line.endswith("\\\\"), out
         assert "\\u" not in line or all(len(part) >= 4 for part in line.split("\\u")[1:]), out
+
+
+def test_every_subject_key_id_is_one_page():
+    """ A key id is read aloud and compared as a whole: its warning is kept
+        to one line so the 10 groups fit one page (Jorge, 2026-10-09: the
+        Deputy review split each ski over three pages). """
+    from seedsigner.models.sevenf import cert_request
+    from seedsigner.models.sevenf.cert_request import ParsedCsr, ParsedRootCertificate
+    from seedsigner.models.sevenf.constants import ChainKind
+
+    vk = bytes(range(256)) * 7 + bytes(160)
+    root = ParsedRootCertificate(subject_vk=vk, not_before=1_790_000_000, not_after=2_400_000_000,
+                                 chain_kind=ChainKind.TESTNET)
+    fields = [f for f in cert_request.deputy_cross_cert_v2_review_fields(
+                  root, ParsedCsr(subject_vk=vk[::-1]), ChainKind.TESTNET, 1_800_000_000, 3650, bytes(16))
+              + cert_request.root_self_cert_review_fields(vk, ChainKind.TESTNET, 1_800_000_000, 2_400_000_000, bytes(16))
+              + cert_request.root_certificate_review_fields(root)
+              if "Subject key id" in f.label]
+    assert len(fields) == 4
+    for field in fields:
+        pages = _review_pages([field])
+        assert len(pages) == 1, (field.label, [p.value for p in pages])
+        assert pages[0].value == field.value

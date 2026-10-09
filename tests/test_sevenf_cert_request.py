@@ -673,7 +673,9 @@ def test_deputy_cross_cert_v2_review_fields_warnings_name_the_subject_key_id_not
     for f in fields:
         if f.is_warning:
             assert "fingerprint" not in f.warning_detail.lower()
-            assert "subject key id" in f.warning_detail.lower()
+            # The value being checked is named by the field's label; the
+            # warning is one line, so the key id fits one page (2026-10-09).
+            assert "subject key id" in f.label.lower()
 
 
 def test_deputy_cross_cert_v2_review_fields_subject_key_id_fields_are_flagged_as_warning_fields():
@@ -805,7 +807,7 @@ def test_root_self_cert_review_fields_warning_names_the_subject_key_id_not_a_fin
     fields = root_self_cert_review_fields(bytes([0xCD]) * 1952, ChainKind.MAINNET, 1_700_000_000, 1_900_000_000, bytes([0x22]) * 16)
     warning = next(f for f in fields if f.is_warning)
     assert "fingerprint" not in warning.warning_detail.lower()
-    assert "subject key id" in warning.warning_detail.lower()
+    assert "subject key id" in warning.label.lower()
 
 
 def test_root_self_cert_review_fields_subject_key_id_is_flagged_as_a_warning_field():
