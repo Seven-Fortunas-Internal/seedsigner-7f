@@ -29,7 +29,17 @@ def main(sys_argv=None):
         ),
     )
 
+    parser.add_argument(
+        "--tripwire",
+        choices=["auto", "enforce"],
+        default="auto",
+        help="Network tripwire mode: auto (from the image) or enforce (test it on the dev image). Nothing turns it off.",
+    )
+
     args = parser.parse_args(sys_argv)
+
+    from seedsigner.models import network_tripwire
+    network_tripwire.force_enforce_requested = args.tripwire == "enforce"
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.getLevelName(args.loglevel))

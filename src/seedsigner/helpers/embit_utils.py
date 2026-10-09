@@ -193,6 +193,8 @@ def sign_message(seed_bytes: bytes, derivation: str, msg: bytes, compressed: boo
         from: https://github.com/cryptoadvance/specter-diy/blob/b58a819ef09b2bca880a82c7e122618944355118/src/apps/signmessage/signmessage.py
     """
     """Sign message with private key"""
+    from seedsigner.models import network_tripwire
+    network_tripwire.assert_clean()
     msghash = sha256(
         sha256(
             b"\x18Bitcoin Signed Message:\n" + compact.to_bytes(len(msg)) + msg

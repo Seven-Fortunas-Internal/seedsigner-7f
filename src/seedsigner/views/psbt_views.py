@@ -750,6 +750,8 @@ class PSBTFinalizeView(View):
         else:
             # Sign PSBT
             sig_cnt = PSBTParser.sig_count(psbt)
+            from seedsigner.models import network_tripwire
+            network_tripwire.assert_clean()     # embit signs; gate it here
             psbt.sign_with(psbt_parser.root)
             trimmed_psbt = PSBTParser.trim(psbt)
 

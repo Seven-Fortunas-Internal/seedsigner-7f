@@ -382,6 +382,8 @@ class EvmPlugin:
         return parsed.review_fields
 
     def sign(self, seed_bytes: bytes, path: str, payload: bytes) -> Signature:
+        from seedsigner.models import network_tripwire
+        network_tripwire.assert_clean()
         if payload[:1] == bytes([TX_TYPE_EIP1559]):
             # Structural refusal for a path outside this plugin's own namespace --
             # see validate_derivation_path()'s docstring. Checked before

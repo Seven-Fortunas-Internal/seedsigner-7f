@@ -63,7 +63,9 @@ def seed_for_7f(seed) -> SevenFSeed:
     """ The SevenFSeed of `seed`, or NotA7FPhraseError if 7fchain would not
         derive from it: not a plain BIP-39 Seed (an ElectrumSeed is a subclass
         whose seed bytes are not BIP-39), not 24 words, or not English. """
+    from seedsigner.models import network_tripwire
     from seedsigner.models.seed import Seed
+    network_tripwire.assert_clean()
     if type(seed) is not Seed:
         raise NotA7FPhraseError("7F keys come from a BIP-39 phrase; this seed is not one")
     if len(seed.mnemonic_list) != ROOT_WORD_COUNT:

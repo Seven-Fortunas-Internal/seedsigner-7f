@@ -8,6 +8,7 @@ from embit import bip39, bip32, bip85
 from embit.networks import NETWORKS
 from typing import List
 
+from seedsigner.models import network_tripwire
 from seedsigner.models.settings import SettingsConstants
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class Seed:
 
 
     def _generate_seed(self):
+        network_tripwire.assert_clean()        # before the phrase becomes key material
         try:
             self.seed_bytes = bip39.mnemonic_to_seed(self.mnemonic_str, password=self._passphrase, wordlist=self.wordlist)
         except Exception as e:

@@ -25,6 +25,7 @@ import ctypes
 import os
 from pathlib import Path
 
+from seedsigner.models import network_tripwire
 from seedsigner.models.sevenf._ffi import ErrCode, MlDsa7fError, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import (
     ADDRESS_LEN,
@@ -197,6 +198,7 @@ def derive_pubkey(master_seed: bytes, path: str) -> tuple[bytes, str]:
         address is on the path's own network and layer. Raises
         PathLexiconError (7fchain's message) for a path its rules refuse,
         MlDsaError on any other failure. """
+    network_tripwire.assert_clean(network=network_tripwire.network_of_path(path))
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
     _refuse_bad_path(path)
@@ -237,6 +239,7 @@ def derive_and_sign(master_seed: bytes, path: str, message: bytes) -> tuple[byte
         sign_checked does (sign_ops.rs); the signature is verified under its
         key before it is returned. Raises PathLexiconError (7fchain's
         message) for a refused path, MlDsaError otherwise. """
+    network_tripwire.assert_clean(network=network_tripwire.network_of_path(path))
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
     _refuse_bad_path(path)

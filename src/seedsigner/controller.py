@@ -9,6 +9,7 @@ from embit.psbt import PSBT
 from PIL.Image import Image
 
 from seedsigner.gui.toast import BaseToastOverlayManagerThread
+from seedsigner.models import network_tripwire
 from seedsigner.models.psbt_parser import PSBTParser
 from seedsigner.models.seed import Seed
 from seedsigner.models.seed_storage import SeedStorage
@@ -19,6 +20,9 @@ from seedsigner.models.threads import BaseThread
 from seedsigner.views.screensaver import ScreensaverScreen
 from seedsigner.views.view import Destination, View
 
+
+# The exit status after a network tripwire trip (models/network_tripwire.py).
+EXIT_NETWORK_TRIPPED = 3
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +215,14 @@ class Controller(Singleton):
         # models
         controller.settings = Settings.get_instance()
         
+        # The network tripwire's mode comes from the image itself; see
+        # models/network_tripwire.py. main.py's --tripwire=enforce can only
+        # raise it.
+        network_tripwire.configure(
+            network_tripwire.detect_mode(force_enforce=network_tripwire.force_enforce_requested),
+            on_trip=controller._on_network_trip,
+        )
+
         controller.microsd = MicroSD.get_instance()
         controller.microsd.start_detection()
 
@@ -251,6 +263,46 @@ class Controller(Singleton):
         self.storage.seeds.remove(seed)
 
 
+    # Everything that can hold a seed, a key or the entropy a seed came from
+    # (beyond SeedStorage and the back stack's views).
+    _SECRET_HOLDING_ATTRS = (
+        "psbt", "psbt_seed", "psbt_parser", "multisig_wallet_descriptor", "unverified_address",
+        "image_entropy_preview_frames", "image_entropy_final_image", "address_explorer_data",
+        "sign_message_data", "multichain_data", "resume_main_flow",
+    )
+
+
+    def wipe_secrets(self):
+        """ Drop every reference to a seed or key this process holds. """
+        import gc
+        if self._storage is not None:
+            self._storage.wipe()
+        for attr in self._SECRET_HOLDING_ATTRS:
+            setattr(self, attr, None)
+        self.back_stack = BackStack()
+        gc.collect()
+
+
+    def _on_network_trip(self, findings):
+        """ The network tripwire's trip handler: wipe, leave the warning on
+            the display, and end the process. Nothing restarts the app, so
+            only a power-off brings the device back, and its boot gate checks
+            again. Nothing is written anywhere. """
+        try:
+            self.wipe_secrets()
+            from seedsigner.gui.renderer import Renderer
+            from seedsigner.gui.screens.network_lockdown import render_network_lockdown
+            renderer = Renderer.get_instance()
+            # Draw even if another thread holds the display: the warning
+            # matters more than a torn frame.
+            locked = Renderer.lock.acquire(timeout=1)
+            renderer.show_image(render_network_lockdown(renderer.canvas_width, renderer.canvas_height, findings))
+            if locked:
+                Renderer.lock.release()
+        finally:
+            os._exit(EXIT_NETWORK_TRIPPED)
+
+
     def pop_prev_from_back_stack(self):
         if len(self.back_stack) > 0:
             # Pop the top View (which is the current View_cls)
@@ -276,6 +328,10 @@ class Controller(Singleton):
         from seedsigner.views import MainMenuView, BackStackView, RemoveMicroSDWarningView, ChainChooserView
         from seedsigner.views.screensaver import OpeningSplashView
         from seedsigner.gui.toast import RemoveSDCardToastManagerThread
+
+        # Before anything is shown or any seed can be entered.
+        network_tripwire.boot_gate()
+        self.tripwire_monitor = network_tripwire.start_monitor()
 
         OpeningSplashView().run()
 
@@ -348,6 +404,8 @@ class Controller(Singleton):
                 logger.info(f"\nback_stack: {self.back_stack}")
 
                 try:
+                    network_tripwire.assert_clean()
+
                     # Instantiate the View class and run it
                     logger.info(f"Executing {next_destination}")
                     next_destination = next_destination.run()

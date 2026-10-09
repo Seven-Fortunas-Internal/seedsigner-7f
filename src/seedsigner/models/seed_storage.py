@@ -84,6 +84,16 @@ class SeedStorage:
         self._pending_seed_expected_fingerprint = None
 
 
+    def wipe(self):
+        """ Drop every seed and every pending phrase (the network tripwire).
+            Python cannot overwrite str/bytes in place, so this removes the
+            references; powering off is what clears the memory. """
+        self.seeds.clear()
+        self.clear_pending_seed()
+        self._pending_mnemonic.clear()
+        self._pending_is_electrum = False
+
+
     def validate_mnemonic(self, mnemonic: List[str]) -> bool:
         try:
             Seed(mnemonic=mnemonic)
