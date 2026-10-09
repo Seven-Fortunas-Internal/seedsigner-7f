@@ -23,7 +23,7 @@ from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf import config_json
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display, visible_text
+from seedsigner.models.sevenf.review_format import NOT_A_CALENDAR_DATE, canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display, utc_datetime, visible_text
 
 # 7f-review-parse-failure-messages-not-actionable (2026-10-04): what each
 # code plausibly means for THIS artifact type, grounded directly in
@@ -410,6 +410,9 @@ def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = N
         genesis_config.py's own review_fields(). """
     out = []
     for label, value in _labeled_values(fields):
+        if label == "Timestamp" and utc_datetime(fields.timestamp) is None:
+            out.append(ReviewField(label=label, value=value, is_warning=True, warning_detail=NOT_A_CALENDAR_DATE))
+            continue
         if label != _RECIPIENT_LABEL:
             out.append(ReviewField(label=label, value=value))
             continue

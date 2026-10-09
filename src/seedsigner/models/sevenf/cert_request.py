@@ -74,7 +74,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ML_DSA_SIG_LEN, ChainKind
-from seedsigner.models.sevenf.review_format import group_hex_for_display, format_timestamp as _format_timestamp, ski
+from seedsigner.models.sevenf.review_format import group_hex_for_display, format_timestamp as _format_timestamp, ski, utc_datetime
 
 # Must match firmware/mldsa7f/src/ffi.rs's CERT_TBS_MAX_LEN exactly --
 # display/sizing-only here (the FFI call itself fails loudly with a
@@ -454,9 +454,9 @@ def deputy_cross_cert_v2_review_fields(
             label="Deputy: Subject key id", value=group_hex_for_display(ski(csr.subject_vk.hex())), is_warning=True,
             warning_detail="Compare against the subject key id the Deputy's holder reported.",
         ),
-        ReviewField(label="Deputy: Valid from", value=_format_timestamp(now)),
+        ReviewField(label="Deputy: Valid from", value=_validity_date(now)),
         ReviewField(label="Deputy: Valid for", value=f"{days} days"),
-        ReviewField(label="Deputy: Valid until", value=_format_timestamp(not_after)),
+        ReviewField(label="Deputy: Valid until", value=_validity_date(not_after)),
         ReviewField(label="Deputy: Serial", value=serial.hex()),
     ]
 
@@ -541,10 +541,18 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
             warning_detail="Compare against your recorded subject key id.",
         ),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
-        ReviewField(label="Valid from", value=_format_timestamp(not_before)),
-        ReviewField(label="Valid until", value=_format_timestamp(not_after)),
+        ReviewField(label="Valid from", value=_validity_date(not_before)),
+        ReviewField(label="Valid until", value=_validity_date(not_after)),
         ReviewField(label="Serial", value=serial.hex()),
     ]
+
+
+def _validity_date(timestamp: int) -> str:
+    """ A validity date this device computed, as shown for review. One it
+        cannot show as a calendar date is refused, never signed unseen. """
+    if utc_datetime(timestamp) is None:
+        raise CertRequestError(f"validity date {timestamp} is not a calendar date; nothing to sign")
+    return _format_timestamp(timestamp)
 
 
 # --- PKCS#10 CSR building: test/tooling-only ---

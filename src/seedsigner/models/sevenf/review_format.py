@@ -6,7 +6,7 @@
 """
 import hashlib
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 def format_timestamp(timestamp: int) -> str:
@@ -22,11 +22,29 @@ def format_timestamp(timestamp: int) -> str:
         raw value alone with a clear note instead ("refuse rather than
         guess" for the interpretation, not for the raw value itself, which
         is always shown). """
-    try:
-        utc_str = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    except (OSError, OverflowError, ValueError):
+    d = utc_datetime(timestamp)
+    if d is None:
         return f"{timestamp} (not a valid calendar date)"
-    return f"{timestamp}\n({utc_str})"
+    return f"{timestamp}\n({d:%Y-%m-%d %H:%M:%S} UTC)"
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+# The warning beside a coordinator-supplied timestamp that is no calendar date.
+NOT_A_CALENDAR_DATE = ("Not a calendar date. sf-wallet-gov signs any non-zero timestamp, "
+                       "but ask the coordinator before signing this one.")
+
+
+def utc_datetime(timestamp: int) -> datetime | None:
+    """ The UTC date of a Unix timestamp, or None past datetime's range (year
+        9999). Computed as epoch + seconds, never through the platform's time_t:
+        the device is 32-bit, where datetime.fromtimestamp() stops at
+        2038-01-19 and a 20-year certificate ends in the 2040s (found on the
+        dev unit, 2026-10-08). """
+    try:
+        return _EPOCH + timedelta(seconds=timestamp)
+    except OverflowError:
+        return None
 
 
 def ski(vk_hex: str) -> str:

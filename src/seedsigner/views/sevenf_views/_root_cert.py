@@ -126,10 +126,15 @@ class SevenFBuildRootSelfCertView(View):
         # Deputy's TBS, which clamps to the issuing Root's own window), so
         # this is the exact value the TBS just built also carries.
         not_after = not_before + days * 86_400
-        review_fields = [
-            key_index_review_field(chain_kind, self.key_index),
-            *cert_request.root_self_cert_review_fields(subject_vk, chain_kind, not_before, not_after, serial),
-        ]
+        try:
+            review_fields = [
+                key_index_review_field(chain_kind, self.key_index),
+                *cert_request.root_self_cert_review_fields(subject_vk, chain_kind, not_before, not_after, serial),
+            ]
+        except CertRequestError as e:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't show the certificate for review: {}").format(e)),
+                skip_current_view=True)
 
         return Destination(
             SevenFCertRequestReviewFieldView,

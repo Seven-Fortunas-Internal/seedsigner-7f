@@ -18,6 +18,8 @@ import calendar
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
+from seedsigner.models.sevenf.review_format import utc_datetime
+
 # Never accept a date before this, even without a build timestamp.
 CLOCK_FLOOR_FALLBACK = int(datetime(2026, 10, 7, tzinfo=timezone.utc).timestamp())
 MAX_YEAR = 2099
@@ -42,7 +44,9 @@ class DateTimeFields:
 
     @classmethod
     def from_timestamp(cls, timestamp: int) -> "DateTimeFields":
-        d = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        d = utc_datetime(timestamp)          # not fromtimestamp: 32-bit time_t ends in 2038
+        if d is None:
+            raise ValueError(f"timestamp {timestamp} is not a calendar date")
         return cls(d.year, d.month, d.day, d.hour, d.minute)
 
     def to_timestamp(self) -> int:

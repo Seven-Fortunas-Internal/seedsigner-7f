@@ -41,7 +41,7 @@ from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf import config_json
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, visible_text
+from seedsigner.models.sevenf.review_format import NOT_A_CALENDAR_DATE, canonical_digest, format_timestamp as _format_timestamp, utc_datetime, visible_text
 
 # Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
 # exactly -- display-only here (parse_canonical_bytes already enforces the
@@ -337,7 +337,9 @@ def review_fields(fields: GenesisConfigFields, canonical_bytes: bytes | None = N
     default_of = {label: default for label, _value, default in nondefault_consensus(fields)}
     out = []
     for label, value in _labeled_values(fields):
-        if label in default_of:
+        if label == "Timestamp" and utc_datetime(fields.timestamp) is None:
+            out.append(ReviewField(label=label, value=value, is_warning=True, warning_detail=NOT_A_CALENDAR_DATE))
+        elif label in default_of:
             out.append(ReviewField(
                 label=label, value=value, is_warning=True,
                 warning_detail=f"Not the {fields.chain_kind.name.lower()} default ({default_of[label]}). "
