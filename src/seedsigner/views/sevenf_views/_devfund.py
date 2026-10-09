@@ -172,9 +172,8 @@ class SevenFConfirmSignDevFundView(View):
         self.tbs_bytes = tbs_bytes
         self.key_index = key_index
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, index=key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=key_index)
         self.public_key = keys.devfund.public_key
-        self.devfund_address = keys.devfund.address
         self.subject_key_id = subject_key_id_with_index(keys.devfund.public_key, key_index)
 
 
@@ -183,7 +182,6 @@ class SevenFConfirmSignDevFundView(View):
         selected_menu_num = self.run_screen(
             SevenFConfirmSignScreen,
             chain_kind_name=self.chain_kind.name.lower(),
-            address=self.devfund_address,
             subject_key_id=self.subject_key_id,
             signing_role_label=_("Root key"),
         )
@@ -194,7 +192,7 @@ class SevenFConfirmSignDevFundView(View):
         # Operator clicked "Sign" -- the one and only call site allowed to pass
         # confirmed=True for this flow (root_ceremony.sign_with_devfund's own docstring).
         public_key, signature = root_ceremony.sign_with_devfund(
-            self.seed.seed_bytes,
+            root_ceremony.seed_for_7f(self.seed),
             self.chain_kind,
             self.tbs_bytes,
             confirmed=True,

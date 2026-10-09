@@ -15,6 +15,7 @@ import pytest
 from seedsigner.models.encode_qr import BBQrEncoder
 from seedsigner.models.sevenf import genesis_config, mldsa, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
+from sevenf_helpers import sevenf_seed_from_bytes
 
 TOOL_DIR = "tools/bbqr_web_scanner"
 
@@ -60,7 +61,7 @@ def test_decodes_a_real_single_part_bbqr_payload(tmp_path):
 def test_decodes_a_real_multi_part_bbqr_payload_out_of_order(tmp_path):
     # A real genesis-config signature export -- large enough to span
     # multiple BBQr parts, exactly the case that matters for the scanner.
-    root_keys = root_ceremony.derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET, index=0)
+    root_keys = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0)
     payload = json.dumps(genesis_config.build_root_sig_json(
         root_keys.root_ca.public_key, b"\x11" * 3309, with_vk=True,
     )).encode("utf-8")
@@ -81,7 +82,7 @@ def test_ski_matches_the_real_python_port():
 
     from seedsigner.models.sevenf.review_format import ski
 
-    root_keys = root_ceremony.derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET, index=0)
+    root_keys = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0)
     vk_hex = root_keys.root_ca.public_key.hex()
     expected = ski(vk_hex)
 
@@ -132,7 +133,7 @@ def test_pin_is_the_full_sha256_of_the_raw_vk():
         code under test. """
     import hashlib
 
-    vk = root_ceremony.derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET, index=0).root_ca.public_key
+    vk = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0).root_ca.public_key
     out = _node(f"require('./bbqr-decode.js').pin('{vk.hex()}').then(r => process.stdout.write(r));")
     assert out == hashlib.sha256(vk).hexdigest()
 
@@ -144,7 +145,7 @@ def test_pin_and_ski_match_real_sf_wallet_gov_for_the_canonical_phrase():
     from embit.bip39 import mnemonic_to_seed
 
     seed = mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password="")
-    vk_hex = root_ceremony.derive_root_ceremony_keys(seed, ChainKind.TESTNET, index=0).root_ca.public_key.hex()
+    vk_hex = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(seed), ChainKind.TESTNET, index=0).root_ca.public_key.hex()
     out = _node(f"""
 const d = require('./bbqr-decode.js');
 Promise.all([d.ski('{vk_hex}'), d.pin('{vk_hex}')]).then(([s, p]) => process.stdout.write(s + ' ' + p));
@@ -158,7 +159,7 @@ def test_vk_bundle_carries_ski_pin_and_vk_with_sf_wallet_gov_labels():
         in one paste: the ski (file name / voice check), the pin (second-
         channel check) and the vk itself. Labels match what sf-wallet-gov
         prints, so the two can be compared line by line. """
-    vk = root_ceremony.derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET, index=0).root_ca.public_key
+    vk = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0).root_ca.public_key
     import hashlib
     digest = hashlib.sha256(vk).hexdigest()
     out = _node(f"require('./bbqr-decode.js').vkBundle('{vk.hex().upper()}').then(r => process.stdout.write(r));")
@@ -217,7 +218,7 @@ def test_summary_file_is_the_bundle_with_a_phone_check_reminder():
     """ "Save summary" writes <ski>.txt next to the .vk: a record for the
         holder, never a substitute for confirming the pin by phone. """
     import hashlib
-    vk = root_ceremony.derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET, index=0).root_ca.public_key
+    vk = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0).root_ca.public_key
     digest = hashlib.sha256(vk).hexdigest()
     out = _node(f"require('./bbqr-decode.js').vkSummary('{vk.hex()}').then(r => process.stdout.write(JSON.stringify(r)));")
     import json
@@ -242,7 +243,7 @@ def _root_cert_envelope() -> str:
     from embit.bip39 import mnemonic_to_seed
     pem = (Path("tests/fixtures/sf_wallet_gov_root_cert_abandon_art_testnet.pem")).read_text()
     vk = root_ceremony.derive_root_ceremony_keys(
-        mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password=""), ChainKind.TESTNET, index=0).root_ca.public_key
+        sevenf_seed_from_bytes(mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password="")), ChainKind.TESTNET, index=0).root_ca.public_key
     return root_cert_export(pem_to_der(pem), vk).decode()
 
 

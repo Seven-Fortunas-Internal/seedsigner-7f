@@ -21,6 +21,7 @@ from seedsigner.models.sevenf.root_ceremony import (
     sign_with_devfund,
     sign_with_root_ca,
 )
+from sevenf_helpers import sevenf_seed_from_bytes
 
 
 def _lib_available() -> bool:
@@ -81,7 +82,7 @@ def test_paths_refuse_an_index_that_is_not_a_u32_int(bad):
 @needs_lib
 @pytest.mark.parametrize("index", sorted(ROOT_SKI))
 def test_root_key_at_index_matches_sf_wallet_gov(index):
-    keys = derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=index)
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, index=index)
     assert ski(keys.root_ca.public_key.hex()) == ROOT_SKI[index]
     assert keys.index == index
 
@@ -89,15 +90,15 @@ def test_root_key_at_index_matches_sf_wallet_gov(index):
 @needs_lib
 @pytest.mark.parametrize("index", sorted(DEVFUND_SKI))
 def test_devfund_key_at_index_matches_sf_wallet_gov(index):
-    devfund = derive_devfund_key(CANONICAL_SEED, ChainKind.TESTNET, index=index)
+    devfund = derive_devfund_key(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, index=index)
     assert ski(devfund.public_key.hex()) == DEVFUND_SKI[index]
 
 
 @needs_lib
 def test_derivation_defaults_to_index_0():
-    assert derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=0).index == 0
-    assert ski(derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=0).root_ca.public_key.hex()) == ROOT_SKI[0]
-    assert ski(derive_devfund_key(CANONICAL_SEED, ChainKind.TESTNET, index=0).public_key.hex()) == DEVFUND_SKI[0]
+    assert derive_root_ceremony_keys(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, index=0).index == 0
+    assert ski(derive_root_ceremony_keys(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, index=0).root_ca.public_key.hex()) == ROOT_SKI[0]
+    assert ski(derive_devfund_key(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, index=0).public_key.hex()) == DEVFUND_SKI[0]
 
 
 # --- signing --------------------------------------------------------------
@@ -113,15 +114,15 @@ def test_signing_at_an_index_verifies_only_under_that_index_key(sign):
         two signatures always differ): assemble_root_cert_der() verifies the
         signature against the subject key and refuses on mismatch. Both sign
         functions sign with the ROOT key at the given index. """
-    index_2_vk = derive_root_ceremony_keys(CANONICAL_SEED, ChainKind.TESTNET, index=2).root_ca.public_key
+    index_2_vk = derive_root_ceremony_keys(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, index=2).root_ca.public_key
     tbs = _root_tbs_for(index_2_vk)
 
-    public_key, signature = sign(CANONICAL_SEED, ChainKind.TESTNET, tbs, confirmed=True, index=2)
+    public_key, signature = sign(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, tbs, confirmed=True, index=2)
     assert public_key == index_2_vk
     assert ski(public_key.hex()) == ROOT_SKI[2]
     cert_request.assemble_root_cert_der(tbs, signature, index_2_vk)
 
-    _, index_0_signature = sign(CANONICAL_SEED, ChainKind.TESTNET, tbs, confirmed=True, index=0)
+    _, index_0_signature = sign(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, tbs, confirmed=True, index=0)
     with pytest.raises(cert_request.CertRequestError):
         cert_request.assemble_root_cert_der(tbs, index_0_signature, index_2_vk)
 
@@ -130,13 +131,13 @@ def test_signing_at_an_index_verifies_only_under_that_index_key(sign):
 def test_signing_requires_the_index(sign):
     """ No default: a caller that forgets the index must fail, not sign at 0. """
     with pytest.raises(TypeError):
-        sign(CANONICAL_SEED, ChainKind.TESTNET, b"x", confirmed=True)
+        sign(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, b"x", confirmed=True)
 
 
 @pytest.mark.parametrize("sign", [sign_with_root_ca, sign_with_devfund])
 def test_signing_refuses_a_bad_index_before_signing(sign):
     with pytest.raises((ValueError, TypeError)):
-        sign(CANONICAL_SEED, ChainKind.TESTNET, b"x", index=-1, confirmed=True)
+        sign(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, b"x", index=-1, confirmed=True)
 
 
 @pytest.mark.parametrize("derive", [derive_root_ceremony_keys, derive_devfund_key])
@@ -146,3 +147,22 @@ def test_derivation_requires_the_index(derive):
         catch it. """
     with pytest.raises(TypeError):
         derive(CANONICAL_SEED, ChainKind.TESTNET)
+
+
+# --- story 1c (M-2): paths are built by 7fchain's path_for, not by Python ------
+
+def test_paths_are_built_by_7fchains_path_for(monkeypatch):
+    from seedsigner.models.sevenf import constants, mldsa
+    calls = []
+    monkeypatch.setattr(mldsa, "path_for", lambda role, kind, index: calls.append((role, kind, index)) or f"<{role}>")
+    assert constants.root_path(ChainKind.TESTNET, 7) == "<root>"
+    assert constants.devfund_path(ChainKind.MAINNET, 2) == "<devfund>"
+    assert calls == [("root", ChainKind.TESTNET, 7), ("devfund", ChainKind.MAINNET, 2)]
+
+
+@pytest.mark.parametrize("bad", [True, -1, 2**32, 1.0, "7"])
+def test_the_index_is_still_type_and_range_checked_before_the_ffi(bad):
+    """ A ctypes u32 would silently wrap an out-of-range int; Python refuses first. """
+    from seedsigner.models.sevenf.constants import root_path
+    with pytest.raises((TypeError, ValueError)):
+        root_path(ChainKind.TESTNET, bad)

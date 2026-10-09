@@ -19,6 +19,7 @@ from seedsigner.models.sevenf.devfund_config import (
     parse_canonical_bytes,
     review_fields,
 )
+from sevenf_helpers import sevenf_seed_from_bytes
 
 
 def _lib_available() -> bool:
@@ -186,8 +187,8 @@ _DROP = object()
 
 
 def _real_address() -> str:
-    from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys
-    return derive_root_ceremony_keys(b"\x2a" * 64, ChainKind.TESTNET, index=0).root_ca.address
+    """ A valid testnet ML-DSA L1 address (sf-crypto's encoder; see EVERY_ADDRESS_KIND). """
+    return "t1lswdehurp3f3puwsuytdwcqjx6e9q0g6cktcyam8w2rhhvf"
 
 
 def test_parses_the_real_coordinator_file():

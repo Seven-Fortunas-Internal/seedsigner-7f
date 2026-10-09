@@ -36,7 +36,7 @@
     would sign for the same file.
 """
 from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signature
-from seedsigner.models.sevenf import genesis_config, mldsa, root_ceremony
+from seedsigner.models.sevenf import genesis_config
 from seedsigner.models.sevenf.constants import ChainKind, root_path
 
 
@@ -78,16 +78,11 @@ class SevenFPlugin:
     display_name = "7F Chain"
 
     def derive_address(self, seed_bytes: bytes, path: str) -> Address:
-        """ `path` must be one of root_path()'s own output for some
-            ChainKind -- not yet exercised by any current UI (the ceremony
-            flow itself never browses an address; it only derives the Root
-            key at sign time, from the chain_kind embedded in a scanned
-            genesis-config). Implemented for real rather than stubbed so a
-            future "view Root address" screen has a working,
-            already-correct entry point. """
-        chain_kind = _chain_kind_from_path(path)
-        public_key, address = mldsa.derive_pubkey(seed_bytes, path)
-        return Address(path=path, address=address, network_name=chain_kind.name.lower())
+        """ Refused. 7F keys are derived only from a 24-word governance phrase
+            (root_ceremony.seed_for_7f), which raw seed bytes cannot prove, and
+            the 7F keys this device holds are CA keys, which have no address
+            (sf-wallet-gov prints none). No view calls this. """
+        raise NotImplementedError("7F keys are derived only in the 7F menu flows, from a 24-word phrase")
 
 
     def parse_sign_request(self, payload: bytes) -> ParsedRequest:
@@ -109,16 +104,12 @@ class SevenFPlugin:
 
 
     def sign(self, seed_bytes: bytes, path: str, payload: bytes) -> Signature:
-        """ `path` is intentionally unused -- see this module's own docstring
-            for why chain_kind must come from `payload` itself, never a
-            separately-supplied argument. """
-        canonical_bytes, fields = _canonical_bytes_from_json(payload)
-        public_key, signature_bytes = root_ceremony.sign_with_root_ca(
-            # Index 0, matching parse_sign_request()'s derivation_path; no view
-            # signs through this plugin (the 7F views carry the chosen index).
-            seed_bytes, fields.chain_kind, canonical_bytes, confirmed=True, index=0,
-        )
-        return Signature(signature_bytes=signature_bytes, public_key=public_key)
+        """ Refused. 7F signing happens only in the 7F menu flows: they check
+            the phrase (seed_for_7f), apply sf-wallet-gov's refusals, show every
+            field and take the key index. A generic entry point taking raw seed
+            bytes would bypass all of that (the 2026-10-03 signing-oracle
+            finding). No view calls this. """
+        raise NotImplementedError("7F signing happens only in the 7F menu flows")
 
 
     def encode_response(self, signature: Signature) -> bytes:

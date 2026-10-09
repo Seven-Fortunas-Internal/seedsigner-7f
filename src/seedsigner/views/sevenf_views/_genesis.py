@@ -252,9 +252,8 @@ class SevenFConfirmSignView(View):
         super().__init__()
         self.state = state
 
-        keys = root_ceremony.derive_root_ceremony_keys(state.seed.seed_bytes, state.chain_kind, index=state.key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(state.seed), state.chain_kind, index=state.key_index)
         self.public_key = keys.root_ca.public_key
-        self.root_ca_address = keys.root_ca.address
         self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, state.key_index)
 
 
@@ -263,7 +262,6 @@ class SevenFConfirmSignView(View):
         selected_menu_num = self.run_screen(
             SevenFConfirmSignScreen,
             chain_kind_name=self.state.chain_kind.name.lower(),
-            address=self.root_ca_address,
             subject_key_id=self.subject_key_id,
         )
 
@@ -273,7 +271,7 @@ class SevenFConfirmSignView(View):
         # Operator clicked "Sign" -- the one and only call site allowed to pass
         # confirmed=True (root_ceremony.sign_with_root_ca's own docstring).
         public_key, signature = root_ceremony.sign_with_root_ca(
-            self.state.seed.seed_bytes,
+            root_ceremony.seed_for_7f(self.state.seed),
             self.state.chain_kind,
             self.state.canonical_bytes,
             confirmed=True,

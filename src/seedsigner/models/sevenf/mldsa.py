@@ -118,6 +118,12 @@ _MLDSA_ARGTYPES = {
         ctypes.c_char_p, ctypes.c_size_t,   # msg_out
         ctypes.POINTER(ctypes.c_size_t),     # msg_written_out
     ], ctypes.c_int32),
+    "mldsa7f_path_for": ([
+        ctypes.c_char_p, ctypes.c_size_t,   # role
+        ctypes.c_uint8, ctypes.c_uint32,     # chain_kind, index
+        ctypes.c_char_p, ctypes.c_size_t,   # out
+        ctypes.POINTER(ctypes.c_size_t),     # out_written
+    ], ctypes.c_int32),
     "mldsa7f_derive_and_sign": ([
         ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
         ctypes.c_char_p, ctypes.c_size_t,   # path
@@ -184,6 +190,20 @@ def path_refusal(path: str) -> str | None:
     if rc == ERR_BAD_PATH_UTF8:
         return "derivation path is not valid UTF-8"
     raise MlDsaError(rc, "path_validate")
+
+
+def path_for(role: str, chain_kind: int, index: int) -> str:
+    """ The derivation path for `role` on `chain_kind` at `index`, built by
+        7fchain's own path_for (the verbatim port in firmware/mldsa7f). The
+        caller range-checks `index` first: a ctypes u32 would wrap. """
+    lib = _lib_handle()
+    role_bytes = role.encode("utf-8")
+    out = ctypes.create_string_buffer(_PATH_MESSAGE_MAX)
+    written = ctypes.c_size_t(0)
+    rc = lib.mldsa7f_path_for(role_bytes, len(role_bytes), int(chain_kind), index, out, _PATH_MESSAGE_MAX, ctypes.byref(written))
+    if rc != 0:
+        raise MlDsaError(rc, "path_for")
+    return out.raw[:written.value].decode("ascii")
 
 
 def derive_pubkey(master_seed: bytes, path: str) -> tuple[bytes, str]:

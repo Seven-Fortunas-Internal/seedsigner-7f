@@ -16,6 +16,7 @@ from seedsigner.models.sevenf.export_envelope import (
     pem_to_der,
     root_cert_export,
 )
+from sevenf_helpers import sevenf_seed_from_bytes
 
 # Written by `sf-wallet-gov sign-root-cert --index 0` (7fchain 416f576) for
 # "abandon x23 art", testnet -- the reference for the PEM text format.
@@ -44,7 +45,7 @@ def test_root_cert_export_names_the_file_by_the_subject_ski():
     from embit.bip39 import mnemonic_to_seed
     from seedsigner.models.sevenf.constants import ChainKind
     from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys
-    vk = derive_root_ceremony_keys(mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password=""), ChainKind.TESTNET, index=0).root_ca.public_key
+    vk = derive_root_ceremony_keys(sevenf_seed_from_bytes(mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password="")), ChainKind.TESTNET, index=0).root_ca.public_key
 
     envelope = json.loads(root_cert_export(der, vk))
     assert envelope == {

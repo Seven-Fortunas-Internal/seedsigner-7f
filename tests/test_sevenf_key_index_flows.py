@@ -25,6 +25,7 @@ from seedsigner.views import seed_views, sevenf_views
 
 from test_sevenf_key_index import DEVFUND_SKI, ROOT_SKI
 from test_sevenf_views import _past_key_index, _sample_canonical_bytes, _sample_devfund_canonical_bytes
+from seedsigner.models.sevenf.root_ceremony import seed_for_7f
 
 
 def _lib_available() -> bool:
@@ -218,7 +219,7 @@ class TestSigningKeyMustBeTheKeyShown(_IndexFlowTest):
     ])
     def test_a_different_signing_key_is_refused(self, make_view, sign_name):
         view = make_view(self.seed_fixture())
-        index_0_key = root_ceremony.derive_root_ceremony_keys(_seed_of(view).seed_bytes, ChainKind.TESTNET, index=0).root_ca.public_key
+        index_0_key = root_ceremony.derive_root_ceremony_keys(seed_for_7f(_seed_of(view)), ChainKind.TESTNET, index=0).root_ca.public_key
 
         with pytest.MonkeyPatch().context() as mp:
             mp.setattr(root_ceremony, sign_name, lambda *a, **kw: (index_0_key, b"sig"))

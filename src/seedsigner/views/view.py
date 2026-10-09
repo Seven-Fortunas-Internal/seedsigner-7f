@@ -119,7 +119,7 @@ class View:
             from seedsigner.models.sevenf._ffi import MlDsa7fError
             from seedsigner.models.sevenf.seed_label import sevenf_seed_label
             try:
-                return sevenf_seed_label(seed.seed_bytes)
+                return sevenf_seed_label(seed)
             except (MlDsa7fError, OSError) as e:
                 # Keep the seed menus usable (e.g. to discard a seed) if the
                 # signing library fails. Never fall back to the BIP-32 value:

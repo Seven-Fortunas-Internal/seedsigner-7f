@@ -300,9 +300,8 @@ class SevenFConfirmSignRootCertView(View):
         self.root_cert_der = root_cert_der
         self.signed_view_args = signed_view_args or {}
 
-        keys = root_ceremony.derive_root_ceremony_keys(self.seed.seed_bytes, self.chain_kind, index=key_index)
+        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=key_index)
         self.public_key = keys.root_ca.public_key
-        self.root_ca_address = keys.root_ca.address
         self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, key_index)
 
 
@@ -311,7 +310,6 @@ class SevenFConfirmSignRootCertView(View):
         selected_menu_num = self.run_screen(
             SevenFConfirmSignScreen,
             chain_kind_name=self.chain_kind.name.lower(),
-            address=self.root_ca_address,
             subject_key_id=self.subject_key_id,
         )
 
@@ -321,7 +319,7 @@ class SevenFConfirmSignRootCertView(View):
         # Operator clicked "Sign" -- the one and only call site allowed to pass
         # confirmed=True for this flow (root_ceremony.sign_with_root_ca's own docstring).
         public_key, signature = root_ceremony.sign_with_root_ca(
-            self.seed.seed_bytes,
+            root_ceremony.seed_for_7f(self.seed),
             self.chain_kind,
             self.tbs_bytes,
             confirmed=True,
@@ -387,3 +385,25 @@ class SevenFRootCertSignedView(View):
             button_data=[ButtonOption("OK")],
         )
         return Destination(self.export_destination, view_args=dict(certificate=self.certificate))
+
+
+
+class SevenFNotA7FPhraseView(View):
+    """ Shown instead of any 7F flow for a seed 7fchain would not derive from
+        (not 24 English BIP-39 words; sf-keytree phrase_file.rs ROOT_WORD_COUNT). """
+    def __init__(self, reason: str):
+        super().__init__()
+        self.reason = reason
+
+
+    def run(self):
+        from seedsigner.gui.screens import DireWarningScreen
+        self.run_screen(
+            DireWarningScreen,
+            title=_("7F"),
+            show_back_button=False,
+            status_headline=_("Not a 7F phrase"),
+            text=self.reason,
+            button_data=[ButtonOption("OK")],
+        )
+        return Destination(BackStackView)

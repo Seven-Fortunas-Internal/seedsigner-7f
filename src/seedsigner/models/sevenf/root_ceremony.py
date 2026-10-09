@@ -1,198 +1,131 @@
 """
-    Derive the Root-ceremony key from a 24-word BIP-39 mnemonic's seed
-    bytes. Backs 7f-signing-support-root-ceremony-key-derivation
-    (docs/7f-integration/root-key-ceremony-plan.md).
+    The Root and dev-fund keys of a 7F federation holder, derived from the
+    holder's phrase exactly as 7fchain's sf-wallet-gov derives them.
 
-    Deliberately narrow: no treasury key (dropped, see that plan doc's
-    "Correction" section -- sf-core/src/genesis_config.rs has no
-    treasury/premine field, B8/D20), and no mnemonic-generation logic here
-    -- that's stock SeedSigner's existing Seed/mnemonic UI, reused as-is
-    (see docs/7f-integration/README.md's "Architecture, as built" section
-    for the current module map).
+    7fchain is the source of truth (CLAUDE.md):
+    - A governance phrase is 24 English BIP-39 words, with an optional BIP-39
+      passphrase (sf-keytree phrase_file.rs ROOT_WORD_COUNT, mnemonic.rs
+      master_seed). Only `seed_for_7f()` makes a `SevenFSeed`, and every
+      function here takes one, so no other seed can reach a 7F key.
+    - The Root key is at root/<chain_kind>/<index>/ml-dsa/v1. sf-wallet-gov
+      signs genesis-config AND devfund-config with it (sign_ops.rs: both
+      `load_signer(Role::Root, ...)`), so `RootCeremonyKeys.devfund` is the same
+      key as `root_ca`.
+    - Each holder's dev-fund key is a different key, at
+      devfund/<chain_kind>/<index>/ml-dsa/v1 (7fchain 89d3d39): it locks the
+      dev fund's multisig; the Roots declare the recipient with the Root key.
+    - CA keys have no address: sf-wallet-gov prints none for them ("would
+      invite someone to pay it", main.rs derive-vk).
 
-    BUG FIX, 2026-10-03 (R27 re-port): this module used to derive
-    `devfund` from a *separate* path from `root_ca`
-    (`m/7fchain/l1/<chain_kind>/devfund/0` vs. `m/root-ca/l1/<chain_kind>/0`)
-    -- two different keys. Direct reading of 7fchain's real `sf-root.rs`
-    confirmed `cmd_sign_genesis` and `cmd_sign_devfund` both call the
-    byte-for-byte identical `root_key_from_file(chain_kind, 0, ...)`:
-    genesis-config and devfund-config are signed by the SAME Root key,
-    not two. `RootCeremonyKeys.devfund` is now the same `DerivedKey` as
-    `root_ca`, and `sign_with_devfund()` signs with that same key --
-    see that function's own doc comment. Still true after 7fchain 89d3d39.
-
-    Separately (2026-10-05, 7fchain 89d3d39): each holder also has a
-    dev-fund key at devfund/<chain_kind>/0/ml-dsa/v1 that locks the dev
-    fund's multisig -- derive_devfund_key(, index=0) below, enrolled and exported
-    only. The Roots DECLARE the recipient (Root-signed devfund-config);
-    those dev-fund keys SPEND from it.
+    Signing is gated: `confirmed=True` may be passed only by the confirm view
+    shown after the operator has approved every review field (or by offline
+    test-fixture tooling that has no operator session). It is the
+    no-blind-signing gate, not a formality.
 """
 from dataclasses import dataclass
 
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ChainKind, DerivedKey, devfund_path, root_path
 
+ROOT_WORD_COUNT = 24                 # sf-keytree phrase_file.rs
+_ENGLISH = "en"                      # bip39 2.2.2 default features: English only
+
+
+class NotA7FPhraseError(ValueError):
+    """ The seed is not a 7F governance phrase: 24 English BIP-39 words. """
+
+
+_TOKEN = object()
+
+
+class SevenFSeed:
+    """ The BIP-39 seed of a 7F governance phrase. Made only by seed_for_7f(). """
+    __slots__ = ("_seed_bytes",)
+
+    def __init__(self, *args, **kwargs):
+        raise TypeError("a SevenFSeed is made only by seed_for_7f(seed)")
+
+    @classmethod
+    def _from_checked(cls, token, seed_bytes: bytes) -> "SevenFSeed":
+        if token is not _TOKEN:
+            raise TypeError("a SevenFSeed is made only by seed_for_7f(seed)")
+        obj = object.__new__(cls)
+        object.__setattr__(obj, "_seed_bytes", bytes(seed_bytes))
+        return obj
+
+    @property
+    def seed_bytes(self) -> bytes:
+        return self._seed_bytes
+
+
+def seed_for_7f(seed) -> SevenFSeed:
+    """ The SevenFSeed of `seed`, or NotA7FPhraseError if 7fchain would not
+        derive from it: not a plain BIP-39 Seed (an ElectrumSeed is a subclass
+        whose seed bytes are not BIP-39), not 24 words, or not English. """
+    from seedsigner.models.seed import Seed
+    if type(seed) is not Seed:
+        raise NotA7FPhraseError("7F keys come from a BIP-39 phrase; this seed is not one")
+    if len(seed.mnemonic_list) != ROOT_WORD_COUNT:
+        raise NotA7FPhraseError(f"a 7F governance phrase is {ROOT_WORD_COUNT} words, this seed has {len(seed.mnemonic_list)}")
+    if seed.wordlist_language_code != _ENGLISH:
+        raise NotA7FPhraseError("a 7F governance phrase uses the English BIP-39 wordlist")
+    return SevenFSeed._from_checked(_TOKEN, seed.seed_bytes)
+
+
+def _bytes_of(seed: SevenFSeed) -> bytes:
+    if not isinstance(seed, SevenFSeed):
+        raise TypeError(f"7F keys are derived only from a SevenFSeed (seed_for_7f), not {type(seed).__name__}")
+    return seed.seed_bytes
+
 
 @dataclass(frozen=True)
 class RootCeremonyKeys:
-    """ The Root-ceremony key for one chain_kind (no treasury -- see this
-        module's own docstring). `devfund` is the SAME key as `root_ca`
-        (see the BUG FIX note above), kept as its own field so callers that
-        read `.devfund` don't need to know that -- not a second derivation.
-        This is the devfund-config SIGNING key, not the per-holder dev-fund
-        key a member enrolls -- that is derive_devfund_key(, index=0). """
+    """ The Root key for one chain_kind at one key index. `devfund` is the same
+        key as `root_ca`: the key that signs the devfund-config (sf-wallet-gov
+        sign-devfund signs as Role::Root), not the holder's dev-fund key. """
     chain_kind: ChainKind
     root_ca: DerivedKey
     devfund: DerivedKey
     index: int = 0
 
 
-def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind, *, index: int) -> RootCeremonyKeys:
-    """ Derive the Root ML-DSA-65 key for `chain_kind`, at key index `index`
-        (sf-wallet-gov's `--index`; required, no default, so a caller can't
-        silently get index 0 -- 7f-signing-support-key-index-selector), from `seed_bytes`
-        (SeedSigner's Seed.seed_bytes -- standard BIP-39, empty passphrase,
-        64 bytes). `root_ca` and `devfund` are the same derived key (see
-        this module's own BUG FIX note) -- confirmed against 7fchain's real
-        `sf-root.rs`'s `root_key_from_file()`. Raises
-        seedsigner.models.sevenf.mldsa.MlDsaError on any derivation
-        failure, ValueError if seed_bytes is the wrong length.
-    """
-    root_pk, root_address = mldsa.derive_pubkey(seed_bytes, root_path(chain_kind, index))
-    root_key = DerivedKey(public_key=root_pk, address=root_address)
-
-    return RootCeremonyKeys(
-        chain_kind=chain_kind,
-        root_ca=root_key,
-        devfund=root_key,
-        index=index,
-    )
+def derive_root_ceremony_keys(seed: SevenFSeed, chain_kind: ChainKind, *, index: int) -> RootCeremonyKeys:
+    """ The Root key at sf-wallet-gov's `--index` (required, so a caller can
+        never silently get index 0). """
+    public_key, _ca_address_unused = mldsa.derive_pubkey(_bytes_of(seed), root_path(chain_kind, index))
+    root_key = DerivedKey(public_key=public_key)
+    return RootCeremonyKeys(chain_kind=chain_kind, root_ca=root_key, devfund=root_key, index=index)
 
 
-def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind, *, index: int) -> DerivedKey:
-    """ The holder's dev-fund key at devfund/<chain_kind>/<index>/ml-dsa/v1
-        (`index` required, as for derive_root_ceremony_keys) -- the
-        one a member enrolls with `sf-wallet-gov derive-vk --role devfund`
-        (7fchain 89d3d39). A DIFFERENT key from the Root key. Not to be
-        confused with `RootCeremonyKeys.devfund`, which is the Root key used
-        to sign the devfund-config (the Roots declare the recipient; these
-        devfund keys spend from it). Export only: nothing on this device signs
-        with it yet. """
-    public_key, address = mldsa.derive_pubkey(seed_bytes, devfund_path(chain_kind, index))
-    return DerivedKey(public_key=public_key, address=address)
+def derive_devfund_key(seed: SevenFSeed, chain_kind: ChainKind, *, index: int) -> DerivedKey:
+    """ The holder's dev-fund key (sf-wallet-gov `derive-vk --role devfund
+        --index`), a different key from the Root key. Exported only. """
+    public_key, _ca_address_unused = mldsa.derive_pubkey(_bytes_of(seed), devfund_path(chain_kind, index))
+    return DerivedKey(public_key=public_key)
 
 
 class SigningNotConfirmedError(Exception):
-    """ Raised when sign_with_root_ca is called without confirmed=True.
-        See that function's own docstring for why this exists as an
-        enforced architectural gate, not a caller convention. """
-    pass
+    """ A sign call without confirmed=True: see this module's docstring. """
 
 
-def sign_with_root_ca(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
-    """ Sign `message` with the Root CA key for `chain_kind` at key index
-        `index` (required) -- the
-        operation `sf-root sign-genesis` performs over a genesis-config's
-        canonical bytes. Returns (public_key, signature).
-
-        `confirmed` is REQUIRED (keyword-only, no default) and must be
-        `True` -- there is no way to call this function without explicitly
-        deciding that value. This is the architectural review-before-sign
-        gate an adversarial review found missing (see
-        7f-signing-support-root-ceremony-genesis-builder-and-signer's own
-        notes in _delivery/backlog.yaml): a single callable that builds
-        bytes and signs them, with review bolted on as a UI step in front
-        of it, is not the same guarantee as this project's "no-blind-signing,
-        non-negotiable" principle requires. On the DEVICE, the only intended
-        callers are views.sevenf_views.SevenFConfirmSignView (genesis-config,
-        after the operator has approved every field via
-        genesis_config.review_fields()/SevenFGenesisReviewFieldView) and
-        SevenFConfirmSignRootCertView (Root self-cert and Deputy cross-cert,
-        after the operator has approved every field via
-        root_self_cert_review_fields()/deputy_cross_cert_v2_review_fields()).
-        Passing confirmed=True from anywhere else on the device defeats the
-        whole point of this parameter existing -- it is not a formality to
-        satisfy a type checker, it is the gate.
-
-        The one exception is OFFLINE, host-side test-fixture-generation
-        tooling (tools/make_sevenf_test_qrs.py's build_root_cert_der/
-        build_deputy_csr_der) -- never shipped to the device, never reads a
-        real ceremony seed, and signs only the hardcoded test-only BIP-39
-        fixtures already used throughout that tool. There is no review
-        screen to gate there because there is no operator session at all;
-        the gate this parameter protects is "did a human see the fields
-        before this device signed them," which doesn't apply to a script
-        generating its own test input.
-
-        A SECOND, DEVICE-SIDE exception: chains.sevenf.plugin.SevenFPlugin.sign()
-        also passes confirmed=True unconditionally. This was found as a
-        "signing-oracle" finding during the 2026-10-03 full-project
-        adversarial review (7f-review-plugin-signing-oracle-bypass in
-        _delivery/backlog.yaml) and verified NOT to be a 7F-specific gap:
-        EvmPlugin.sign() (chains/evm/plugin.py) has the exact same
-        no-internal-gate shape -- neither chain's generic ChainPlugin.sign()
-        implementation reviews anything itself; no-blind-signing for BOTH
-        chains lives entirely in the VIEW layer that calls sign() after
-        paging through review_fields() (confirmed directly: EvmSignedUrQRView/
-        EvmSignedQRView only ever call plugin.sign() after
-        EvmConfirmPayloadView has shown every field). SevenFPlugin.sign()
-        is additionally confirmed unreached by any current 7F view --
-        sevenf_views.py calls this function directly, never through
-        ChainRegistry.get("sevenf") -- so today's device-UI behavior is
-        unaffected either way. If a future 7F view routes through the
-        generic plugin interface the way EVM's already does, that view MUST
-        review every field (the same way EvmConfirmPayloadView does) before
-        ever reaching SevenFPlugin.sign() -- the obligation sits with that
-        future caller, exactly as it already does for EVM today.
-    """
-    # `index` is required, like `confirmed`, with no default
-    # (7f-signing-support-key-index-selector): a view that forgot to pass it
-    # would otherwise sign at index 0 under a key it showed at index N.
+def _sign_with_root_key(seed: SevenFSeed, chain_kind: ChainKind, message: bytes, confirmed: bool, index: int, what: str) -> tuple[bytes, bytes]:
+    seed_bytes = _bytes_of(seed)
     if not confirmed:
         raise SigningNotConfirmedError(
-            "sign_with_root_ca refuses to sign without confirmed=True -- "
-            "only the review screen may set this, after the operator has "
-            "approved every displayed field."
-        )
-    return mldsa.derive_and_sign(
-        seed_bytes,
-        root_path(chain_kind, index),
-        message,
-    )
+            f"{what} refuses to sign without confirmed=True -- only the confirm view may set it, "
+            "after the operator has approved every displayed field.")
+    return mldsa.derive_and_sign(seed_bytes, root_path(chain_kind, index), message)
 
 
-def sign_with_devfund(seed_bytes: bytes, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
-    """ Sign `message` with the Root key for `chain_kind` at key index
-        `index` (required; sf-wallet-gov sign-devfund signs as Role::Root) -- the
-        devfund-config twin of sign_with_root_ca() above, same enforced
-        review-before-sign gate and same rationale (see that function's own
-        docstring; not repeated here).
+def sign_with_root_ca(seed: SevenFSeed, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
+    """ Sign with the Root key at `index`, as sf-wallet-gov sign-genesis,
+        sign-root-cert and sign-deputy-cert do. Returns (public_key, signature);
+        the library verifies the signature before returning it. """
+    return _sign_with_root_key(seed, chain_kind, message, confirmed, index, "sign_with_root_ca")
 
-        BUG FIX, 2026-10-03 (R27 re-port): this used to sign with a
-        separately-derived "devfund" key. Direct reading of 7fchain's real
-        `sf-root.rs` confirmed `cmd_sign_genesis` and `cmd_sign_devfund`
-        call the byte-for-byte identical `root_key_from_file(chain_kind, 0,
-        ...)` -- genesis-config and devfund-config are signed by the SAME
-        Root key. This function now derives and signs with `root_path()`,
-        exactly like sign_with_root_ca() -- kept as a separate function
-        (rather than deleted in favor of calling sign_with_root_ca()
-        directly) only so devfund-config's own confirmed-sign call site
-        reads as what it is, not as a disguised genesis-config signature.
 
-        `confirmed` is REQUIRED (keyword-only, no default) and must be
-        `True`. views.sevenf_views.SevenFConfirmSignDevFundView is the only
-        intended caller allowed to pass confirmed=True, after the operator
-        has approved every field in devfund_config.review_fields(), paged
-        by the same SevenFCertRequestReviewFieldView this codebase already
-        reuses for every other artefact type. """
-    if not confirmed:
-        raise SigningNotConfirmedError(
-            "sign_with_devfund refuses to sign without confirmed=True -- "
-            "only the review screen may set this, after the operator has "
-            "approved every displayed field."
-        )
-    return mldsa.derive_and_sign(
-        seed_bytes,
-        root_path(chain_kind, index),
-        message,
-    )
+def sign_with_devfund(seed: SevenFSeed, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
+    """ Sign a devfund-config with the Root key at `index`, as sf-wallet-gov
+        sign-devfund does (Role::Root). A separate name only so the devfund
+        confirm view reads as what it signs. """
+    return _sign_with_root_key(seed, chain_kind, message, confirmed, index, "sign_with_devfund")

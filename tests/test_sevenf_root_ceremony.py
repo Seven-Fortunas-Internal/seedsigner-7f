@@ -19,6 +19,7 @@ from seedsigner.models.sevenf.root_ceremony import (
     sign_with_devfund,
     sign_with_root_ca,
 )
+from sevenf_helpers import sevenf_seed_from_bytes
 
 
 def _lib_available() -> bool:
@@ -53,13 +54,11 @@ def test_derive_root_ceremony_keys_matches_rust_kat():
         moves this pinned key, and `devfund` is now the SAME key as
         `root_ca` (see root_ceremony.py's own BUG FIX note) rather than a
         separately-pinned one. """
-    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
     assert keys.chain_kind == ChainKind.TESTNET
     assert hashlib.sha256(keys.root_ca.public_key).hexdigest() == \
         "920d8addc431773ed0f40e441593b609353b3f2ed18181fb21213743059a19f0"
-    assert keys.root_ca.address == "t136pq48mt9f3ym9dn3k3nh6f8dkpw6uje40rjx9djfnqg28v"
     assert keys.devfund.public_key == keys.root_ca.public_key
-    assert keys.devfund.address == keys.root_ca.address
 
 
 def test_root_ca_matches_7fchains_real_canonical_vector():
@@ -82,7 +81,7 @@ def test_root_ca_matches_7fchains_real_canonical_vector():
     )
     seed_bytes = mnemonic_to_seed(canonical_phrase, password="")
 
-    keys = derive_root_ceremony_keys(seed_bytes, ChainKind.TESTNET, index=0)
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(seed_bytes), ChainKind.TESTNET, index=0)
 
     # First 64 hex characters, matching path_vectors.rs's own pinning
     # convention ("a prefix that long is a collision nobody is going to
@@ -108,7 +107,7 @@ def test_root_ca_ski_matches_real_sf_wallet_gov_sign_root_cert():
     from seedsigner.models.sevenf.review_format import ski
 
     canonical_phrase = " ".join(["abandon"] * 23 + ["art"])
-    keys = derive_root_ceremony_keys(mnemonic_to_seed(canonical_phrase, password=""), ChainKind.TESTNET, index=0)
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(mnemonic_to_seed(canonical_phrase, password="")), ChainKind.TESTNET, index=0)
 
     assert ski(keys.root_ca.public_key.hex()) == "591c511984a2d73c6bee1f4dc149d48f7f97fc55"
 
@@ -125,8 +124,8 @@ def test_devfund_key_matches_real_sf_wallet_gov_derive_vk():
     from seedsigner.models.sevenf.root_ceremony import derive_devfund_key
 
     seed = mnemonic_to_seed(" ".join(["abandon"] * 23 + ["art"]), password="")
-    devfund = derive_devfund_key(seed, ChainKind.TESTNET, index=0)
-    root = derive_root_ceremony_keys(seed, ChainKind.TESTNET, index=0).root_ca
+    devfund = derive_devfund_key(sevenf_seed_from_bytes(seed), ChainKind.TESTNET, index=0)
+    root = derive_root_ceremony_keys(sevenf_seed_from_bytes(seed), ChainKind.TESTNET, index=0).root_ca
 
     assert ski(devfund.public_key.hex()) == "af11f8afb793df512bf35110890e15dc8b3a2720"
     assert devfund.public_key != root.public_key
@@ -139,27 +138,14 @@ def test_root_ca_and_devfund_are_the_same_key():
         both call the byte-identical root_key_from_file(..., index 0):
         genesis-config and devfund-config are signed by the SAME Root
         key. See root_ceremony.py's own BUG FIX note. """
-    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
-    assert keys.root_ca.address == keys.devfund.address
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
     assert keys.root_ca.public_key == keys.devfund.public_key
 
 
 def test_keys_differ_across_chain_kinds():
-    testnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
-    mainnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.MAINNET, index=0)
-    assert testnet_keys.root_ca.address != mainnet_keys.root_ca.address
+    testnet_keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
+    mainnet_keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.MAINNET, index=0)
     assert testnet_keys.root_ca.public_key != mainnet_keys.root_ca.public_key
-
-
-def test_addresses_carry_the_expected_network_prefix():
-    """ testnet addresses start with 't1'; mainnet with '7f' -- confirmed
-        against firmware/mldsa7f/src/address.rs's own PREFIXES table. """
-    testnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
-    mainnet_keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.MAINNET, index=0)
-    assert testnet_keys.root_ca.address.startswith("t1")
-    assert testnet_keys.devfund.address.startswith("t1")
-    assert mainnet_keys.root_ca.address.startswith("7f")
-    assert mainnet_keys.devfund.address.startswith("7f")
 
 
 def test_end_to_end_from_a_real_mnemonic():
@@ -173,15 +159,12 @@ def test_end_to_end_from_a_real_mnemonic():
     seed_bytes = mnemonic_to_seed(TEST_MNEMONIC, password="")
     assert len(seed_bytes) == MASTER_SEED_LEN
 
-    keys = derive_root_ceremony_keys(seed_bytes, ChainKind.TESTNET, index=0)
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(seed_bytes), ChainKind.TESTNET, index=0)
     assert len(keys.root_ca.public_key) == 1952
-    assert len(keys.root_ca.address) == 49
-    assert keys.root_ca.address.startswith("t1")
 
     # Deterministic: re-deriving from the same mnemonic gives the same keys.
-    keys_again = derive_root_ceremony_keys(seed_bytes, ChainKind.TESTNET, index=0)
+    keys_again = derive_root_ceremony_keys(sevenf_seed_from_bytes(seed_bytes), ChainKind.TESTNET, index=0)
     assert keys_again.root_ca.public_key == keys.root_ca.public_key
-    assert keys_again.root_ca.address == keys.root_ca.address
 
 
 def test_sign_with_root_ca_produces_a_verifiable_signature_shape():
@@ -191,9 +174,9 @@ def test_sign_with_root_ca_produces_a_verifiable_signature_shape():
         docstring for why this Python layer doesn't re-implement a
         verifier). """
     message = b"genesis-config canonical bytes for testnet"
-    pk, sig = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
+    pk, sig = sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)
 
-    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
     assert pk == keys.root_ca.public_key, "sign_with_root_ca must use the same key derive_root_ceremony_keys does"
     assert len(sig) == 3309
 
@@ -204,7 +187,7 @@ def test_sign_with_root_ca_refuses_without_confirmation():
         explicitly passes confirmed=True. """
     message = b"genesis-config canonical bytes for testnet"
     with pytest.raises(SigningNotConfirmedError):
-        sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=False, index=0)
+        sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=False, index=0)
 
 
 def test_sign_with_root_ca_requires_confirmed_as_keyword():
@@ -213,16 +196,16 @@ def test_sign_with_root_ca_requires_confirmed_as_keyword():
         value, and no way to pass it positionally by habit either. """
     message = b"genesis-config canonical bytes for testnet"
     with pytest.raises(TypeError):
-        sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, True)  # positional -- must fail
+        sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, True)  # positional -- must fail
     with pytest.raises(TypeError):
-        sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message)  # omitted entirely -- must fail
+        sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message)  # omitted entirely -- must fail
 
 
 def test_sign_with_devfund_produces_a_verifiable_signature_shape():
     message = b"devfund-config canonical bytes for testnet"
-    pk, sig = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
+    pk, sig = sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)
 
-    keys = derive_root_ceremony_keys(FIXED_SEED, ChainKind.TESTNET, index=0)
+    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
     assert pk == keys.devfund.public_key, "sign_with_devfund must use the same key derive_root_ceremony_keys does"
     assert len(sig) == 3309
 
@@ -234,20 +217,20 @@ def test_sign_with_devfund_uses_the_same_key_as_sign_with_root_ca():
         both call the byte-identical root_key_from_file(..., index 0)): the
         same Root key signs both genesis-config and devfund-config. """
     message = b"same message, same intended signer"
-    root_pk, _ = sign_with_root_ca(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
-    devfund_pk, _ = sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=True, index=0)
+    root_pk, _ = sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)
+    devfund_pk, _ = sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)
     assert root_pk == devfund_pk
 
 
 def test_sign_with_devfund_refuses_without_confirmation():
     message = b"devfund-config canonical bytes for testnet"
     with pytest.raises(SigningNotConfirmedError):
-        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, confirmed=False, index=0)
+        sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=False, index=0)
 
 
 def test_sign_with_devfund_requires_confirmed_as_keyword():
     message = b"devfund-config canonical bytes for testnet"
     with pytest.raises(TypeError):
-        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message, True)  # positional -- must fail
+        sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, True)  # positional -- must fail
     with pytest.raises(TypeError):
-        sign_with_devfund(FIXED_SEED, ChainKind.TESTNET, message)  # omitted entirely -- must fail
+        sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message)  # omitted entirely -- must fail

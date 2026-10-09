@@ -587,6 +587,15 @@ class SeedOptionsView(View):
     SEVENF_SCAN_ROOT_CERT_REQUEST = ButtonOption("7F: Self-Certify Root")
     SEVENF_SCAN_DEPUTY_CROSS_CERT = ButtonOption("7F: Cross-Certify Deputy")
     SEVENF_SCAN_DEVFUND_CONFIG = ButtonOption("7F: Sign Devfund Config")
+    # Each 7F button and the first view of its flow (in seedsigner.views.sevenf_views).
+    _SEVENF_ROUTES = (
+        (SEVENF_EXPORT_ROOT_VK, "SevenFSelectChainKindForRootEnrollmentView"),
+        (SEVENF_EXPORT_DEVFUND_VK, "SevenFSelectChainKindForDevfundEnrollmentView"),
+        (SEVENF_SCAN_GENESIS_CONFIG, "SevenFScanGenesisConfigView"),
+        (SEVENF_SCAN_ROOT_CERT_REQUEST, "SevenFSelectChainKindForRootSelfCertView"),
+        (SEVENF_SCAN_DEPUTY_CROSS_CERT, "SevenFSelectChainKindForDeputyCrossCertView"),
+        (SEVENF_SCAN_DEVFUND_CONFIG, "SevenFScanDevFundConfigView"),
+    )
     BACKUP = ButtonOption("Backup seed", right_icon_name=SeedSignerIconConstants.CHEVRON_RIGHT)
     BIP85_CHILD_SEED = ButtonOption("BIP-85 child seed")
     DISCARD = ButtonOption("Discard seed", button_label_color="red")
@@ -595,6 +604,20 @@ class SeedOptionsView(View):
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
+
+
+    def _route_sevenf(self, chosen: ButtonOption) -> Destination:
+        """ Every 7F flow starts only for a seed 7fchain derives from: 24
+            English BIP-39 words (root_ceremony.seed_for_7f); any other seed
+            gets a refusal screen saying why. """
+        from seedsigner.views import sevenf_views
+        from seedsigner.models.sevenf.root_ceremony import NotA7FPhraseError, seed_for_7f
+        try:
+            seed_for_7f(self.seed)
+        except NotA7FPhraseError as e:
+            return Destination(sevenf_views.SevenFNotA7FPhraseView, view_args=dict(reason=str(e)))
+        view_name = next(name for option, name in self._SEVENF_ROUTES if option == chosen)
+        return Destination(getattr(sevenf_views, view_name), view_args=dict(seed=self.seed))
 
 
     def run(self):
@@ -731,29 +754,8 @@ class SeedOptionsView(View):
             from seedsigner.views.evm_views import EvmSignSelectView
             return Destination(EvmSignSelectView, view_args=dict(seed=self.seed))
 
-        elif button_data[selected_menu_num] == self.SEVENF_EXPORT_ROOT_VK:
-            from seedsigner.views.sevenf_views import SevenFSelectChainKindForRootEnrollmentView
-            return Destination(SevenFSelectChainKindForRootEnrollmentView, view_args=dict(seed=self.seed))
-
-        elif button_data[selected_menu_num] == self.SEVENF_EXPORT_DEVFUND_VK:
-            from seedsigner.views.sevenf_views import SevenFSelectChainKindForDevfundEnrollmentView
-            return Destination(SevenFSelectChainKindForDevfundEnrollmentView, view_args=dict(seed=self.seed))
-
-        elif button_data[selected_menu_num] == self.SEVENF_SCAN_GENESIS_CONFIG:
-            from seedsigner.views.sevenf_views import SevenFScanGenesisConfigView
-            return Destination(SevenFScanGenesisConfigView, view_args=dict(seed=self.seed))
-
-        elif button_data[selected_menu_num] == self.SEVENF_SCAN_ROOT_CERT_REQUEST:
-            from seedsigner.views.sevenf_views import SevenFSelectChainKindForRootSelfCertView
-            return Destination(SevenFSelectChainKindForRootSelfCertView, view_args=dict(seed=self.seed))
-
-        elif button_data[selected_menu_num] == self.SEVENF_SCAN_DEPUTY_CROSS_CERT:
-            from seedsigner.views.sevenf_views import SevenFSelectChainKindForDeputyCrossCertView
-            return Destination(SevenFSelectChainKindForDeputyCrossCertView, view_args=dict(seed=self.seed))
-
-        elif button_data[selected_menu_num] == self.SEVENF_SCAN_DEVFUND_CONFIG:
-            from seedsigner.views.sevenf_views import SevenFScanDevFundConfigView
-            return Destination(SevenFScanDevFundConfigView, view_args=dict(seed=self.seed))
+        elif any(button_data[selected_menu_num] == option for option, _ in self._SEVENF_ROUTES):
+            return self._route_sevenf(button_data[selected_menu_num])
 
         elif button_data[selected_menu_num] == self.BACKUP:
             return Destination(SeedBackupView, view_args=dict(seed=self.seed))
@@ -2612,7 +2614,7 @@ class SeedSignMessageStartView(View):
         # calculate the actual receive address
         addr_format = embit_utils.parse_derivation_path(derivation_path)
         if not addr_format["clean_match"]:
-            self.set_redirect(Destination(NotYetImplementedView, view_args=dict(text=f"Signing messages for custom derivation paths not supported")))
+            self.set_redirect(Destination(NotYetImplementedView, view_args=dict(text="Signing messages for custom derivation paths not supported")))
             self.controller.resume_main_flow = None
             return
 

@@ -42,6 +42,7 @@
 from ._common import (
     SevenFCertRequestReviewFieldView,
     SevenFConfirmSignRootCertView,
+    SevenFNotA7FPhraseView,
     SevenFRootCertSignedView,
     SevenFSignedCertificate,
     SevenFUnsupportedArtefactView,

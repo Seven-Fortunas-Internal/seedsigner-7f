@@ -78,9 +78,9 @@ def parse_key_index_entry(text: str) -> int:
 
 
 def root_path(chain_kind: ChainKind, index: int = 0) -> str:
-    """ e.g. "root/testnet/0/ml-dsa/v1" -- confirmed against 7fchain's real
-        `crates/sf-keytree/src/path.rs::path_for(Role::Root, chain_kind, 0)`
-        and `phrase_file.rs::root_path()`.
+    """ e.g. "root/testnet/0/ml-dsa/v1", built by 7fchain's own
+        `path::path_for(Role::Root, chain_kind, index)` over the FFI (the
+        verbatim port in firmware/mldsa7f), never written by hand here.
 
         RE-PORTED 2026-10-03 (R27): 7fchain collapsed its two-level
         `purpose_path`/`role_path` grammar into this single combined path
@@ -96,12 +96,14 @@ def root_path(chain_kind: ChainKind, index: int = 0) -> str:
         89d3d39, 2026-10-05). `index` is sf-wallet-gov's `--index`, default 0
         (7f-signing-support-key-index-selector); our practice is one phrase per
         Root key at index 0. """
-    return f"root/{chain_kind.path_segment}/{key_index_segment(index)}/ml-dsa/v1"
+    key_index_segment(index)  # type and range: a ctypes u32 would wrap
+    from seedsigner.models.sevenf import mldsa  # mldsa imports this module
+    return mldsa.path_for("root", chain_kind, index)
 
 
 def devfund_path(chain_kind: ChainKind, index: int = 0) -> str:
-    """ e.g. "devfund/testnet/0/ml-dsa/v1" -- 7fchain's
-        `path_for(Role::Devfund, chain_kind, 0)` (89d3d39, 2026-10-05): the
+    """ e.g. "devfund/testnet/0/ml-dsa/v1", built by 7fchain's own
+        `path_for(Role::Devfund, chain_kind, index)` over the FFI (89d3d39): the
         dev fund is locked by nine devfund keys, one per federation holder,
         derived from the same phrase as that holder's Root at this different
         path, so a dev-fund signature isn't attributable to a known Root.
@@ -110,11 +112,13 @@ def devfund_path(chain_kind: ChainKind, index: int = 0) -> str:
         declare the recipient with the Root key (root_path above). `index` is
         sf-wallet-gov's `--index`, default 0; 7fchain calls a later index a
         rotation (open question on 7fchain#7). """
-    return f"devfund/{chain_kind.path_segment}/{key_index_segment(index)}/ml-dsa/v1"
+    key_index_segment(index)  # type and range: a ctypes u32 would wrap
+    from seedsigner.models.sevenf import mldsa  # mldsa imports this module
+    return mldsa.path_for("devfund", chain_kind, index)
 
 
 @dataclass(frozen=True)
 class DerivedKey:
-    """ One derived ML-DSA-65 key: its public key bytes and its 7fchain address. """
+    """ One derived ML-DSA-65 key. A CA key has no address (sf-wallet-gov
+        prints none for one), so none is carried. """
     public_key: bytes
-    address: str

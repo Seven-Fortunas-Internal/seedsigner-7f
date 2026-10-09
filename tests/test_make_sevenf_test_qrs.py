@@ -46,6 +46,7 @@ tool = _load_tool_module()
 from seedsigner.models.encode_qr import BBQrEncoder
 from seedsigner.models.decode_qr import DecodeQR
 from seedsigner.models.sevenf import cert_request, genesis_config, devfund_config
+from seedsigner.models.sevenf.root_ceremony import seed_for_7f
 
 
 def _round_trip(payload: bytes) -> bytes:
@@ -78,7 +79,7 @@ def test_devfund_config_is_coordinator_shaped_json_the_device_accepts():
 
 
 def test_root_cert_round_trips_and_parses():
-    root_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.root_seed().seed_bytes, tool.CHAIN_KIND, index=0)
+    root_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.root_seed()), tool.CHAIN_KIND, index=0)
     got = _round_trip(tool.build_root_cert_der(root_keys, tool.root_seed()))
     parsed = cert_request.parse_root_certificate_der(got)
     assert parsed.subject_vk == root_keys.root_ca.public_key
@@ -86,7 +87,7 @@ def test_root_cert_round_trips_and_parses():
 
 
 def test_deputy_csr_round_trips_and_parses():
-    deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.deputy_seed().seed_bytes, tool.CHAIN_KIND, index=0)
+    deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.deputy_seed()), tool.CHAIN_KIND, index=0)
     got = _round_trip(tool.build_deputy_csr_der(deputy_keys, tool.deputy_seed()))
     parsed = cert_request.verify_and_parse_csr_der(got)
     assert parsed.subject_vk == deputy_keys.root_ca.public_key
@@ -100,14 +101,14 @@ def test_root_cert_and_deputy_csr_support_the_real_deputy_cross_cert_flow():
         the same way a real device run would use them. """
     import time
 
-    root_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.root_seed().seed_bytes, tool.CHAIN_KIND, index=0)
-    deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.deputy_seed().seed_bytes, tool.CHAIN_KIND, index=0)
+    root_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.root_seed()), tool.CHAIN_KIND, index=0)
+    deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.deputy_seed()), tool.CHAIN_KIND, index=0)
     root_cert_der = _round_trip(tool.build_root_cert_der(root_keys, tool.root_seed()))
     deputy_csr_der = _round_trip(tool.build_deputy_csr_der(deputy_keys, tool.deputy_seed()))
 
     now = int(time.time())
     tbs = cert_request.build_deputy_tbs_v2(root_cert_der, deputy_csr_der, tool.CHAIN_KIND, now, cert_request.DEPUTY_DAYS, cert_request.generate_serial())
-    _, signature = tool.root_ceremony.sign_with_root_ca(tool.root_seed().seed_bytes, tool.CHAIN_KIND, tbs, confirmed=True, index=0)
+    _, signature = tool.root_ceremony.sign_with_root_ca(seed_for_7f(tool.root_seed()), tool.CHAIN_KIND, tbs, confirmed=True, index=0)
     deputy_cert_der = cert_request.assemble_deputy_cert_der(tbs, signature, root_cert_der)
     parsed = __import__('tools_helpers').parse_issued_cert(deputy_cert_der)  # a Deputy cert
     assert parsed.subject_vk == deputy_keys.root_ca.public_key
@@ -134,6 +135,6 @@ def test_root_test_seed_qr_round_trips_through_the_real_decode_path(tmp_path):
 def test_root_and_deputy_test_seeds_are_actually_different():
     # The whole point of the passphrase variant is a distinct key -- catch a
     # regression that accidentally makes both identities derive identically.
-    root_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.root_seed().seed_bytes, tool.CHAIN_KIND, index=0)
-    deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(tool.deputy_seed().seed_bytes, tool.CHAIN_KIND, index=0)
+    root_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.root_seed()), tool.CHAIN_KIND, index=0)
+    deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.deputy_seed()), tool.CHAIN_KIND, index=0)
     assert root_keys.root_ca.public_key != deputy_keys.root_ca.public_key
