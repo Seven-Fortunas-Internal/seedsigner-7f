@@ -5,7 +5,6 @@
     modules (genesis, devfund, cert_request).
 """
 import hashlib
-import json
 import unicodedata
 from datetime import datetime, timezone
 
@@ -73,55 +72,19 @@ def canonical_digest(canonical_bytes: bytes) -> str:
 
 def visible_text(s: str) -> str:
     """ Coordinator-supplied free text as it must be shown before signing:
-        newlines, tabs, bidi overrides and every other control/format/
-        surrogate/unassigned character become a visible escape (\\n, \\t,
-        \\uXXXX), so no signed character can be hidden or reorder what the
-        operator reads (security review 2026-10-08). """
+        newlines, tabs, bidi overrides, combining marks (which draw over the
+        character before them) and every other control/format/surrogate/
+        unassigned character become a visible escape (\\n, \\t, \\uXXXX),
+        so no signed character can be hidden or reorder what the operator
+        reads (security review 2026-10-08). """
     out = []
     for ch in s:
         if ch == "\n":
             out.append("\\n")
         elif ch == "\t":
             out.append("\\t")
-        elif unicodedata.category(ch)[0] in "CZ" and ch != " ":
+        elif unicodedata.category(ch)[0] in "CMZ" and ch != " ":
             out.append(f"\\u{ord(ch):04x}")
         else:
             out.append(ch)
     return "".join(out)
-
-
-def _refuse_constant(name: str):
-    raise ValueError(f"non-standard JSON literal {name}")
-
-
-class JsonObject(dict):
-    """ A parsed JSON object that remembers which keys appeared more than once. """
-    duplicates: frozenset = frozenset()
-
-
-def _record_duplicate_keys(pairs: list) -> JsonObject:
-    seen, duplicates = set(), set()
-    for key, _ in pairs:
-        (duplicates if key in seen else seen).add(key)
-    obj = JsonObject(pairs)
-    obj.duplicates = frozenset(duplicates)
-    return obj
-
-
-def refuse_duplicate_fields(obj, known: frozenset, where: str) -> None:
-    """ serde_json's rule for 7fchain's types (no deny_unknown_fields): a
-        repeated KNOWN field is an error ("duplicate field `x`"), a repeated
-        unknown key is ignored. Checked against sf-core's own GenesisConfig and
-        DevFundConfig (tests/test_sevenf_device_limits.py). Raises ValueError. """
-    repeated = sorted(getattr(obj, "duplicates", frozenset()) & known)
-    if repeated:
-        raise ValueError(f"duplicate field `{repeated[0]}` in {where}")
-
-
-def strict_json_loads(text: str):
-    """ json.loads refusing what serde_json refuses for any type (NaN/Infinity
-        literals; integers past Python's digit limit), and recording repeated
-        keys per object for refuse_duplicate_fields(), since whether a repeat
-        is an error depends on the type reading that object. Callers catch
-        (ValueError, RecursionError). """
-    return json.loads(text, parse_constant=_refuse_constant, object_pairs_hook=_record_duplicate_keys)

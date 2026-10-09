@@ -15,7 +15,6 @@
     which applies identically here.
 """
 import ctypes
-import json
 import re
 from dataclasses import dataclass, field
 
@@ -23,7 +22,8 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display, refuse_duplicate_fields, strict_json_loads, visible_text
+from seedsigner.models.sevenf import config_json
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display, visible_text
 
 # 7f-review-parse-failure-messages-not-actionable (2026-10-04): what each
 # code plausibly means for THIS artifact type, grounded directly in
@@ -167,7 +167,8 @@ _ADDRESS_ARGTYPES = {
     "mldsa7f_address_validate": ([ctypes.c_char_p, ctypes.c_size_t], ctypes.c_int32),
     "mldsa7f_address_describe": ([ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p], ctypes.c_int32),
 }
-_NETWORK_NAMES = ("mainnet", "testnet", "devnet")
+# mldsa7f_address_describe's layer and signature-type bytes (ffi.rs); the
+# network byte is a ChainKind.
 _LAYER_NAMES = ("L1", "L2")
 _SIG_TYPE_NAMES = ("ML-DSA", "Falcon", "WOTS+")
 
@@ -195,7 +196,7 @@ def describe_address(address: str) -> tuple[str, str, str]:
     if lib.mldsa7f_address_describe(raw, len(raw), out) != 0:
         raise DevFundConfigJsonError(f"recipient address {address!r} does not decode")
     n, l, t = out.raw
-    return _NETWORK_NAMES[n], _LAYER_NAMES[l], _SIG_TYPE_NAMES[t]
+    return ChainKind(n).name.lower(), _LAYER_NAMES[l], _SIG_TYPE_NAMES[t]
 
 
 def build_canonical_bytes(network: ChainKind, recipient: DevfundRecipient, effective_block: int, timestamp: int) -> bytes:
@@ -264,16 +265,8 @@ class DevFundConfigJsonError(Exception):
 
 
 DEVFUND_SCHEMA_VERSION = 2
-_U64_MAX = 0xFFFFFFFFFFFFFFFF
 _U16_MAX = 0xFFFF
 _NETWORKS = {"mainnet": ChainKind.MAINNET, "testnet": ChainKind.TESTNET, "devnet": ChainKind.DEVNET}
-
-
-def _require_u64(obj: dict, key: str) -> int:
-    value = obj.get(key)
-    if isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= _U64_MAX):
-        raise DevFundConfigJsonError(f"{key} must be a non-negative 64-bit integer, got {value!r}")
-    return value
 
 
 # Rust hex::decode: ASCII hex digits only -- no whitespace (which Python's
@@ -298,11 +291,8 @@ _DEVFUND_FIELDS = frozenset({"version", "network", "recipient", "effective_block
 _RECIPIENT_FIELDS = {"multisig": frozenset({"kind", "commitment"}), "address": frozenset({"kind", "address"})}
 
 
-def _refuse_duplicates(obj, known: frozenset, where: str) -> None:
-    try:
-        refuse_duplicate_fields(obj, known, where)
-    except ValueError as e:
-        raise DevFundConfigJsonError(str(e)) from e
+def _refuse_duplicates(obj: dict, known: frozenset, where: str) -> None:
+    config_json.refuse_duplicate_fields(obj, known, where, DevFundConfigJsonError)
 
 
 def _parse_recipient(obj) -> DevfundRecipient:
@@ -311,31 +301,27 @@ def _parse_recipient(obj) -> DevfundRecipient:
         raise DevFundConfigJsonError(f"recipient must be an object, got {type(obj).__name__}")
     _refuse_duplicates(obj, frozenset({"kind"}), "recipient")    # the tag, before the variant is known
     kind = obj.get("kind")
-    if kind in _RECIPIENT_FIELDS:
-        _refuse_duplicates(obj, _RECIPIENT_FIELDS[kind], "recipient")
+    if not isinstance(kind, str) or kind not in _RECIPIENT_FIELDS:
+        raise DevFundConfigJsonError(
+            f"unknown recipient kind {config_json.shown(kind)}, expected 'address' or 'multisig'")
+    _refuse_duplicates(obj, _RECIPIENT_FIELDS[kind], "recipient")
     if kind == "multisig":
-        commitment = obj.get("commitment")
-        if not isinstance(commitment, str):
-            raise DevFundConfigJsonError("recipient.commitment must be a string")
+        commitment = config_json.require_string(obj, "commitment", "recipient.", DevFundConfigJsonError)
         if len(commitment) != 128:
             raise DevFundConfigJsonError(
                 f"multisig commitment must be 128 hex characters, got {len(commitment)}")
         if not _HEX_128.fullmatch(commitment):
             raise DevFundConfigJsonError("multisig commitment is not hex (ASCII 0-9, a-f only)")
         return DevfundRecipient(tag=DevfundRecipient.MULTISIG, payload=commitment)
-    if kind == "address":
-        address = obj.get("address")
-        if not isinstance(address, str):
-            raise DevFundConfigJsonError("recipient.address must be a string")
-        clean = _clean_address(address)
-        if not clean:
-            raise DevFundConfigJsonError("recipient address is empty")
-        if len(address.encode("utf-8")) > _U16_MAX:
-            raise DevFundConfigJsonError("recipient address is too long")
-        if not _address_is_valid(clean):
-            raise DevFundConfigJsonError(f"recipient address {clean} does not decode")
-        return DevfundRecipient(tag=DevfundRecipient.ADDRESS, payload=address)
-    raise DevFundConfigJsonError(f"unknown recipient kind {kind!r}, expected 'address' or 'multisig'")
+    address = config_json.require_string(obj, "address", "recipient.", DevFundConfigJsonError)
+    clean = _clean_address(address)
+    if not clean:
+        raise DevFundConfigJsonError("recipient address is empty")
+    if len(address.encode("utf-8")) > _U16_MAX:
+        raise DevFundConfigJsonError("recipient address is too long")
+    if not _address_is_valid(clean):
+        raise DevFundConfigJsonError(f"recipient address {config_json.shown(clean)} does not decode")
+    return DevfundRecipient(tag=DevfundRecipient.ADDRESS, payload=address)
 
 
 def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
@@ -350,56 +336,41 @@ def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
 
         Raises DevFundConfigJsonError. Pure JSON decoding except the address
         check, which uses the Rust Address::decode over FFI. """
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise DevFundConfigJsonError(f"payload is not valid UTF-8: {e}") from e
-    try:
-        obj = strict_json_loads(text)
-    except (json.JSONDecodeError, RecursionError, ValueError) as e:
-        # RecursionError: see genesis_config.parse_genesis_config_json.
-        # ValueError: NaN/Infinity or a duplicate key -- both refused by
-        # serde_json, both accepted by Python's json by default.
-        raise DevFundConfigJsonError(f"payload is not valid JSON: {e}") from e
-    if not isinstance(obj, dict):
-        raise DevFundConfigJsonError(f"expected a JSON object, got {type(obj).__name__}")
+    error = DevFundConfigJsonError
+    obj = config_json.load_object(data, error, "devfund-config")
     _refuse_duplicates(obj, _DEVFUND_FIELDS, "the devfund-config")
 
-    if "devfund_address" in obj:
-        raise DevFundConfigJsonError(
-            "this is a version-1 devfund-config (top-level devfund_address); its signed bytes "
-            "differ, so it can't be signed -- ask the coordinator to re-run prepare-devfund")
+    if "recipient" not in obj:
+        # serde fails first, and sf-core says why for a version-1 file
+        # (genesis_config.rs, the devfund_address hint); an extra
+        # devfund_address in a version-2 file is ignored, as serde ignores it.
+        if "devfund_address" in obj:
+            raise error("this is a version-1 devfund-config (top-level devfund_address); its signed bytes "
+                        "differ, so it can't be signed -- ask the coordinator to re-run prepare-devfund")
+        raise error("recipient is missing")
 
     version = obj.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version != DEVFUND_SCHEMA_VERSION:
-        raise DevFundConfigJsonError(f"devfund-config version is {version!r}, expected {DEVFUND_SCHEMA_VERSION}")
+        raise error(f"devfund-config version is {config_json.shown(version)}, expected {DEVFUND_SCHEMA_VERSION}")
 
     # Exact spelling, as sf-crypto ChainKind::parse compares it.
-    network = _NETWORKS.get(obj.get("network"))
+    value = obj.get("network")
+    network = _NETWORKS.get(value) if isinstance(value, str) else None
     if network is None:
-        raise DevFundConfigJsonError(
-            f"unrecognized network {obj.get('network')!r}, expected one of {sorted(_NETWORKS)}")
-
-    if "recipient" not in obj:
-        raise DevFundConfigJsonError("recipient is missing")
+        raise error(f"unrecognized network {config_json.shown(value)}, expected one of {sorted(_NETWORKS)}")
     recipient = _parse_recipient(obj["recipient"])
 
-    effective_block = _require_u64(obj, "effective_block")
-    timestamp = _require_u64(obj, "timestamp")
+    effective_block = config_json.require_u64(obj, "effective_block", "", error)
+    timestamp = config_json.require_u64(obj, "timestamp", "", error)
     if timestamp == 0:
-        raise DevFundConfigJsonError("timestamp is 0, so this definition names no creation time")
-
-    signatures = obj.get("signatures", [])
-    if not isinstance(signatures, list):
-        raise DevFundConfigJsonError(f"signatures must be an array, got {type(signatures).__name__}")
-    for i, entry in enumerate(signatures):
-        if not isinstance(entry, dict) or not all(isinstance(entry.get(k), str) for k in ("signer_vk", "sig")):
-            raise DevFundConfigJsonError(f"signatures[{i}] must be an object with string signer_vk and sig")
-        _refuse_duplicates(entry, frozenset({"signer_vk", "sig"}), f"signatures[{i}]")
+        raise error("timestamp is 0, so this definition names no creation time")
 
     return DevFundConfigFields(
         network=network, recipient=recipient, effective_block=effective_block, timestamp=timestamp,
-        signer_vks=tuple(entry["signer_vk"] for entry in signatures))
+        signer_vks=config_json.signer_vks(obj, error))
+
+
+_RECIPIENT_LABEL = "Recipient"   # review_fields() adds the warnings to this field
 
 
 def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
@@ -424,7 +395,7 @@ def _labeled_values(fields: DevFundConfigFields) -> list[tuple[str, str]]:
         ("Chain", fields.network.name.lower()),
         ("Recipient kind", kind),
         # A 128-hex commitment can't wrap unbroken; group it for the screen.
-        ("Recipient", group_hex_for_display(fields.recipient.payload)
+        (_RECIPIENT_LABEL, group_hex_for_display(fields.recipient.payload)
          if fields.recipient.tag == DevfundRecipient.MULTISIG else visible_text(fields.recipient.payload)),
         ("Effective block", str(fields.effective_block)),
         ("Timestamp", _format_timestamp(fields.timestamp)),
@@ -439,13 +410,13 @@ def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = N
         genesis_config.py's own review_fields(). """
     out = []
     for label, value in _labeled_values(fields):
-        if label == "Recipient":
-            # sf-wallet-gov sign-devfund prints the same warning.
-            out.append(ReviewField(label=label, value=value, is_warning=True,
-                                   warning_detail="This recipient receives the ENTIRE genesis reward."))
-        else:
+        if label != _RECIPIENT_LABEL:
             out.append(ReviewField(label=label, value=value))
-        if label == "Recipient" and fields.recipient.tag == DevfundRecipient.ADDRESS:
+            continue
+        # sf-wallet-gov sign-devfund prints the same warning.
+        out.append(ReviewField(label=label, value=value, is_warning=True,
+                               warning_detail="This recipient receives the ENTIRE genesis reward."))
+        if fields.recipient.tag == DevfundRecipient.ADDRESS:
             # 7fchain accepts any address that decodes (DevfundRecipient::validate
             # checks nothing more), so this device does too; it only shows what
             # the address is, and flags one that is not on this dev fund's network.

@@ -13,12 +13,12 @@ import pytest
 from embit.bip39 import mnemonic_to_seed
 
 from seedsigner.models.sevenf import cert_request, mldsa
-from seedsigner.models.sevenf.constants import MAX_KEY_INDEX, ChainKind, devfund_path, root_path
+from seedsigner.models.sevenf.constants import MAX_KEY_INDEX, ChainKind
+from seedsigner.models.sevenf.path_lexicon import devfund_path, root_path
 from seedsigner.models.sevenf.review_format import ski
 from seedsigner.models.sevenf.root_ceremony import (
     derive_devfund_key,
     derive_root_ceremony_keys,
-    sign_with_devfund,
     sign_with_root_ca,
 )
 from sevenf_helpers import sevenf_seed_from_bytes
@@ -108,7 +108,7 @@ def _root_tbs_for(public_key: bytes) -> bytes:
 
 
 @needs_lib
-@pytest.mark.parametrize("sign", [sign_with_root_ca, sign_with_devfund])
+@pytest.mark.parametrize("sign", [sign_with_root_ca])
 def test_signing_at_an_index_verifies_only_under_that_index_key(sign):
     """ A real verification, not a comparison (ML-DSA signing is hedged, so
         two signatures always differ): assemble_root_cert_der() verifies the
@@ -127,14 +127,14 @@ def test_signing_at_an_index_verifies_only_under_that_index_key(sign):
         cert_request.assemble_root_cert_der(tbs, index_0_signature, index_2_vk)
 
 
-@pytest.mark.parametrize("sign", [sign_with_root_ca, sign_with_devfund])
+@pytest.mark.parametrize("sign", [sign_with_root_ca])
 def test_signing_requires_the_index(sign):
     """ No default: a caller that forgets the index must fail, not sign at 0. """
     with pytest.raises(TypeError):
         sign(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, b"x", confirmed=True)
 
 
-@pytest.mark.parametrize("sign", [sign_with_root_ca, sign_with_devfund])
+@pytest.mark.parametrize("sign", [sign_with_root_ca])
 def test_signing_refuses_a_bad_index_before_signing(sign):
     with pytest.raises((ValueError, TypeError)):
         sign(sevenf_seed_from_bytes(CANONICAL_SEED), ChainKind.TESTNET, b"x", index=-1, confirmed=True)
@@ -152,17 +152,17 @@ def test_derivation_requires_the_index(derive):
 # --- story 1c (M-2): paths are built by 7fchain's path_for, not by Python ------
 
 def test_paths_are_built_by_7fchains_path_for(monkeypatch):
-    from seedsigner.models.sevenf import constants, mldsa
+    from seedsigner.models.sevenf import mldsa, path_lexicon
     calls = []
     monkeypatch.setattr(mldsa, "path_for", lambda role, kind, index: calls.append((role, kind, index)) or f"<{role}>")
-    assert constants.root_path(ChainKind.TESTNET, 7) == "<root>"
-    assert constants.devfund_path(ChainKind.MAINNET, 2) == "<devfund>"
+    assert path_lexicon.root_path(ChainKind.TESTNET, 7) == "<root>"
+    assert path_lexicon.devfund_path(ChainKind.MAINNET, 2) == "<devfund>"
     assert calls == [("root", ChainKind.TESTNET, 7), ("devfund", ChainKind.MAINNET, 2)]
 
 
 @pytest.mark.parametrize("bad", [True, -1, 2**32, 1.0, "7"])
 def test_the_index_is_still_type_and_range_checked_before_the_ffi(bad):
     """ A ctypes u32 would silently wrap an out-of-range int; Python refuses first. """
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
     with pytest.raises((TypeError, ValueError)):
         root_path(ChainKind.TESTNET, bad)

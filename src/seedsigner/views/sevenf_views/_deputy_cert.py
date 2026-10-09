@@ -17,7 +17,7 @@ from seedsigner.helpers.l10n import mark_for_translation as _mft
 from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.seed import Seed
-from seedsigner.models.sevenf import cert_request, root_ceremony
+from seedsigner.models.sevenf import cert_request
 from seedsigner.models.sevenf.cert_request import CertRequestError
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.views.scan_views import ScanView
@@ -26,6 +26,7 @@ from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 from ._clock import ceremony_now, require_confirmed_clock
 from ._common import (
     refuse_on_unexpected_error,
+    root_public_key,
     SevenFCertRequestReviewFieldView,
     SevenFConfirmSignRootCertView,
     SevenFSignedCertificate,
@@ -151,8 +152,7 @@ class SevenFScanRootCertificateView(ScanView):
                              root_cert.chain_kind.name.lower(), self.chain_kind.name.lower()),
             ))
 
-        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index)
-        if root_cert.subject_vk != keys.root_ca.public_key:
+        if root_cert.subject_vk != root_public_key(self.seed, self.chain_kind, self.key_index):
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 headline=_("Wrong Key"),
                 reason=_("This certificate is for a different Root's key. This seed's own Root CA key for "

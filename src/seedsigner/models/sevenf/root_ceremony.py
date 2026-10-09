@@ -9,8 +9,8 @@
       function here takes one, so no other seed can reach a 7F key.
     - The Root key is at root/<chain_kind>/<index>/ml-dsa/v1. sf-wallet-gov
       signs genesis-config AND devfund-config with it (sign_ops.rs: both
-      `load_signer(Role::Root, ...)`), so `RootCeremonyKeys.devfund` is the same
-      key as `root_ca`.
+      `load_signer(Role::Root, ...)`), so every signature here is
+      sign_with_root_ca's.
     - Each holder's dev-fund key is a different key, at
       devfund/<chain_kind>/<index>/ml-dsa/v1 (7fchain 89d3d39): it locks the
       dev fund's multisig; the Roots declare the recipient with the Root key.
@@ -25,7 +25,8 @@
 from dataclasses import dataclass
 
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ChainKind, DerivedKey, devfund_path, root_path
+from seedsigner.models.sevenf.constants import ChainKind, DerivedKey
+from seedsigner.models.sevenf.path_lexicon import devfund_path, root_path
 
 ROOT_WORD_COUNT = 24                 # sf-keytree phrase_file.rs
 _ENGLISH = "en"                      # bip39 2.2.2 default features: English only
@@ -80,12 +81,10 @@ def _bytes_of(seed: SevenFSeed) -> bytes:
 
 @dataclass(frozen=True)
 class RootCeremonyKeys:
-    """ The Root key for one chain_kind at one key index. `devfund` is the same
-        key as `root_ca`: the key that signs the devfund-config (sf-wallet-gov
-        sign-devfund signs as Role::Root), not the holder's dev-fund key. """
+    """ The Root key for one chain_kind at one key index: it signs the
+        genesis- and devfund-configs and the certificates. """
     chain_kind: ChainKind
     root_ca: DerivedKey
-    devfund: DerivedKey
     index: int = 0
 
 
@@ -94,7 +93,7 @@ def derive_root_ceremony_keys(seed: SevenFSeed, chain_kind: ChainKind, *, index:
         never silently get index 0). """
     public_key, _ca_address_unused = mldsa.derive_pubkey(_bytes_of(seed), root_path(chain_kind, index))
     root_key = DerivedKey(public_key=public_key)
-    return RootCeremonyKeys(chain_kind=chain_kind, root_ca=root_key, devfund=root_key, index=index)
+    return RootCeremonyKeys(chain_kind=chain_kind, root_ca=root_key, index=index)
 
 
 def derive_devfund_key(seed: SevenFSeed, chain_kind: ChainKind, *, index: int) -> DerivedKey:
@@ -108,24 +107,16 @@ class SigningNotConfirmedError(Exception):
     """ A sign call without confirmed=True: see this module's docstring. """
 
 
-def _sign_with_root_key(seed: SevenFSeed, chain_kind: ChainKind, message: bytes, confirmed: bool, index: int, what: str) -> tuple[bytes, bytes]:
-    seed_bytes = _bytes_of(seed)
-    if not confirmed:
-        raise SigningNotConfirmedError(
-            f"{what} refuses to sign without confirmed=True -- only the confirm view may set it, "
-            "after the operator has approved every displayed field.")
-    return mldsa.derive_and_sign(seed_bytes, root_path(chain_kind, index), message)
-
-
 def sign_with_root_ca(seed: SevenFSeed, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
     """ Sign with the Root key at `index`, as sf-wallet-gov sign-genesis,
         sign-root-cert and sign-deputy-cert do. Returns (public_key, signature);
-        the library verifies the signature before returning it. """
-    return _sign_with_root_key(seed, chain_kind, message, confirmed, index, "sign_with_root_ca")
+        the library verifies the signature before returning it. The
+        dev-fund definition is signed with this key too (sign-devfund signs
+        as Role::Root). """
+    seed_bytes = _bytes_of(seed)
+    if not confirmed:
+        raise SigningNotConfirmedError(
+            "sign_with_root_ca refuses to sign without confirmed=True -- only the confirm view may set it, "
+            "after the operator has approved every displayed field.")
+    return mldsa.derive_and_sign(seed_bytes, root_path(chain_kind, index), message)
 
-
-def sign_with_devfund(seed: SevenFSeed, chain_kind: ChainKind, message: bytes, *, confirmed: bool, index: int) -> tuple[bytes, bytes]:
-    """ Sign a devfund-config with the Root key at `index`, as sf-wallet-gov
-        sign-devfund does (Role::Root). A separate name only so the devfund
-        confirm view reads as what it signs. """
-    return _sign_with_root_key(seed, chain_kind, message, confirmed, index, "sign_with_devfund")

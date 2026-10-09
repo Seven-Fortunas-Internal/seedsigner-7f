@@ -34,14 +34,14 @@
     bytes directly.
 """
 import ctypes
-import json
 from dataclasses import dataclass, field
 
 from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, refuse_duplicate_fields, strict_json_loads, visible_text
+from seedsigner.models.sevenf import config_json
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, visible_text
 
 # Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
 # exactly -- display-only here (parse_canonical_bytes already enforces the
@@ -203,180 +203,99 @@ def parse_canonical_bytes(data: bytes, max_message_len: int | None = None) -> Ge
     )
 
 
-def _require_u64(obj: dict, key: str, where: str) -> int:
-    value = obj.get(key)
-    if isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= 0xFFFFFFFFFFFFFFFF):
-        raise GenesisConfigJsonError(f"{where}.{key} must be a non-negative 64-bit integer, got {value!r}")
-    return value
-
-
-# The fields of sf-core's GenesisConfig, ConsensusParams and RootSig: serde
-# refuses a repeat of any of them (it ignores repeats of other keys).
+# The fields of sf-core's GenesisConfig and ConsensusParams: serde refuses a
+# repeat of any of them (it ignores repeats of other keys).
 _GENESIS_FIELDS = frozenset({"version", "chain_kind", "timestamp", "message", "derivation_scheme", "consensus", "signatures"})
 _CONSENSUS_FIELDS = frozenset({"target_block_time_secs", "difficulty_adjustment_interval_blocks", "blocks_per_decay_period"})
-ROOT_SIG_FIELDS = frozenset({"signer_vk", "sig"})
-
-
-def _refuse_duplicates(obj, known: frozenset, where: str) -> None:
-    try:
-        refuse_duplicate_fields(obj, known, where)
-    except ValueError as e:
-        raise GenesisConfigJsonError(str(e)) from e
+# Exact, case-sensitive spellings: sf-crypto's ChainKind is
+# #[serde(rename_all = "lowercase")].
+_CHAIN_KINDS = {"mainnet": ChainKind.MAINNET, "testnet": ChainKind.TESTNET, "devnet": ChainKind.DEVNET}
 
 
 def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
-    """ Parse the REAL coordinator artifact: the genesis-config JSON file
-        `sf-root-coordinator prepare-genesis` writes and `sf-wallet-gov sign-genesis` reads
-        (sf_core::genesis_config::GenesisConfig), confirmed field-for-field
-        against that real struct 2026-10-03 -- see this module's own
-        "RESOLVED" docstring note. This is the actual scan-time entry point
-        now; see SevenFScanGenesisConfigView (views/sevenf_views/) and
-        SevenFPlugin.parse_sign_request/sign (chains/sevenf/plugin.py).
+    """ Parse the coordinator's real artifact: the genesis-config JSON file
+        `sf-root-coordinator prepare-genesis` writes and `sf-wallet-gov
+        sign-genesis` reads (sf_core::genesis_config::GenesisConfig). Refuses
+        what serde and sign-genesis's validate_genesis refuse before signing:
+        version, derivation scheme, chain kind, timestamp 0, and the shape of
+        every field, `signatures` entries included. The signatures are read
+        only for their keys (already signed? how many so far?); this device
+        exports its own detached signature.
 
-        `signatures`, if present (the file may already carry other Roots'
-        detached signatures -- canonical_bytes never covers them, so
-        signing a partly assembled file produces the same signature as
-        signing the bare one), is read but not used: this device always
-        exports its own detached signature-only artifact
-        (export_envelope.signature_export), never re-embeds into this file.
+        Raises GenesisConfigJsonError. Pure JSON decoding: no FFI. """
+    error = GenesisConfigJsonError
+    obj = config_json.load_object(data, error, "genesis-config")
+    config_json.refuse_duplicate_fields(obj, _GENESIS_FIELDS, "the genesis-config", error)
+    _check_version_and_scheme(obj)
+    return GenesisConfigFields(
+        chain_kind=_chain_kind(obj),
+        timestamp=_timestamp(obj),
+        message=_message(obj),
+        consensus=_consensus(obj),
+        signer_vks=config_json.signer_vks(obj, error),
+    )
 
-        Raises GenesisConfigJsonError for anything structurally wrong --
-        not valid UTF-8/JSON, not an object, or a field missing/wrong-typed/
-        not matching the one value this device understands. Refuses rather
-        than guesses, same as every other wire-format parser here. Does
-        NOT call the Rust FFI at all; this is pure JSON decoding, the same
-        "plain parsing, not canonical-bytes logic" reasoning this module's
-        own docstring already applies to genesis_config_review_lines(). """
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise GenesisConfigJsonError(f"payload is not valid UTF-8: {e}") from e
 
-    try:
-        obj = strict_json_loads(text)
-    except (json.JSONDecodeError, RecursionError, ValueError) as e:
-        # ValueError: NaN/Infinity, a duplicate key, or an integer past
-        # Python's digit limit -- refused as serde_json would.
-        # RecursionError: Python's json module is recursive-descent, so a
-        # pathologically deeply-nested payload (e.g. ~100k levels of "[") --
-        # untrusted, coordinator-supplied, BBQr-scanned bytes -- raises
-        # RecursionError rather than JSONDecodeError. Caught here so it
-        # still surfaces as a clean refusal (GenesisConfigJsonError, which
-        # SevenFScanGenesisConfigView/SevenFPlugin actually catch), not an
-        # unhandled exception that falls through to a generic/debug error
-        # screen. Found by adversarial review, 2026-10-03.
-        raise GenesisConfigJsonError(f"payload is not valid JSON: {e}") from e
-
-    if not isinstance(obj, dict):
-        raise GenesisConfigJsonError(f"expected a JSON object, got {type(obj).__name__}")
-    _refuse_duplicates(obj, _GENESIS_FIELDS, "the genesis-config")
-
+def _check_version_and_scheme(obj: dict) -> None:
     version = obj.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
-        raise GenesisConfigJsonError(f"genesis-config version is {version!r}, expected {SCHEMA_VERSION}")
-
-    derivation_scheme = obj.get("derivation_scheme")
-    if derivation_scheme != DERIVATION_SCHEME_V1:
+        raise GenesisConfigJsonError(f"genesis-config version is {config_json.shown(version)}, expected {SCHEMA_VERSION}")
+    scheme = obj.get("derivation_scheme")
+    if scheme != DERIVATION_SCHEME_V1:
         raise GenesisConfigJsonError(
-            f"unrecognized derivation_scheme {derivation_scheme!r}, expected {DERIVATION_SCHEME_V1!r}"
-        )
+            f"unrecognized derivation_scheme {config_json.shown(scheme)}, expected {DERIVATION_SCHEME_V1!r}")
 
-    # Exact, case-sensitive match -- the real side's #[serde(rename_all =
-    # "lowercase")] on sf_crypto::address::ChainKind (confirmed directly
-    # against that source 2026-10-03) deserializes only the exact lowercase
-    # variant spelling, nothing case-insensitive. Matching more leniently
-    # here would accept a payload the real binary itself would reject.
-    chain_kind_str = obj.get("chain_kind")
-    chain_kind = {
-        "mainnet": ChainKind.MAINNET,
-        "testnet": ChainKind.TESTNET,
-        "devnet": ChainKind.DEVNET,
-    }.get(chain_kind_str)
+
+def _chain_kind(obj: dict) -> ChainKind:
+    value = obj.get("chain_kind")
+    chain_kind = _CHAIN_KINDS.get(value) if isinstance(value, str) else None
     if chain_kind is None:
         raise GenesisConfigJsonError(
-            f"unrecognized chain_kind {chain_kind_str!r}, expected one of ['mainnet', 'testnet', 'devnet']"
-        )
+            f"unrecognized chain_kind {config_json.shown(value)}, expected one of {sorted(_CHAIN_KINDS)}")
+    return chain_kind
 
-    timestamp = obj.get("timestamp")
-    if isinstance(timestamp, bool) or not isinstance(timestamp, int) or not (0 <= timestamp <= 0xFFFFFFFFFFFFFFFF):
-        raise GenesisConfigJsonError(f"timestamp must be a non-negative 64-bit integer, got {timestamp!r}")
+
+def _timestamp(obj: dict) -> int:
+    timestamp = config_json.require_u64(obj, "timestamp", "", GenesisConfigJsonError)
     if timestamp == 0:
         # sf-wallet-gov validate_genesis refuses it too.
         raise GenesisConfigJsonError("timestamp is 0, so this definition names no genesis time")
-
-    message = obj.get("message")
-    if not isinstance(message, str):
-        raise GenesisConfigJsonError(f"message must be a string, got {type(message).__name__}")
-    try:
-        message_len = len(message.encode("utf-8"))
-    except UnicodeEncodeError as e:
-        raise GenesisConfigJsonError(f"message is not valid Unicode text: {e}") from e
-
-    consensus_obj = obj.get("consensus")
-    if not isinstance(consensus_obj, dict):
-        raise GenesisConfigJsonError(f"consensus must be an object, got {type(consensus_obj).__name__}")
-    _refuse_duplicates(consensus_obj, _CONSENSUS_FIELDS, "consensus")
-    consensus = ConsensusParams(
-        target_block_time_secs=_require_u64(consensus_obj, "target_block_time_secs", "consensus"),
-        difficulty_adjustment_interval_blocks=_require_u64(
-            consensus_obj, "difficulty_adjustment_interval_blocks", "consensus"
-        ),
-        blocks_per_decay_period=_require_u64(consensus_obj, "blocks_per_decay_period", "consensus"),
-    )
-
-    # Optional (#[serde(default)] on the real struct), and never read for
-    # its content here (canonical_bytes never covers it, this device always
-    # exports its own detached signature). Still shape-validated, not just
-    # ignored outright: the real GenesisConfig fails to deserialize AT ALL
-    # if `signatures` is present but any entry doesn't match RootSig's
-    # shape (both fields required strings) -- found by adversarial review,
-    # 2026-10-03, confirmed by direct testing against the real struct. This
-    # device should refuse a file the real tooling would never have
-    # produced, the same "refuse rather than guess" reasoning applied to
-    # every other field above.
-    signatures_obj = obj.get("signatures", [])
-    if not isinstance(signatures_obj, list):
-        raise GenesisConfigJsonError(f"signatures must be an array, got {type(signatures_obj).__name__}")
-    for i, entry in enumerate(signatures_obj):
-        if not isinstance(entry, dict):
-            raise GenesisConfigJsonError(f"signatures[{i}] must be an object, got {type(entry).__name__}")
-        _refuse_duplicates(entry, ROOT_SIG_FIELDS, f"signatures[{i}]")
-        for key in ("signer_vk", "sig"):
-            if not isinstance(entry.get(key), str):
-                raise GenesisConfigJsonError(f"signatures[{i}].{key} must be a string")
-
-    return GenesisConfigFields(
-        chain_kind=chain_kind,
-        timestamp=timestamp,
-        message=message,
-        consensus=consensus,
-        signer_vks=tuple(entry["signer_vk"] for entry in signatures_obj),
-    )
+    return timestamp
 
 
-def already_signed_by(signer_vks: tuple[str, ...], public_key: bytes) -> bool:
-    """ sf-wallet-gov's "this Root has already signed this definition. Nothing
-        to do" (sign_ops.rs validate_genesis/validate_devfund): a non-empty
-        signer_vk equal to this key's, ignoring hex case. Another Root's
-        signature, or a keyless record, never blocks. """
-    mine = public_key.hex()
-    return any(vk and vk.lower() == mine for vk in signer_vks)
+def _message(obj: dict) -> str:
+    # No length limit: sf-core puts none on the message.
+    return config_json.require_string(obj, "message", "", GenesisConfigJsonError)
 
 
-_CONSENSUS_LABELS = (
-    ("Target block time", "target_block_time_secs"),
-    ("Difficulty adjustment interval", "difficulty_adjustment_interval_blocks"),
-    ("Blocks per decay period", "blocks_per_decay_period"),
+def _consensus(obj: dict) -> ConsensusParams:
+    consensus = obj.get("consensus")
+    if not isinstance(consensus, dict):
+        raise GenesisConfigJsonError(f"consensus must be an object, got {type(consensus).__name__}")
+    config_json.refuse_duplicate_fields(consensus, _CONSENSUS_FIELDS, "consensus", GenesisConfigJsonError)
+    return ConsensusParams(*(config_json.require_u64(consensus, key, "consensus.", GenesisConfigJsonError)
+                             for key in ("target_block_time_secs", "difficulty_adjustment_interval_blocks",
+                                         "blocks_per_decay_period")))
+
+
+# (label, ConsensusParams field, unit) for the review, the refusal and the
+# warnings alike.
+_CONSENSUS_SHOWN = (
+    ("Target block time", "target_block_time_secs", "s"),
+    ("Difficulty adjustment interval", "difficulty_adjustment_interval_blocks", " blocks"),
+    ("Blocks per decay period", "blocks_per_decay_period", ""),
 )
 
 
-def nondefault_consensus(fields: GenesisConfigFields) -> list[tuple[str, int, int]]:
-    """ (label, value, default) for each consensus parameter that is not this
-        network's default; sf-wallet-gov sign-genesis refuses any of them
-        without --accept-nondefault-consensus (sign_ops.rs validate_genesis). """
+def nondefault_consensus(fields: GenesisConfigFields) -> list[tuple[str, str, str]]:
+    """ (label, value, default), with units, for each consensus parameter that
+        is not this network's default; sf-wallet-gov sign-genesis refuses any
+        of them without --accept-nondefault-consensus (sign_ops.rs
+        validate_genesis). """
     defaults = CONSENSUS_DEFAULTS[fields.chain_kind]
-    return [(label, getattr(fields.consensus, attr), getattr(defaults, attr))
-            for label, attr in _CONSENSUS_LABELS if getattr(fields.consensus, attr) != getattr(defaults, attr)]
+    return [(label, f"{getattr(fields.consensus, attr)}{unit}", f"{getattr(defaults, attr)}{unit}")
+            for label, attr, unit in _CONSENSUS_SHOWN
+            if getattr(fields.consensus, attr) != getattr(defaults, attr)]
 
 
 def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
@@ -389,9 +308,7 @@ def _labeled_values(fields: GenesisConfigFields) -> list[tuple[str, str]]:
         ("Timestamp", _format_timestamp(fields.timestamp)),
         ("Message", visible_text(fields.message)),
         ("Derivation scheme", DERIVATION_SCHEME_V1),
-        ("Target block time", f"{fields.consensus.target_block_time_secs}s"),
-        ("Difficulty adjustment interval", f"{fields.consensus.difficulty_adjustment_interval_blocks} blocks"),
-        ("Blocks per decay period", str(fields.consensus.blocks_per_decay_period)),
+        *((label, f"{getattr(fields.consensus, attr)}{unit}") for label, attr, unit in _CONSENSUS_SHOWN),
     ]
 
 
@@ -417,20 +334,13 @@ def review_fields(fields: GenesisConfigFields, canonical_bytes: bytes | None = N
         signing field type the EVM chain plugin's review screens consume,
         via chains.base's re-export) rather than inventing a parallel type
         for this one flow. """
-    defaults = CONSENSUS_DEFAULTS[fields.chain_kind]
-    nondefault = {
-        "Target block time": (fields.consensus.target_block_time_secs, defaults.target_block_time_secs, "s"),
-        "Difficulty adjustment interval": (fields.consensus.difficulty_adjustment_interval_blocks,
-                                           defaults.difficulty_adjustment_interval_blocks, " blocks"),
-        "Blocks per decay period": (fields.consensus.blocks_per_decay_period, defaults.blocks_per_decay_period, ""),
-    }
+    default_of = {label: default for label, _value, default in nondefault_consensus(fields)}
     out = []
     for label, value in _labeled_values(fields):
-        got_want = nondefault.get(label)
-        if got_want and got_want[0] != got_want[1]:
+        if label in default_of:
             out.append(ReviewField(
                 label=label, value=value, is_warning=True,
-                warning_detail=f"Not the {fields.chain_kind.name.lower()} default ({got_want[1]}{got_want[2]}). "
+                warning_detail=f"Not the {fields.chain_kind.name.lower()} default ({default_of[label]}). "
                                "A different tempo is a different chain: continue only if the coordinator meant it.",
             ))
         else:

@@ -36,6 +36,7 @@ from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.review import ReviewField
 from seedsigner.models.seed import Seed
+from seedsigner.models.sevenf.mldsa import MlDsaError
 from seedsigner.models.sevenf import genesis_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError
@@ -43,8 +44,9 @@ from seedsigner.views.scan_views import ScanView
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View, guard_active_chain
 
 from ._common import (
-    refuse_on_unexpected_error, SevenFAlreadySignedView, SevenFUnsupportedArtefactView, _review_pages,
-    key_index_review_field, refuse_unless_signed_by_shown_key, subject_key_id_with_index,
+    refuse_on_unexpected_error, SevenFUnsupportedArtefactView, _review_pages,
+    key_index_review_field, refuse_if_already_signed, signing_refusal, refuse_unless_signed_by_shown_key, root_public_key,
+    subject_key_id_with_index,
 )
 from ._key_index import SevenFSelectKeyIndexView
 
@@ -192,12 +194,10 @@ class SevenFGenesisReviewStartView(View):
         # has no screen, so a refusal replaces it: Back from the refusal must
         # not land here and show the same refusal again.
         state = self.state
-        public_key = root_ceremony.derive_root_ceremony_keys(
-            root_ceremony.seed_for_7f(state.seed), state.chain_kind, index=state.key_index).root_ca.public_key
-        if genesis_config.already_signed_by(self.signer_vks, public_key):
-            return Destination(SevenFAlreadySignedView, view_args=dict(
-                what=_("genesis definition"), subject_key_id=subject_key_id_with_index(public_key, state.key_index)),
-                skip_current_view=True)
+        public_key = root_public_key(state.seed, state.chain_kind, state.key_index)
+        refusal = refuse_if_already_signed(public_key, state.key_index, self.signer_vks, _("genesis definition"))
+        if refusal:
+            return refusal
         nondefault = genesis_config.nondefault_consensus(self.fields)
         if nondefault and not self.accept_nondefault_consensus:
             return Destination(SevenFNonDefaultConsensusView, view_args=dict(
@@ -307,9 +307,8 @@ class SevenFConfirmSignView(View):
         super().__init__()
         self.state = state
 
-        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(state.seed), state.chain_kind, index=state.key_index)
-        self.public_key = keys.root_ca.public_key
-        self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, state.key_index)
+        self.public_key = root_public_key(state.seed, state.chain_kind, state.key_index)
+        self.subject_key_id = subject_key_id_with_index(self.public_key, state.key_index)
 
 
     def run(self):
@@ -325,13 +324,16 @@ class SevenFConfirmSignView(View):
 
         # Operator clicked "Sign" -- the one and only call site allowed to pass
         # confirmed=True (root_ceremony.sign_with_root_ca's own docstring).
-        public_key, signature = root_ceremony.sign_with_root_ca(
-            root_ceremony.seed_for_7f(self.state.seed),
-            self.state.chain_kind,
-            self.state.canonical_bytes,
-            confirmed=True,
-            index=self.state.key_index,
-        )
+        try:
+            public_key, signature = root_ceremony.sign_with_root_ca(
+                root_ceremony.seed_for_7f(self.state.seed),
+                self.state.chain_kind,
+                self.state.canonical_bytes,
+                confirmed=True,
+                index=self.state.key_index,
+            )
+        except MlDsaError as e:
+            return signing_refusal(e)
         refused = refuse_unless_signed_by_shown_key(public_key, self.public_key)
         if refused:
             return refused

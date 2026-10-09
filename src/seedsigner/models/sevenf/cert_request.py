@@ -105,7 +105,14 @@ _INTERNAL_ERROR_CODES = (ErrCode.NULL_POINTER, ErrCode.OUTPUT_BUFFER_TOO_SMALL)
 _KNOWN_CODES = frozenset({
     ErrCode.NULL_POINTER, ErrCode.BAD_CHAIN_KIND, ErrCode.OUTPUT_BUFFER_TOO_SMALL,
     ErrCode.PARSE_FAILED, ErrCode.CERT_BUILD_FAILED, ErrCode.CSR_VERIFY_FAILED, ErrCode.CERT_PARSE_FAILED,
+    ErrCode.CSR_POLICY,
 })
+
+# ERR_CSR_POLICY: sf-ca's issuing-CA policy refused the request's
+# extensionRequest (it asks for an extension, does not decode, or names a
+# subjectAltName other than DNS).
+_CSR_POLICY_REASON = ("this certificate request's extension request is not acceptable: a Deputy request "
+                      "must ask for no extensions -- ask the Deputy to create a fresh one")
 
 
 def _code_name(code: int) -> str:
@@ -356,8 +363,7 @@ def verify_and_parse_csr_der(csr_der: bytes) -> ParsedCsr:
         subject_vk_out, _CERT_SUBJECT_VK_LEN,
     )
     if rc == ErrCode.CSR_POLICY:
-        raise CertRequestError("this certificate request asks for extensions (e.g. CA/path length); "
-                               "a Deputy request must not -- ask the Deputy to create a fresh one")
+        raise CertRequestError(_CSR_POLICY_REASON)
     if rc != 0:
         _raise_cert_error(rc, "it may not be a well-formed PKCS#10 request, may use the wrong "
                                "signature algorithm, or its self-signature may not actually verify")
@@ -390,15 +396,17 @@ def build_deputy_tbs_v2(
         rc = e.code
         # Unlike this module's other raise sites, mldsa7f_cert_deputy_tbs_v2
         # (ffi.rs) genuinely DOES distinguish which of its two scanned
-        # inputs failed from the TBS-building step itself -- the three
-        # branches below name the real, different cause for each of its
-        # three possible failure codes, not a shared list of plausible ones.
+        # inputs failed from the TBS-building step itself -- the branches
+        # below name the real, different cause for each of its failure
+        # codes, not a shared list of plausible ones.
         if rc == ErrCode.CERT_PARSE_FAILED:
             _raise_cert_error(rc, "the scanned Root certificate isn't valid (malformed, not a "
                                    "CA certificate, wrong algorithm, or wrong key length)")
         elif rc == ErrCode.CSR_VERIFY_FAILED:
             _raise_cert_error(rc, "the scanned Deputy certificate request isn't valid (malformed, "
                                    "wrong algorithm, or its self-signature doesn't verify)")
+        elif rc == ErrCode.CSR_POLICY:
+            raise CertRequestError(_CSR_POLICY_REASON) from e
         else:
             # _raise_cert_error itself still distinguishes an internal-bug
             # code (NULL_POINTER/OUTPUT_BUFFER_TOO_SMALL) from the real

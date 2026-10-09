@@ -59,8 +59,8 @@ class ErrCode(IntEnum):
     NULL_POINTER = -1
     BAD_MASTER_SEED_LEN = -2
     BAD_PATH_UTF8 = -3
-    BAD_NETWORK = -4
-    BAD_LAYER = -5
+    BAD_NETWORK = -4                  # retired in ABI 2: never returned
+    BAD_LAYER = -5                    # retired in ABI 2: never returned
     PK_BUFFER_TOO_SMALL = -6
     ADDRESS_BUFFER_TOO_SMALL = -7
     SIGNATURE_BUFFER_TOO_SMALL = -8

@@ -30,9 +30,11 @@ def test_the_rules_are_7fchains_not_a_python_copy():
 
 
 def test_the_refusal_message_is_7fchains():
+    # sf-keytree path.rs parse(), the segment-count refusal, word for word.
     with pytest.raises(PathLexiconError) as e:
         validate("root/testnet/0/ml-dsa")
-    assert "version" in str(e.value) or "v<" in str(e.value) or "segments" in str(e.value), str(e.value)
+    assert str(e.value) == ("root path must be root/<chain-kind>/<index>/<algorithm>/v<N>, "
+                            "got 'root/testnet/0/ml-dsa' (4 segments, expected 5 or 6)")
 
 
 # ─── The settled paths ───────────────────────────────────────────────────
@@ -169,7 +171,7 @@ def test_builder_produces_a_path_that_validates():
     """ Not a 1:1 port of path.rs's builders_* tests (this device only has
         constants.root_path() as a builder, not a general path_for() for
         every role) -- see that module's own doc comment. """
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
     assert root_path(ChainKind.TESTNET) == "root/testnet/0/ml-dsa/v1"
     _ok(root_path(ChainKind.TESTNET))
 
@@ -194,6 +196,11 @@ def test_segment_and_index_validation_are_strictly_ascii():
 
 
 def test_segment_max_length():
+    """ 32 characters is the most a segment may have (MAX_SEGMENT_LEN): an
+        index of 32 zeros is a key upstream, 33 is refused (7fchain 06a47ba's
+        keypair_at, 2026-10-08). """
+    validate(f"root/testnet/{'0' * 32}/ml-dsa/v1")
+    _rejects(f"root/testnet/{'0' * 33}/ml-dsa/v1")
     _rejects(f"root/testnet/0/ml-dsa/v1/{'a' * 33}")
     _rejects(f"root/testnet/0/{'a' * 33}/v1")
 
@@ -203,7 +210,7 @@ def test_devfund_is_a_role_and_is_not_the_root_path():
         (7fchain 89d3d39, 2026-10-05): the dev fund is locked by nine
         devfund keys derived at their own path, not by the Root keys. L1,
         not chain-bound, no leaf. """
-    from seedsigner.models.sevenf.constants import devfund_path, root_path
+    from seedsigner.models.sevenf.path_lexicon import devfund_path, root_path
     _ok("devfund/testnet/0/ml-dsa/v1")
     _ok("devfund/devnet/1/ml-dsa/v1")
     _rejects("devfund/testnet/7/0/ml-dsa/v1")  # no chain-id segment

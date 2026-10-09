@@ -31,7 +31,7 @@
 from dataclasses import dataclass
 from gettext import gettext as _
 
-from seedsigner.gui.components import Fonts, FormattedAddress, GUIConstants, IconTextLine, SeedSignerIconConstants
+from seedsigner.gui.components import Fonts, GUIConstants, IconTextLine, SeedSignerIconConstants
 from seedsigner.hardware.buttons import HardwareButtonsConstants
 from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
 
@@ -95,31 +95,16 @@ class SevenFReviewFieldScreen(ButtonListScreen):
 
 @dataclass
 class SevenFConfirmSignScreen(ButtonListScreen):
-    """ Final review step before signing: which chain and which key's
-        address the signature will be attributed to -- the signing-identity
-        check, distinct from the per-field genesis-config content review
-        that already happened on the preceding pages (SevenFReviewFieldScreen).
-        Same role as evm_screens.py's EvmConfirmSignScreen.
-
-        `signing_role_label` names the actual key signing (default "Root CA"
-        for genesis-config/Root self-cert/Deputy cross-cert, all signed by
-        the Root CA key) -- added 2026-10-03
-        (7f-review-devfund-confirm-screen-wrong-label, found by the
-        full-project adversarial review's UI/UX dimension) after this screen
-        was found hardcoding "signing as Root CA for" even when
-        SevenFConfirmSignDevFundView used it to sign with the DEVFUND key, a
-        different key from the same seed. That mislabeling directly
-        undermined the one wrong-key check the hardware walkthrough singles
-        out for this exact screen (docs/7f-integration/root-ceremony-
-        hardware-walkthrough.md Step 6: "the confirm screen must show the
-        devfund address... If the address shown here matches the Root CA
-        address instead, that's a real regression") -- an operator primed to
-        watch for that exact mismatch would have seen the words "Root CA" on
-        the one screen that was supposed to prove it wasn't. """
+    """ Final review step before signing: which chain, and the subject key id
+        of the Root key that signs (sf-wallet-gov: "signing as root <ski>"),
+        the signing-identity check after the per-field review
+        (SevenFReviewFieldScreen). Same role as evm_screens.py's
+        EvmConfirmSignScreen. The genesis- and devfund-configs and both
+        certificates are all signed with the Root key; `signing_role_label`
+        names it. """
     chain_kind_name: str | None = None
-    address: str | None = None
-    subject_key_id: str | None = None  # shown instead of the address when given
-    signing_role_label: str = "Root CA"
+    subject_key_id: str | None = None
+    signing_role_label: str = "Root key"
 
     def __post_init__(self):
         self.title = _("Confirm & Sign")
@@ -139,22 +124,14 @@ class SevenFConfirmSignScreen(ButtonListScreen):
         )
         self.components.append(chain_display)
 
-        if self.subject_key_id:
-            # The id holders know and report (sf-wallet-gov: "signing as root <ski>").
-            address_display = IconTextLine(
-                label_text=_("Subject key id"),
-                value_text=self.subject_key_id,
-                is_text_centered=True,
-                auto_line_break=True,
-                screen_y=chain_display.screen_y + chain_display.height + GUIConstants.COMPONENT_PADDING,
-            )
-            self.components.append(address_display)
-        else:
-            address_display = FormattedAddress(
-                address=self.address,
-                screen_y=chain_display.screen_y + chain_display.height + 2*GUIConstants.COMPONENT_PADDING,
-            )
-            self.components.append(address_display)
+        # The id holders know and report (sf-wallet-gov: "signing as root <ski>").
+        self.components.append(IconTextLine(
+            label_text=_("Subject key id"),
+            value_text=self.subject_key_id,
+            is_text_centered=True,
+            auto_line_break=True,
+            screen_y=chain_display.screen_y + chain_display.height + GUIConstants.COMPONENT_PADDING,
+        ))
 
 
 

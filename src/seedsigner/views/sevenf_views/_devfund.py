@@ -10,7 +10,8 @@ from gettext import gettext as _
 from seedsigner.helpers.l10n import mark_for_translation as _mft
 from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.models.seed import Seed
-from seedsigner.models.sevenf import devfund_config, genesis_config, root_ceremony
+from seedsigner.models.sevenf.mldsa import MlDsaError
+from seedsigner.models.sevenf import devfund_config, root_ceremony
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.devfund_config import DevFundConfigError, DevFundConfigJsonError
 from seedsigner.views.scan_views import ScanView
@@ -19,8 +20,9 @@ from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 from seedsigner.models.review import ReviewField
 
 from ._common import (
-    refuse_on_unexpected_error, SevenFAlreadySignedView, SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView,
-    key_index_review_field, refuse_unless_signed_by_shown_key, subject_key_id_with_index,
+    refuse_on_unexpected_error, SevenFCertRequestReviewFieldView, SevenFUnsupportedArtefactView,
+    key_index_review_field, refuse_if_already_signed, signing_refusal, refuse_unless_signed_by_shown_key, root_public_key,
+    subject_key_id_with_index,
 )
 from ._key_index import SevenFSelectKeyIndexView
 
@@ -125,12 +127,10 @@ class SevenFDevFundReviewStartView(View):
     def run(self):
         # sf-wallet-gov validate_devfund: already signed by this Root key. The
         # refusal replaces this screenless view (see the genesis review start).
-        public_key = root_ceremony.derive_root_ceremony_keys(
-            root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).root_ca.public_key
-        if genesis_config.already_signed_by(self.signer_vks, public_key):
-            return Destination(SevenFAlreadySignedView, view_args=dict(
-                what=_("dev-fund definition"), subject_key_id=subject_key_id_with_index(public_key, self.key_index)),
-                skip_current_view=True)
+        refusal = refuse_if_already_signed(root_public_key(self.seed, self.chain_kind, self.key_index), self.key_index,
+                                           self.signer_vks, _("dev-fund definition"))
+        if refusal:
+            return refusal
         return Destination(
             SevenFCertRequestReviewFieldView,
             view_args=dict(
@@ -151,29 +151,13 @@ class SevenFDevFundReviewStartView(View):
 
 class SevenFConfirmSignDevFundView(View):
     """ Final review step for devfund-config signing: confirms which chain
-        and which address the signature will be attributed to -- the
+        and which key (its subject key id) the signature is made with -- the
         signing-identity check, distinct from the per-field content review
         that already happened on the preceding pages. Labelled "Root key":
         the devfund-config is Root-signed (sf-wallet-gov sign-devfund), and
         since 7fchain 89d3d39 a separate dev-fund key exists that this is not.
 
-        CORRECTED 2026-10-03 (R27 re-port, adversarial review): this
-        docstring used to claim the devfund address differs from the Root
-        CA address shown by _common.SevenFConfirmSignRootCertView's own
-        confirm screen, "different derived keys off the same seed." That
-        was the exact bug root_ceremony.py's own BUG FIX note fixed --
-        devfund and Root CA are now the SAME key (confirmed against
-        7fchain's sf-wallet-gov sign_ops.rs: cmd_sign_genesis/cmd_sign_devfund
-        both take their key from load_signer(Role::Root, ...)). This screen still
-        shows `keys.devfund.address` (now always equal to
-        `keys.root_ca.address`) -- kept as a separate View/confirm screen
-        from SevenFConfirmSignRootCertView for artefact-type clarity
-        (genesis vs. devfund-config is still a real distinction the
-        operator should see named), not because it disambiguates two
-        different signing identities any more. Do not "restore" a separate
-        devfund derivation here -- that would reintroduce the fixed bug.
-
-        Reuses root_ceremony.sign_with_devfund() unmodified. This is the
+        Signs with root_ceremony.sign_with_root_ca(). This is the
         ONLY caller permitted to pass confirmed=True for this flow, same
         contract as _common.SevenFConfirmSignRootCertView. """
     def __init__(self, seed: Seed, chain_kind: ChainKind, tbs_bytes: bytes, key_index: int):
@@ -183,9 +167,8 @@ class SevenFConfirmSignDevFundView(View):
         self.tbs_bytes = tbs_bytes
         self.key_index = key_index
 
-        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=key_index)
-        self.public_key = keys.devfund.public_key
-        self.subject_key_id = subject_key_id_with_index(keys.devfund.public_key, key_index)
+        self.public_key = root_public_key(seed, chain_kind, key_index)
+        self.subject_key_id = subject_key_id_with_index(self.public_key, key_index)
 
 
     def run(self):
@@ -201,14 +184,17 @@ class SevenFConfirmSignDevFundView(View):
             return Destination(BackStackView)
 
         # Operator clicked "Sign" -- the one and only call site allowed to pass
-        # confirmed=True for this flow (root_ceremony.sign_with_devfund's own docstring).
-        public_key, signature = root_ceremony.sign_with_devfund(
-            root_ceremony.seed_for_7f(self.seed),
-            self.chain_kind,
-            self.tbs_bytes,
-            confirmed=True,
-            index=self.key_index,
-        )
+        # confirmed=True for this flow (root_ceremony.sign_with_root_ca's own docstring).
+        try:
+            public_key, signature = root_ceremony.sign_with_root_ca(
+                root_ceremony.seed_for_7f(self.seed),
+                self.chain_kind,
+                self.tbs_bytes,
+                confirmed=True,
+                index=self.key_index,
+            )
+        except MlDsaError as e:
+            return signing_refusal(e)
         refused = refuse_unless_signed_by_shown_key(public_key, self.public_key)
         if refused:
             return refused

@@ -78,10 +78,8 @@ from test_sevenf_path_lexicon import (
     test_a_retired_role_is_not_a_role as _vector_6_rejects_unknown_role,
     test_segments_are_lowercase_and_bounded as _vector_6_rejects_uppercase,
 )
-from test_sevenf_root_ceremony import (
-    test_end_to_end_from_a_real_mnemonic as _vector_1_phrase_to_master_seed,
-    test_root_ca_and_devfund_are_the_same_key as _vector_2_devfund_is_the_root_key,
-)
+from test_sevenf_root_ceremony import test_end_to_end_from_a_real_mnemonic as _vector_1_phrase_to_master_seed
+from test_sevenf_views import test_the_devfund_definition_is_signed_with_the_root_key as _vector_2_devfund_is_the_root_key
 
 
 def test_vector_1_phrase_to_master_seed():
@@ -96,7 +94,8 @@ def test_vector_2_devfund_signs_with_the_same_key_as_root():
     """ devfund stopped being a separately-derived category in the R27
         single-grammar collapse (see root_ceremony.py's own BUG FIX note)
         -- this is vector 2's devfund coverage now: not a distinct
-        derived-key KAT, but confirmation the devfund key IS the Root key. """
+        derived-key KAT, but confirmation the dev-fund definition is signed
+        with the Root key. """
     _vector_2_devfund_is_the_root_key()
 
 

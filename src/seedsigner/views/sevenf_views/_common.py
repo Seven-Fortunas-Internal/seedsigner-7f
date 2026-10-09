@@ -21,8 +21,10 @@ from seedsigner.gui.screens import RET_CODE__BACK_BUTTON
 from seedsigner.gui.screens.screen import ButtonOption
 from seedsigner.models.review import ReviewField
 from seedsigner.models.seed import Seed
-from seedsigner.models.sevenf import root_ceremony
-from seedsigner.models.sevenf.constants import ChainKind, root_path
+from seedsigner.models.sevenf.mldsa import MlDsaError
+from seedsigner.models.sevenf import config_json, root_ceremony
+from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.path_lexicon import root_path
 from seedsigner.models.sevenf.review_format import group_hex_for_display, ski
 from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 
@@ -67,18 +69,19 @@ _MAX_CHARS_PER_WARNING_PAGE = 75
 
 
 def _paginate_value(value: str, max_chars: int = _MAX_CHARS_PER_REVIEW_PAGE) -> list[str]:
-    """ Splits a field value into screen-sized pages, preferring to break at
-        a space, but never letting a page exceed max_chars -- an unbroken run
-        or embedded newlines must not push signed text off the screen
-        (security review 2026-10-08). """
+    """ Splits a field value into screen-sized pages, preferring to break
+        after a space, but never letting a page exceed max_chars -- an
+        unbroken run or embedded newlines must not push signed text off the
+        screen. The pages joined are the value: no space is dropped at a cut,
+        so a run of spaces in signed text stays countable (security review
+        2026-10-08). """
     pages = []
     rest = value
     while len(rest) > max_chars:
-        cut = rest.rfind(" ", 0, max_chars + 1)
-        if cut <= 0:
-            cut = max_chars
-        pages.append(rest[:cut].rstrip(" "))
-        rest = rest[cut:].lstrip(" ")
+        space = rest.rfind(" ", 0, max_chars)
+        cut = space + 1 if space > 0 else max_chars
+        pages.append(rest[:cut])
+        rest = rest[cut:]
     pages.append(rest)
     return pages
 
@@ -101,10 +104,19 @@ def refuse_on_unexpected_error(handle_complete_scan):
     return wrapper
 
 
+# The last review's fields and their pages: every page of one review is
+# handed the same list, so it is split once, not once per page press (a long
+# message made that quadratic; security review 2026-10-08).
+_last_split: tuple[list, list] = ([], [])
+
+
 def _review_pages(review_fields: list[ReviewField]) -> list[ReviewField]:
     """ One screen per page: long values split on word boundaries; a warning
         field's pages are shorter and each repeats the warning. """
-    return [
+    global _last_split
+    if _last_split[0] is review_fields:
+        return _last_split[1]
+    pages = [
         ReviewField(label=field.label, value=chunk_value, is_warning=field.is_warning, warning_detail=field.warning_detail)
         for field in review_fields
         for chunk_value in _paginate_value(
@@ -112,6 +124,18 @@ def _review_pages(review_fields: list[ReviewField]) -> list[ReviewField]:
             _MAX_CHARS_PER_WARNING_PAGE if field.is_warning and field.warning_detail else _MAX_CHARS_PER_REVIEW_PAGE,
         )
     ]
+    _last_split = (review_fields, pages)
+    return pages
+
+
+# A refusal's reason can carry text from the refused input; the screen lays
+# text out in time quadratic in its length (security review 2026-10-08).
+_MAX_REASON_CHARS = 300
+
+
+def _bounded(reason: str) -> str:
+    return reason if len(reason) <= _MAX_REASON_CHARS else reason[:_MAX_REASON_CHARS] + "\u2026"
+
 
 
 class SevenFUnsupportedArtefactView(View):
@@ -128,7 +152,7 @@ class SevenFUnsupportedArtefactView(View):
         every existing call site is unaffected. """
     def __init__(self, reason: str, headline: str | None = None):
         super().__init__()
-        self.reason = reason
+        self.reason = _bounded(reason)
         self.headline = headline if headline is not None else _("Can't Parse This")
 
 
@@ -169,6 +193,21 @@ def key_index_review_field(chain_kind: ChainKind, key_index: int) -> ReviewField
         is_warning=key_index != 0,
         warning_detail=_("Not the default index 0") if key_index != 0 else "",
     )
+
+
+def signing_refusal(error: Exception):
+    """ The refusal for a signature the library would not produce. A failed
+        self-check (as sf-wallet-gov's sign_checked) means the device computed
+        a wrong signature: nothing is exported, and the device is suspect. """
+    from seedsigner.models.sevenf._ffi import ErrCode
+    if getattr(error, "code", None) == ErrCode.SIGNATURE_SELF_CHECK_FAILED:
+        return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+            headline=_("Signature Check Failed"),
+            reason=_("The new signature did not verify under its own key. Nothing was exported. "
+                     "Do not use this device for the ceremony; tell the coordinator.")))
+    return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+        headline=_("Not Signed"),
+        reason=_("The signing library refused ({}). Nothing was exported.").format(error)))
 
 
 def refuse_unless_signed_by_shown_key(signed_with: bytes, shown: bytes):
@@ -301,9 +340,8 @@ class SevenFConfirmSignRootCertView(View):
         self.root_cert_der = root_cert_der
         self.signed_view_args = signed_view_args or {}
 
-        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=key_index)
-        self.public_key = keys.root_ca.public_key
-        self.subject_key_id = subject_key_id_with_index(keys.root_ca.public_key, key_index)
+        self.public_key = root_public_key(self.seed, self.chain_kind, key_index)
+        self.subject_key_id = subject_key_id_with_index(self.public_key, key_index)
 
 
     def run(self):
@@ -319,13 +357,16 @@ class SevenFConfirmSignRootCertView(View):
 
         # Operator clicked "Sign" -- the one and only call site allowed to pass
         # confirmed=True for this flow (root_ceremony.sign_with_root_ca's own docstring).
-        public_key, signature = root_ceremony.sign_with_root_ca(
-            root_ceremony.seed_for_7f(self.seed),
-            self.chain_kind,
-            self.tbs_bytes,
-            confirmed=True,
-            index=self.key_index,
-        )
+        try:
+            public_key, signature = root_ceremony.sign_with_root_ca(
+                root_ceremony.seed_for_7f(self.seed),
+                self.chain_kind,
+                self.tbs_bytes,
+                confirmed=True,
+                index=self.key_index,
+            )
+        except MlDsaError as e:
+            return signing_refusal(e)
         refused = refuse_unless_signed_by_shown_key(public_key, self.public_key)
         if refused:
             return refused
@@ -394,7 +435,7 @@ class SevenFNotA7FPhraseView(View):
         (not 24 English BIP-39 words; sf-keytree phrase_file.rs ROOT_WORD_COUNT). """
     def __init__(self, reason: str):
         super().__init__()
-        self.reason = reason
+        self.reason = _bounded(reason)
 
 
     def run(self):
@@ -408,6 +449,24 @@ class SevenFNotA7FPhraseView(View):
             button_data=[ButtonOption("OK")],
         )
         return Destination(BackStackView)
+
+
+
+def root_public_key(seed: Seed, chain_kind: ChainKind, key_index: int) -> bytes:
+    """ This seed's Root key at `key_index`: 7fchain's
+        root/<network>/<index>/ml-dsa/v1, from a 7F phrase only (seed_for_7f). """
+    return root_ceremony.derive_root_ceremony_keys(
+        root_ceremony.seed_for_7f(seed), chain_kind, index=key_index).root_ca.public_key
+
+
+def refuse_if_already_signed(public_key: bytes, key_index: int, signer_vks: tuple[str, ...], what: str):
+    """ sf-wallet-gov's "already signed. Nothing to do", or None. The refusal
+        replaces the calling view, which has no screen of its own: Back from
+        the refusal must not land on it and show the same refusal again. """
+    if not config_json.already_signed_by(signer_vks, public_key):
+        return None
+    return Destination(SevenFAlreadySignedView, view_args=dict(
+        what=what, subject_key_id=subject_key_id_with_index(public_key, key_index)), skip_current_view=True)
 
 
 

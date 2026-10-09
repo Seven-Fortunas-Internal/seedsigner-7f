@@ -20,7 +20,6 @@ from seedsigner.models.sevenf.root_ceremony import (
     derive_devfund_key,
     derive_root_ceremony_keys,
     seed_for_7f,
-    sign_with_devfund,
     sign_with_root_ca,
 )
 
@@ -62,7 +61,6 @@ def test_a_sevenf_seed_cannot_be_made_from_raw_bytes():
     lambda b: derive_root_ceremony_keys(b, ChainKind.TESTNET, index=0),
     lambda b: derive_devfund_key(b, ChainKind.TESTNET, index=0),
     lambda b: sign_with_root_ca(b, ChainKind.TESTNET, b"m", confirmed=True, index=0),
-    lambda b: sign_with_devfund(b, ChainKind.TESTNET, b"m", confirmed=True, index=0),
 ])
 def test_7f_derivation_and_signing_take_only_a_sevenf_seed(call):
     with pytest.raises(TypeError):
@@ -79,6 +77,15 @@ def test_a_bip39_passphrase_is_allowed_and_normalised_as_bip39():
     words = unicodedata.normalize("NFKD", " ".join(ABANDON_ART))
     want = hashlib.pbkdf2_hmac("sha512", words.encode(), ("mnemonic" + unicodedata.normalize("NFKD", passphrase)).encode(), 2048)
     assert s.seed_bytes == want
+
+
+def test_a_passphrase_gives_7fchains_key():
+    """ The same key as 7fchain's own keypair_at for this phrase and a
+        passphrase that needs NFKD and keeps its trailing spaces (7fchain
+        06a47ba, a scratch crate linking sf-keytree, 2026-10-08): the
+        recipe above, checked against the source of truth. """
+    keys = derive_root_ceremony_keys(seed_for_7f(Seed(ABANDON_ART, passphrase="Ñandú ﬁ  ")), ChainKind.TESTNET, index=0)
+    assert keys.root_ca.public_key.hex()[:32] == "40e7d9764be5bb118e19b6217b7cfcba"
 
 
 def test_ca_keys_carry_no_address():

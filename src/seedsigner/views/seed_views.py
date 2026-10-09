@@ -817,13 +817,9 @@ class SeedBackupView(View):
 
 class SeedBackupToSDConfirmView(View):
     """ No-blind-persist confirmation before writing this seed's full
-        mnemonic, encrypted, to microSD -- this device's first persistence
-        of a full, undived master seed (every prior export in this
-        codebase is a public key, a signature, or a one-way-derived leaf
-        seed -- see models/sevenf/deputy_ca_export.py's own docstring for
-        that distinction). Mirrors sevenf_views.py's
-        SevenFConfirmDeputySeedExportView DireWarningScreen pattern for an
-        analogous, if lower-stakes, secret export. """
+        mnemonic, encrypted, to microSD: the only export of secret material
+        on this device (every other export is a public key, a signature or
+        a certificate). A DireWarningScreen, as for any irreversible step. """
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed

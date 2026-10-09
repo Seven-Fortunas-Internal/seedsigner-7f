@@ -212,7 +212,7 @@ class TestSigningKeyMustBeTheKeyShown(_IndexFlowTest):
         (lambda seed: sevenf_views.SevenFConfirmSignRootCertView(
             seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", key_index=2), "sign_with_root_ca"),
         (lambda seed: sevenf_views.SevenFConfirmSignDevFundView(
-            seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", key_index=2), "sign_with_devfund"),
+            seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", key_index=2), "sign_with_root_ca"),
         (lambda seed: sevenf_views.SevenFConfirmSignView(state=sevenf_views.SevenFGenesisCeremonyState(
             seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=b"x", review_fields=[], key_index=2)),
          "sign_with_root_ca"),

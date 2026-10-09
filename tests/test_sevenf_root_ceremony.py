@@ -16,7 +16,6 @@ from seedsigner.models.sevenf.constants import ChainKind, MASTER_SEED_LEN
 from seedsigner.models.sevenf.root_ceremony import (
     SigningNotConfirmedError,
     derive_root_ceremony_keys,
-    sign_with_devfund,
     sign_with_root_ca,
 )
 from sevenf_helpers import sevenf_seed_from_bytes
@@ -58,7 +57,6 @@ def test_derive_root_ceremony_keys_matches_rust_kat():
     assert keys.chain_kind == ChainKind.TESTNET
     assert hashlib.sha256(keys.root_ca.public_key).hexdigest() == \
         "920d8addc431773ed0f40e441593b609353b3f2ed18181fb21213743059a19f0"
-    assert keys.devfund.public_key == keys.root_ca.public_key
 
 
 def test_root_ca_matches_7fchains_real_canonical_vector():
@@ -131,16 +129,6 @@ def test_devfund_key_matches_real_sf_wallet_gov_derive_vk():
     assert devfund.public_key != root.public_key
 
 
-def test_root_ca_and_devfund_are_the_same_key():
-    """ BUG FIX, 2026-10-03 (R27 re-port): this used to assert root_ca and
-        devfund differ -- that was the bug. 7fchain's sf-wallet-gov
-        cmd_sign_genesis and cmd_sign_devfund (sign_ops.rs) both take their
-        key from load_signer(Role::Root, ...) at the same index:
-        genesis-config and devfund-config are signed by the SAME Root
-        key. See root_ceremony.py's own BUG FIX note. """
-    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
-    assert keys.root_ca.public_key == keys.devfund.public_key
-
 
 def test_keys_differ_across_chain_kinds():
     testnet_keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
@@ -200,37 +188,3 @@ def test_sign_with_root_ca_requires_confirmed_as_keyword():
     with pytest.raises(TypeError):
         sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message)  # omitted entirely -- must fail
 
-
-def test_sign_with_devfund_produces_a_verifiable_signature_shape():
-    message = b"devfund-config canonical bytes for testnet"
-    pk, sig = sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)
-
-    keys = derive_root_ceremony_keys(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, index=0)
-    assert pk == keys.devfund.public_key, "sign_with_devfund must use the same key derive_root_ceremony_keys does"
-    assert len(sig) == 3309
-
-
-def test_sign_with_devfund_uses_the_same_key_as_sign_with_root_ca():
-    """ BUG FIX, 2026-10-03 (R27 re-port): this used to assert the two
-        signing functions use different keys -- that was the bug. Confirmed
-        against 7fchain's sf-wallet-gov sign_ops.rs (cmd_sign_genesis/
-        cmd_sign_devfund both take load_signer(Role::Root, ...)): the
-        same Root key signs both genesis-config and devfund-config. """
-    message = b"same message, same intended signer"
-    root_pk, _ = sign_with_root_ca(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)
-    devfund_pk, _ = sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=True, index=0)
-    assert root_pk == devfund_pk
-
-
-def test_sign_with_devfund_refuses_without_confirmation():
-    message = b"devfund-config canonical bytes for testnet"
-    with pytest.raises(SigningNotConfirmedError):
-        sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, confirmed=False, index=0)
-
-
-def test_sign_with_devfund_requires_confirmed_as_keyword():
-    message = b"devfund-config canonical bytes for testnet"
-    with pytest.raises(TypeError):
-        sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message, True)  # positional -- must fail
-    with pytest.raises(TypeError):
-        sign_with_devfund(sevenf_seed_from_bytes(FIXED_SEED), ChainKind.TESTNET, message)  # omitted entirely -- must fail

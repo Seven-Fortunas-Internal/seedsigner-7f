@@ -18,7 +18,6 @@ from seedsigner.models.sevenf.devfund_config import (
     parse_canonical_bytes,
     review_fields,
 )
-from sevenf_helpers import sevenf_seed_from_bytes
 
 
 def _lib_available() -> bool:

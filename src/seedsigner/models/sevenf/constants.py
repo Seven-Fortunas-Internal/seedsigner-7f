@@ -3,7 +3,8 @@
 
     Values here mirror firmware/mldsa7f's own constants and the real 7fchain
     code they were ported from (sf-crypto/src/ml_dsa.rs, sf-crypto/src/address.rs,
-    sf-keytree/src/path.rs, sf-wallet-gov/src/sign_ops.rs) -- kept in sync manually, not generated.
+    sf-keytree/src/path.rs) -- kept in sync manually, not generated. Paths are
+    built by 7fchain's own code over the FFI (path_lexicon.py).
 """
 from dataclasses import dataclass
 from enum import IntEnum
@@ -23,13 +24,6 @@ class ChainKind(IntEnum):
             "root/testnet/0/ml-dsa/v1" -- confirmed against
             crates/sf-keytree/src/path.rs's `ChainKind::as_str()`. """
         return self.name.lower()
-
-
-class Layer(IntEnum):
-    """ Matches the `layer` byte firmware/mldsa7f/src/ffi.rs's decode_layer()
-        expects. The Root ceremony only ever uses L1. """
-    L1 = 0
-    L2 = 1
 
 
 # ML-DSA-65 sizes, confirmed against firmware/mldsa7f/src/ml_dsa.rs's own
@@ -76,46 +70,6 @@ def parse_key_index_entry(text: str) -> int:
     index = int(text)
     key_index_segment(index)  # range check
     return index
-
-
-def root_path(chain_kind: ChainKind, index: int = 0) -> str:
-    """ e.g. "root/testnet/0/ml-dsa/v1", built by 7fchain's own
-        `path::path_for(Role::Root, chain_kind, index)` over the FFI (the
-        verbatim port in firmware/mldsa7f), never written by hand here.
-
-        RE-PORTED 2026-10-03 (R27): 7fchain collapsed its two-level
-        `purpose_path`/`role_path` grammar into this single combined path
-        -- see firmware/mldsa7f/src/derive.rs's doc comment for why. This
-        single function replaces the old `root_ca_purpose_path()`,
-        `devfund_purpose_path()`, and the separate `ML_DSA_LEAF_ROLE`
-        constant: sf-wallet-gov's `cmd_sign_genesis` and `cmd_sign_devfund`
-        (sign_ops.rs) both take their key from
-        `load_signer(Role::Root, kind, index, ...)` -- genesis-config and
-        devfund-config are signed by the SAME Root key, not two -- so the
-        devfund-config SIGNING key is this path. The per-holder dev-fund key
-        a member enrolls is a different key at devfund_path() below (7fchain
-        89d3d39, 2026-10-05). `index` is sf-wallet-gov's `--index`, default 0
-        (7f-signing-support-key-index-selector); our practice is one phrase per
-        Root key at index 0. """
-    key_index_segment(index)  # type and range: a ctypes u32 would wrap
-    from seedsigner.models.sevenf import mldsa  # mldsa imports this module
-    return mldsa.path_for("root", chain_kind, index)
-
-
-def devfund_path(chain_kind: ChainKind, index: int = 0) -> str:
-    """ e.g. "devfund/testnet/0/ml-dsa/v1", built by 7fchain's own
-        `path_for(Role::Devfund, chain_kind, index)` over the FFI (89d3d39): the
-        dev fund is locked by nine devfund keys, one per federation holder,
-        derived from the same phrase as that holder's Root at this different
-        path, so a dev-fund signature isn't attributable to a known Root.
-        This is the key a member enrolls (sf-wallet-gov `derive-vk --role
-        devfund`). It does NOT sign the devfund-config -- the Roots still
-        declare the recipient with the Root key (root_path above). `index` is
-        sf-wallet-gov's `--index`, default 0; 7fchain calls a later index a
-        rotation (open question on 7fchain#7). """
-    key_index_segment(index)  # type and range: a ctypes u32 would wrap
-    from seedsigner.models.sevenf import mldsa  # mldsa imports this module
-    return mldsa.path_for("devfund", chain_kind, index)
 
 
 @dataclass(frozen=True)

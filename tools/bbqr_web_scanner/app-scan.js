@@ -11,7 +11,6 @@ const copyBtn = document.getElementById("copy");
 const copyVkBtn = document.getElementById("copyVk");
 const copyIdBtn = document.getElementById("copyId");
 const copyAllBtn = document.getElementById("copyAll");
-const saveVkBtn = document.getElementById("saveVk");
 const saveExportBtn = document.getElementById("saveExport");
 const saveSummaryBtn = document.getElementById("saveSummary");
 const vkNoteEl = document.getElementById("vkNote");
@@ -34,7 +33,6 @@ let lastResult = null; // { index, isNew, at }
 let lastVkText = null;
 let lastIdText = null;
 let lastBundleText = null;
-let lastFileName = null;
 let lastExport = null;  // a checked device export envelope: {file, body, ...}
 
 function recordDetection(found, now) {
@@ -154,10 +152,8 @@ async function renderResult(bytes) {
       // resultEl.textContent was ever set, with no visible error at all --
       // the scan looked complete but nothing displayed.
       try {
-        const [id, pinHex, bundle] = await Promise.all([
-          BBQrDecode.ski(text), BBQrDecode.pin(text), BBQrDecode.vkBundle(text),
-        ]);
-        if (id && pinHex && bundle) vkInfo = { id, pin: pinHex, bundle };
+        const [id, bundle] = await Promise.all([BBQrDecode.ski(text), BBQrDecode.vkBundle(text)]);
+        if (id && bundle) vkInfo = { id, bundle };
       } catch (e) {
         console.warn("subject key id / pin computation failed:", e.message);
         vkError = `(subject key id and pin unavailable: ${e.message} -- try a hard refresh)`;
@@ -209,8 +205,6 @@ async function renderResult(bytes) {
     lastBundleText = vkInfo.bundle;
     copyBtn.hidden = true;
     vkNoteEl.hidden = false;
-    lastFileName = `${vkInfo.id}.vk`;
-    saveVkBtn.hidden = true;
     saveSummaryBtn.hidden = true;
     copyAllBtn.hidden = false;
     copyAllBtn.textContent = "Copy all";
@@ -223,7 +217,6 @@ async function renderResult(bytes) {
     copyBtn.textContent = "Copy result";
     vkNoteEl.hidden = true;
     copyAllBtn.hidden = true;
-    saveVkBtn.hidden = true;
     saveSummaryBtn.hidden = true;
     copyVkBtn.hidden = true;
     copyIdBtn.hidden = true;
@@ -274,7 +267,6 @@ document.getElementById("reset").addEventListener("click", () => {
   copyVkBtn.hidden = true;
   copyIdBtn.hidden = true;
   copyAllBtn.hidden = true;
-  saveVkBtn.hidden = true;
   saveSummaryBtn.hidden = true;
   saveExportBtn.hidden = true;
   lastExport = null;
@@ -282,7 +274,6 @@ document.getElementById("reset").addEventListener("click", () => {
   lastVkText = null;
   lastIdText = null;
   lastBundleText = null;
-  lastFileName = null;
 });
 
 // For a long hex value (e.g. a 1952-byte ML-DSA-65 verification key, 3904 hex
@@ -358,12 +349,10 @@ function wireSaveButton(btn, getLabel, getFile) {
   });
 }
 
-wireSaveButton(saveVkBtn, () => (lastFileName ? `Save ${lastFileName}` : "Save .vk"), async () => ({ name: lastFileName, text: lastVkText }));
 wireSaveButton(saveExportBtn, () => (lastExport ? `Save ${lastExport.file}` : "Save"), async () => ({ name: lastExport.file, text: lastExport.body }));
-wireSaveButton(saveSummaryBtn, () => "Save summary", () => (
-  lastExport && lastExport.folder
-    ? BBQrDecode.vkSummary(lastExport.body, lastExport.kind.replace("-vk", ""))
-    : BBQrDecode.vkSummary(lastVkText)));
+// Shown only for a role-tagged key export (lastExport.folder).
+wireSaveButton(saveSummaryBtn, () => "Save summary", () =>
+  BBQrDecode.vkSummary(lastExport.body, lastExport.kind.replace("-vk", "")));
 
 // Continuous autofocus and torch are both device-gated (iPhones and most
 // laptop webcams expose neither) -- every call here is guarded by a real

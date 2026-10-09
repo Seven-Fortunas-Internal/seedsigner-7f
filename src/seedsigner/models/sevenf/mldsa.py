@@ -1,59 +1,37 @@
 """
-    Python ctypes bridge to firmware/mldsa7f's C ABI (src/ffi.rs).
-    derive_pubkey/derive_and_sign match docs/7f-integration/README.md's
-    original "no raw-secret-key API" design.
+    Python ctypes bridge to firmware/mldsa7f's C ABI (src/ffi.rs). No entry
+    point returns secret material: only public keys, addresses and
+    signatures.
 
-    RE-PORTED 2026-10-03 (R27): collapsed from the old `(purpose_path,
-    role_path)` two-path signature to a single combined `path`, matching
-    7fchain's own single-grammar derivation rewrite -- see
-    firmware/mldsa7f/src/derive.rs's doc comment for why the two-level
-    split retired, and path_lexicon.py for this device's own path-building
-    layer under the new grammar.
-
-    REMOVED 2026-10-03 (adversarial review of the R27 re-port):
-    `derive_seed_raw`/`mldsa7f_derive_seed_raw`, the one function on this
-    FFI surface that ever returned raw secret seed material. Its sole
-    purpose was the Root-to-Deputy child-seed handoff (the sole caller,
-    `deputy_ca_export.py`), which is retired on 7fchain's side (C8:
-    the Deputy derives its own key on its own holder's own airgap instead;
-    the `KeyDatabase` format that caller targeted was deleted, M-8). With
-    no live purpose and no live caller, the raw-secret-export primitive was
-    removed rather than kept around as dead attack surface -- see
-    7f-signing-support-deputy-seed-export-obsolete in _delivery/backlog.yaml
-    for the decision record. "No raw-secret-key API" is now simply true of
-    this module, not true-with-one-exception.
-
-    Paths are checked by 7fchain's own rules inside the library: derivation
-    parses the path with the verbatim port of sf-keytree's path.rs and refuses
-    an invalid one, and the network and layer of an address come from the path
-    itself. derive_pubkey/derive_and_sign call path_lexicon.validate() first
-    only so a caller gets 7fchain's message rather than a bare error code.
-    Every signature is verified under its own key before it is returned
-    (as sf-wallet-gov's sign_checked).
+    Paths are checked by 7fchain's own rules inside the library (the verbatim
+    port of sf-keytree's path.rs), and a key is derived from its path exactly
+    as written, as sf-keytree's keypair_at does; the network and layer of an
+    address come from the path itself. derive_pubkey/derive_and_sign check the
+    path first only so a caller gets 7fchain's message (PathLexiconError)
+    rather than a bare code. Every signature is verified under its own key
+    before it is returned (as sf-wallet-gov's sign_checked). The path API
+    callers use is path_lexicon.py.
 
     The compiled library search order:
       1. SEEDSIGNER_MLDSA7F_LIB env var, an explicit path override (tests/dev).
-      2. resources/lib/libmldsa7f.so next to this package (the eventual
-         packaged location -- doesn't exist yet; production packaging is
-         tracked separately as 7f-signing-support-buildroot-packaging in
-         _delivery/backlog.yaml, see docs/7f-integration/README.md's
-         "What's built" table for current status).
+      2. resources/lib/libmldsa7f.so next to this package (the packaged
+         location; production packaging is
+         7f-signing-support-buildroot-packaging in _delivery/backlog.yaml).
       3. firmware/mldsa7f/target/{release,debug}/libmldsa7f.{so,dylib}
-         relative to this repo checkout -- a dev-only convenience so this
-         module works against a local `cargo build` without a packaging
-         step, since production packaging doesn't exist yet.
+         relative to this repo checkout, for a local `cargo build`.
+    Whichever loads must report EXPECTED_ABI_VERSION.
 """
 import ctypes
 import os
 from pathlib import Path
 
-from seedsigner.models.sevenf import path_lexicon
-from seedsigner.models.sevenf._ffi import MlDsa7fError, register_argtypes
+from seedsigner.models.sevenf._ffi import ErrCode, MlDsa7fError, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import (
     ADDRESS_LEN,
     ML_DSA_PK_LEN,
     ML_DSA_SIG_LEN,
     MASTER_SEED_LEN,
+    key_index_segment,
 )
 
 
@@ -65,7 +43,11 @@ class MlDsaError(MlDsa7fError):
     def __init__(self, code: int, operation: str):
         self.code = code
         self.operation = operation
-        super().__init__(f"mldsa7f {operation} failed with code {code}")
+        super().__init__(f"mldsa7f {operation} failed: {err_code_name(code)} ({code})")
+
+
+class PathLexiconError(Exception):
+    """ A path 7fchain's rules refuse; the message is 7fchain's. """
 
 
 def _candidate_lib_paths() -> list[Path]:
@@ -160,47 +142,51 @@ def _check_abi(lib) -> None:
     except AttributeError:
         raise MlDsa7fError(f"the mldsa7f library predates ABI versioning; this code needs ABI {EXPECTED_ABI_VERSION}. "
                            "Install the library built from this tree.") from None
-    try:
-        fn.argtypes = []
-        fn.restype = ctypes.c_uint32
-    except AttributeError:
-        pass
+    fn.argtypes = []
+    fn.restype = ctypes.c_uint32
     version = fn()
     if version != EXPECTED_ABI_VERSION:
         raise MlDsa7fError(f"the mldsa7f library is ABI {version}; this code needs ABI {EXPECTED_ABI_VERSION}. "
                            "Install the library built from this tree.")
 
 
-_PATH_MESSAGE_MAX = 512
-ERR_BAD_PATH_UTF8 = -3
-ERR_BAD_PATH = -27
+# Room for a path, or for 7fchain's message about one.
+_PATH_TEXT_MAX = 512
 
 
 def path_refusal(path: str) -> str | None:
     """ None if 7fchain's path rules accept `path`, else 7fchain's message. """
     lib = _lib_handle()
     path_bytes = path.encode("utf-8")
-    msg_buf = ctypes.create_string_buffer(_PATH_MESSAGE_MAX)
+    msg_buf = ctypes.create_string_buffer(_PATH_TEXT_MAX)
     written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_path_validate(path_bytes, len(path_bytes), msg_buf, _PATH_MESSAGE_MAX, ctypes.byref(written))
+    rc = lib.mldsa7f_path_validate(path_bytes, len(path_bytes), msg_buf, _PATH_TEXT_MAX, ctypes.byref(written))
     if rc == 0:
         return None
-    if rc == ERR_BAD_PATH:
-        return msg_buf.raw[:min(written.value, _PATH_MESSAGE_MAX)].decode("utf-8", errors="replace")
-    if rc == ERR_BAD_PATH_UTF8:
+    if rc == ErrCode.BAD_PATH:
+        return msg_buf.raw[:min(written.value, _PATH_TEXT_MAX)].decode("utf-8", errors="replace")
+    if rc == ErrCode.BAD_PATH_UTF8:
         return "derivation path is not valid UTF-8"
     raise MlDsaError(rc, "path_validate")
 
 
+def _refuse_bad_path(path: str) -> None:
+    refusal = path_refusal(path)
+    if refusal is not None:
+        raise PathLexiconError(refusal)
+
+
 def path_for(role: str, chain_kind: int, index: int) -> str:
     """ The derivation path for `role` on `chain_kind` at `index`, built by
-        7fchain's own path_for (the verbatim port in firmware/mldsa7f). The
-        caller range-checks `index` first: a ctypes u32 would wrap. """
+        7fchain's own path_for (the verbatim port in firmware/mldsa7f).
+        Raises TypeError/ValueError for an index that is not a u32 (ctypes
+        would wrap it). """
+    key_index_segment(index)
     lib = _lib_handle()
     role_bytes = role.encode("utf-8")
-    out = ctypes.create_string_buffer(_PATH_MESSAGE_MAX)
+    out = ctypes.create_string_buffer(_PATH_TEXT_MAX)
     written = ctypes.c_size_t(0)
-    rc = lib.mldsa7f_path_for(role_bytes, len(role_bytes), int(chain_kind), index, out, _PATH_MESSAGE_MAX, ctypes.byref(written))
+    rc = lib.mldsa7f_path_for(role_bytes, len(role_bytes), int(chain_kind), index, out, _PATH_TEXT_MAX, ctypes.byref(written))
     if rc != 0:
         raise MlDsaError(rc, "path_for")
     return out.raw[:written.value].decode("ascii")
@@ -209,11 +195,11 @@ def path_for(role: str, chain_kind: int, index: int) -> str:
 def derive_pubkey(master_seed: bytes, path: str) -> tuple[bytes, str]:
     """ Derive the ML-DSA-65 public key and 7fchain address for `path`; the
         address is on the path's own network and layer. Raises
-        path_lexicon.PathLexiconError (7fchain's message) for a path its rules
-        refuse, MlDsaError on any other failure. """
+        PathLexiconError (7fchain's message) for a path its rules refuse,
+        MlDsaError on any other failure. """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
-    path_lexicon.validate(path)
+    _refuse_bad_path(path)
 
     lib = _lib_handle()
     pk_buf = ctypes.create_string_buffer(ML_DSA_PK_LEN)
@@ -249,11 +235,11 @@ def derive_and_sign(master_seed: bytes, path: str, message: bytes) -> tuple[byte
     """ Derive the ML-DSA-65 keypair for `path` and sign `message` with it
         under the empty FIPS 204 context, hedged, as sf-wallet-gov's
         sign_checked does (sign_ops.rs); the signature is verified under its
-        key before it is returned. Raises path_lexicon.PathLexiconError
-        (7fchain's message) for a refused path, MlDsaError otherwise. """
+        key before it is returned. Raises PathLexiconError (7fchain's
+        message) for a refused path, MlDsaError otherwise. """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
-    path_lexicon.validate(path)
+    _refuse_bad_path(path)
 
     lib = _lib_handle()
     pk_buf = ctypes.create_string_buffer(ML_DSA_PK_LEN)

@@ -11,13 +11,12 @@ import pytest
 
 from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ChainKind, root_path
+from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ChainKind
+from seedsigner.models.sevenf.path_lexicon import root_path
 from seedsigner.models.sevenf.cert_request import (
     DEPUTY_DAYS,
     ROOT_DAYS,
     CertRequestError,
-    ParsedCsr,
-    ParsedRootCertificate,
     assemble_csr_der,
     assemble_deputy_cert_der,
     assemble_root_cert_der,
@@ -709,7 +708,7 @@ def _derive_root_keypair(chain_kind: ChainKind) -> bytes:
         needed) -- just enough to exercise assemble_root_cert_der's full
         pipeline against a real ML-DSA-65 keypair. """
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import Layer, root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
     master_seed = bytes([0x07]) * 64
     vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind))
     return vk, master_seed
@@ -726,7 +725,7 @@ def test_assemble_root_cert_der_full_pipeline_round_trip():
         assemble -> parse back, confirming the ctypes wiring itself is
         correct, not just the underlying Rust logic. """
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
 
     chain_kind = ChainKind.TESTNET
     vk, master_seed = _derive_root_keypair(chain_kind)
@@ -747,7 +746,7 @@ def test_assemble_root_cert_der_full_pipeline_round_trip():
 
 def test_assemble_root_cert_der_rejects_a_tampered_signature():
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
 
     chain_kind = ChainKind.TESTNET
     vk, master_seed = _derive_root_keypair(chain_kind)
@@ -767,7 +766,7 @@ def test_assemble_root_cert_der_rejects_garbage_tbs():
 
 def test_assemble_root_cert_der_rejects_a_subject_vk_not_matching_the_tbs():
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
 
     chain_kind = ChainKind.TESTNET
     vk, master_seed = _derive_root_keypair(chain_kind)
@@ -839,7 +838,7 @@ def _fresh_root_cert(chain_kind: ChainKind, not_before: int = 1_800_000_000, see
         _derive_root_keypair's own hardcoded 0x07) so a "different Root"
         test case gets a genuinely different key, not the same one twice.
         Returns (root_cert_der, root_vk, root_master_seed). """
-    from seedsigner.models.sevenf.constants import Layer
+
     master_seed = bytes([seed_byte]) * 64
     vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind))
     serial = generate_serial()
@@ -929,7 +928,7 @@ def _derive_csr_keypair(seed_byte: int = 0x52) -> tuple[bytes, bytes]:
         default seed byte so a CSR identity doesn't collide with a Root
         one in a test that builds both. """
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import Layer, root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
     master_seed = bytes([seed_byte]) * 64
     vk, _address = mldsa.derive_pubkey(master_seed, root_path(ChainKind.TESTNET))
     return vk, master_seed
@@ -962,7 +961,7 @@ def test_csr_tooling_lib_fails_closed_when_the_library_lacks_the_feature():
 @_csr_tooling_skipif
 def test_csr_info_der_and_assemble_csr_der_round_trip_through_verify_and_parse_csr():
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
 
     vk, master_seed = _derive_csr_keypair()
     info_der = csr_info_der(vk)
@@ -975,7 +974,7 @@ def test_csr_info_der_and_assemble_csr_der_round_trip_through_verify_and_parse_c
 @_csr_tooling_skipif
 def test_csr_info_der_round_trips_over_several_distinct_keys():
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
 
     for seed_byte in (0x61, 0x62, 0x63):
         vk, master_seed = _derive_csr_keypair(seed_byte)
@@ -995,7 +994,7 @@ def test_csr_info_der_rejects_a_wrong_length_key():
 @_csr_tooling_skipif
 def test_assemble_csr_der_rejects_a_tampered_signature():
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
 
     vk, master_seed = _derive_csr_keypair()
     info_der = csr_info_der(vk)
@@ -1010,7 +1009,7 @@ def test_assemble_csr_der_rejects_a_tampered_signature():
 @_csr_tooling_skipif
 def test_assemble_csr_der_rejects_a_wrong_signer():
     from seedsigner.models.sevenf import mldsa
-    from seedsigner.models.sevenf.constants import root_path
+    from seedsigner.models.sevenf.path_lexicon import root_path
 
     subject_vk, _subject_seed = _derive_csr_keypair(0x64)
     _impostor_vk, impostor_seed = _derive_csr_keypair(0x65)
@@ -1058,3 +1057,15 @@ def test_a_real_sf_wallet_gov_csr_is_still_accepted():
 # The extensionRequest walk is in the library now (cert_request.rs
 # verify_and_parse_csr, sf-ca's issuing-CA policy), with its own tests there
 # (csr_policy_tests); hostile DER is refused by the same Rust parser.
+
+
+def test_the_deputy_tbs_builder_names_a_policy_refusal():
+    """ Execution-stage review 2026-10-08: the library's -29 from the Deputy
+        certificate builder was described as a chain or validity mismatch. """
+    from pathlib import Path
+    der = (Path(__file__).parent / "fixtures" / "deputy_csr_requesting_ca_pathlen9.der").read_bytes()
+    with pytest.raises(CertRequestError, match="must ask for no extensions") as e:
+        build_deputy_tbs_v2(ROOT_CERT_DER, der, ChainKind.TESTNET, ROOT_CERT_NOT_BEFORE, DEPUTY_DAYS, generate_serial())
+    assert "validity window" not in str(e.value)
+    with pytest.raises(CertRequestError, match="must ask for no extensions"):
+        verify_and_parse_csr_der(der)

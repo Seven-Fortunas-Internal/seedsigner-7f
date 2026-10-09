@@ -116,3 +116,111 @@ def test_the_pin_screen_names_it_the_root_pin():
         mp.setattr(view, "run_screen", lambda screen_cls, **kw: captured.update(kw) or 0)
         view.run()
     assert "root pin" in captured["status_headline"]
+
+
+# --- execution-stage review 2026-10-08: more of serde's rules --------------------
+# Verdicts from sf-core's own GenesisConfig / DevFundConfig through
+# serde_json 1.0.151 (7fchain 06a47ba's Cargo.lock), a scratch crate, 2026-10-08.
+
+def _g_with(old: str, new: str) -> bytes:
+    doc = _g().decode()
+    assert old in doc
+    return doc.replace(old, new, 1).encode()
+
+
+def _d_with(old: str, new: str) -> bytes:
+    doc = _d().decode()
+    assert old in doc
+    return doc.replace(old, new, 1).encode()
+
+
+SERDE_CASES = [
+    # -0 is a float to serde_json: refused for an integer field, fine where ignored.
+    ("genesis -0 consensus", _g_with('"target_block_time_secs":420', '"target_block_time_secs":-0'), False),
+    ("genesis -0 unknown", _g(extra=',"z":[-0]'), True),
+    ("devfund -0 effective_block", _d_with('"effective_block":0', '"effective_block":-0'), False),
+    # A lone surrogate escape: refused in a field read or any key, fine in an ignored value.
+    ("genesis surrogate message", _g_with('"message":"m"', '"message":"\\ud800"'), False),
+    ("genesis surrogate signer_vk", _g(sigs='{"signer_vk":"\\ud800","sig":"00"}'), False),
+    ("genesis surrogate sig", _g(sigs='{"signer_vk":"","sig":"\\udc00"}'), False),
+    ("genesis surrogate unknown key", _g(extra=',"\\ud800":1'), False),
+    ("genesis surrogate unknown value", _g(extra=',"z":"\\ud800"'), True),
+    ("devfund surrogate commitment", _d_with('"commitment":"' + COMMIT, '"commitment":"\\ud800' + COMMIT[1:]), False),
+    # An extra top-level devfund_address in a version-2 file is ignored, as any unknown key.
+    ("devfund extra devfund_address", _d(extra=',"devfund_address":"t1abc"'), True),
+    # Wrong types are refusals, not crashes.
+    ("devfund network object", _d_with('"network":"testnet"', '"network":{"a":1}'), False),
+    ("devfund kind list", _d_with('"kind":"multisig"', '"kind":["multisig"]'), False),
+    ("genesis chain_kind list", _g_with('"chain_kind":"testnet"', '"chain_kind":["testnet"]'), False),
+]
+
+
+@pytest.mark.parametrize("name,doc,accepted", SERDE_CASES, ids=[c[0] for c in SERDE_CASES])
+def test_serde_rules(name, doc, accepted):
+    parse, error = ((genesis_config.parse_genesis_config_json, GenesisConfigJsonError) if name.startswith("genesis")
+                    else (devfund_config.parse_devfund_config_json, DevFundConfigJsonError))
+    if accepted:
+        parse(doc)
+    else:
+        with pytest.raises(error):
+            parse(doc)
+
+
+def test_objects_without_a_repeated_key_are_plain_dicts():
+    """ Security review 2026-10-08: a per-object subclass and attribute cost
+        about 200x the payload in memory for many small objects. """
+    from seedsigner.models.sevenf import config_json
+    obj = config_json.load_object(b'{"x":[{},{"a":1}],"y":{"b":1,"b":2}}', ValueError, "test")
+    assert type(obj) is dict and all(type(o) is dict for o in obj["x"])
+    assert obj["y"].duplicates == frozenset({"b"})
+
+
+def test_a_refused_value_is_shown_only_in_part():
+    """ Security review 2026-10-08: the refusal reaches the screen, whose text
+        layout is quadratic in its length. """
+    long_scheme = "x" * 100_000
+    with pytest.raises(GenesisConfigJsonError) as e:
+        genesis_config.parse_genesis_config_json(_g_with('"7fchain.ml-dsa-keygen.v1"', json.dumps(long_scheme)))
+    assert len(str(e.value)) < 200
+
+
+@pytest.mark.parametrize("view_name", ["SevenFUnsupportedArtefactView", "SevenFNotA7FPhraseView"])
+def test_a_refusal_screen_shows_a_bounded_reason(view_name):
+    """ Whatever an error message carries, the refusal screen's text stays
+        short enough to lay out (security review 2026-10-08). """
+    from base import FlowTest  # noqa: F401
+    from seedsigner.views import sevenf_views
+    view = getattr(sevenf_views, view_name)(reason="r" * 100_000)
+    assert len(view.reason) <= 301
+
+
+def test_page_cuts_keep_every_character():
+    """ Security review 2026-10-08: the pages of a value, joined, are the value;
+        spaces at a cut were dropped, so runs of spaces in signed text could
+        not be read. """
+    from base import FlowTest  # noqa: F401
+    from seedsigner.views.sevenf_views._common import _paginate_value
+    value = ("word " * 30 + "     " + "x" * 400 + "  end") * 3
+    pages = _paginate_value(value, 50)
+    assert "".join(pages) == value
+    assert all(len(p) <= 50 for p in pages)
+
+
+def test_combining_marks_are_shown_escaped():
+    """ A combining mark draws on top of the character before it, so what is
+        signed could not be read off the screen; it is shown as an escape. """
+    from seedsigner.models.sevenf.review_format import visible_text
+    assert visible_text("é") == "e\\u0301"
+    assert visible_text("café") == "café"          # a precomposed letter is a letter
+
+
+def test_review_pages_are_computed_once_per_review():
+    """ Security review 2026-10-08: every page press re-split the whole field
+        list, quadratic in a long message. The same review's list is split once. """
+    from base import FlowTest  # noqa: F401
+    from seedsigner.models.review import ReviewField
+    from seedsigner.views.sevenf_views._common import _review_pages
+    fields = [ReviewField(label="Message", value="w " * 50_000)]
+    first = _review_pages(fields)
+    assert _review_pages(fields) is first
+    assert _review_pages(list(fields)) == first and _review_pages(list(fields)) is not first

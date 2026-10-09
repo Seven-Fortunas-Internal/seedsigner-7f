@@ -19,7 +19,7 @@ import pytest
 from base import FlowTest
 
 from seedsigner.models.seed import Seed
-from seedsigner.models.sevenf import devfund_config, genesis_config
+from seedsigner.models.sevenf import config_json, devfund_config, genesis_config
 from seedsigner.models.sevenf.constants import ChainKind
 from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys, seed_for_7f
 from seedsigner.views import sevenf_views
@@ -65,7 +65,7 @@ def test_already_signed_is_this_keys_vk_ignoring_case(parse, doc):
         ((), False),
     ]:
         fields = parse(doc(signatures))
-        assert genesis_config.already_signed_by(fields.signer_vks, bytes.fromhex(mine)) is expected, signatures
+        assert config_json.already_signed_by(fields.signer_vks, bytes.fromhex(mine)) is expected, signatures
 
 
 def test_signer_vks_do_not_change_what_is_compared_or_signed():
@@ -77,7 +77,7 @@ def test_signer_vks_do_not_change_what_is_compared_or_signed():
 
 def test_nondefault_consensus_lists_each_value_and_its_default():
     fields = genesis_config.parse_genesis_config_json(_genesis(consensus={**DEFAULTS, "target_block_time_secs": 30}))
-    assert genesis_config.nondefault_consensus(fields) == [("Target block time", 30, 420)]
+    assert genesis_config.nondefault_consensus(fields) == [("Target block time", "30s", "420s")]   # with units, as the review
     assert genesis_config.nondefault_consensus(genesis_config.parse_genesis_config_json(_genesis())) == []
 
 
@@ -259,3 +259,37 @@ class TestLeavingARefusal(FlowTest):
             FlowStep(seed_views.SeedOptionsView),
         ]
         )
+
+
+# --- views: a failed signature is a refusal, not a crash (execution-stage review) --
+
+def _confirm_views(seed):
+    return [
+        sevenf_views.SevenFConfirmSignRootCertView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", key_index=0),
+        sevenf_views.SevenFConfirmSignDevFundView(seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=b"x", key_index=0),
+        sevenf_views.SevenFConfirmSignView(state=sevenf_views.SevenFGenesisCeremonyState(
+            seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=b"x", review_fields=[], key_index=0)),
+    ]
+
+
+@pytest.mark.parametrize("which", range(3))
+def test_a_signature_that_fails_its_self_check_is_refused_on_screen(which):
+    from seedsigner.models.sevenf import root_ceremony
+    from seedsigner.models.sevenf.mldsa import MlDsaError
+    view = _confirm_views(Seed(ABANDON_ART))[which]
+
+    def failing_sign(*a, **kw):
+        raise MlDsaError(-28, "derive_and_sign")
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(view, "run_screen", lambda *a, **kw: 0)          # "Sign"
+        mp.setattr(root_ceremony, "sign_with_root_ca", failing_sign)
+        destination = view.run()
+    assert destination.View_cls is sevenf_views.SevenFUnsupportedArtefactView
+    assert "did not verify" in destination.view_args["reason"]
+    assert "Nothing was exported" in destination.view_args["reason"]
+
+
+def test_the_library_error_names_its_code():
+    from seedsigner.models.sevenf.mldsa import MlDsaError
+    assert "SIGNATURE_SELF_CHECK_FAILED" in str(MlDsaError(-28, "derive_and_sign"))

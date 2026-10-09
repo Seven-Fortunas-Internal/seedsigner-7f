@@ -22,6 +22,7 @@ from seedsigner.views.view import BackStackView, Destination, MainMenuView, View
 
 from ._clock import ceremony_now, require_confirmed_clock
 from ._common import (
+    root_public_key,
     SevenFCertRequestReviewFieldView,
     SevenFConfirmSignRootCertView,
     SevenFSignedCertificate,
@@ -104,8 +105,7 @@ class SevenFBuildRootSelfCertView(View):
 
     def run(self):
         chain_kind = self.chain_kind
-        keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(self.seed), chain_kind, index=self.key_index)
-        subject_vk = keys.root_ca.public_key
+        subject_vk = root_public_key(self.seed, chain_kind, self.key_index)
         serial = cert_request.generate_serial()
         not_before = ceremony_now(self.controller)
         if not_before is None:
@@ -253,8 +253,7 @@ class SevenFDeriveEnrollmentVkView(View):
 
     def run(self):
         if self.role == "root":
-            public_key = root_ceremony.derive_root_ceremony_keys(
-                root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).root_ca.public_key
+            public_key = root_public_key(self.seed, self.chain_kind, self.key_index)
             title = _("Root VK")
         elif self.role == "devfund":
             public_key = root_ceremony.derive_devfund_key(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).public_key

@@ -198,8 +198,7 @@ def test_a_refused_path_raises_with_7fchains_message():
 def test_the_library_validates_inside_derivation(monkeypatch):
     """ K1: even with the Python-side message check skipped, the library
         refuses the path itself (ERR_BAD_PATH), as 7fchain's derive_seed does. """
-    from seedsigner.models.sevenf import path_lexicon
-    monkeypatch.setattr(path_lexicon, "validate", lambda path: None)
+    monkeypatch.setattr(mldsa, "_refuse_bad_path", lambda path: None)
     for call in (lambda: mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa"),
                  lambda: mldsa.derive_and_sign(FIXED_SEED, "root/testnet/0/ml-dsa", b"x")):
         with pytest.raises(mldsa.MlDsaError) as exc_info:
@@ -218,9 +217,12 @@ def test_a_falcon_algorithm_path_derives_an_ml_dsa_key_as_7fchain_does():
 def test_the_library_abi_version_is_checked_at_load(monkeypatch):
     """ H-2: a library built for another ABI (e.g. copied separately to the
         device) refuses cleanly instead of being called with the wrong arguments. """
-    class _OldLib:
-        def mldsa7f_abi_version(self):
+    class _AbiFunction:                       # as a ctypes function: callable, takes argtypes/restype
+        def __call__(self):
             return 1
+
+    class _OldLib:
+        mldsa7f_abi_version = _AbiFunction()
     monkeypatch.setattr(mldsa, "_lib", None)
     monkeypatch.setattr(mldsa, "_load_library", lambda: _OldLib())
     with pytest.raises(mldsa.MlDsa7fError, match="ABI"):

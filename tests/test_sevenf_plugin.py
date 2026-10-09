@@ -14,7 +14,8 @@ import pytest
 from seedsigner.chains import ChainRegistry
 from seedsigner.chains.base import ParsedRequest, Signature
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ChainKind, root_path
+from seedsigner.models.sevenf.constants import ChainKind
+from seedsigner.models.sevenf.path_lexicon import root_path
 from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError
 
 

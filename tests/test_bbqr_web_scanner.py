@@ -100,7 +100,6 @@ ski('{vk_hex}').then(r => process.stdout.write(r));
 
 def test_scanner_page_labels_the_id_as_subject_key_id_only():
     """ The old "(root_id)" suffix named the retired 20-hex id. """
-    from pathlib import Path
     html = _page_source()
     assert "root_id" not in html
     assert "rootId" not in html
@@ -179,17 +178,16 @@ def test_vk_bundle_rejects_non_hex():
 
 
 def test_scanner_page_offers_copy_all_and_shows_the_pin():
-    from pathlib import Path
     html = _page_source()
     assert 'id="copyAll"' in html
     assert "BBQrDecode.vkBundle(" in html
-    assert "BBQrDecode.pin(" in html
+    # The root pin comes with the checked export (inspectExport), for a Root key only.
+    assert "Root pin: ${exportInfo.pin}" in html
 
 
 def test_scanner_page_explains_how_ski_and_pin_are_derived():
     """ Jorge asked (2026-10-07) for a very brief on-page note on how both
         values come from the vk, so a reader can recompute them. """
-    from pathlib import Path
     html = _page_source()
     assert 'id="vkNote"' in html
     note = html.split('id="vkNote"', 1)[1].split("</p>", 1)[0]
@@ -208,10 +206,11 @@ def test_save_method_prefers_folder_picker_then_share_sheet_then_download(env, e
     assert out == expected
 
 
-def test_scanner_page_offers_save_for_vk_results():
-    from pathlib import Path
+def test_scanner_page_saves_only_checked_exports():
+    """ A key is saved only from the device's role-tagged export (#saveExport,
+        its name checked against its content); a bare key QR is never saved. """
     html = _page_source()
-    assert 'id="saveVk"' in html
+    assert 'id="saveExport"' in html and 'id="saveVk"' not in html
     assert "BBQrDecode.saveMethod(" in html
     assert "application/octet-stream" in html  # iOS Safari appends .txt to text/plain downloads
 
@@ -233,7 +232,6 @@ def test_summary_file_is_the_bundle_with_a_phone_check_reminder():
 
 
 def test_scanner_page_offers_save_summary():
-    from pathlib import Path
     html = _page_source()
     assert 'id="saveSummary"' in html
     assert "BBQrDecode.vkSummary(" in html
@@ -287,7 +285,6 @@ def test_inspect_export_ignores_non_envelope_json():
 
 
 def test_scanner_page_handles_export_envelopes():
-    from pathlib import Path
     html = _page_source()
     assert "BBQrDecode.inspectExport(" in html
     assert 'id="saveExport"' in html
@@ -321,7 +318,6 @@ def _cert_with_decoy_key(real_vk: bytes, decoy_vk: bytes) -> bytes:
 
 
 def test_cert_subject_vk_walks_the_der_and_ignores_a_decoy_key():
-    import json
     real, decoy = b"\x01" * 1952, b"\x02" * 1952
     der = _cert_with_decoy_key(real, decoy)
     out = _node(f"""
@@ -440,7 +436,7 @@ def test_inspect_export_refuses_a_deputy_cert_named_for_another_root():
 
 @pytest.mark.parametrize("role, folder", [("root", "~/7fchain/<network>/governance/root/outbox"), ("devfund", "~/7fchain/<network>/governance/devfund/outbox")])
 def test_inspect_export_accepts_role_tagged_vks_and_names_the_folder(role, folder):
-    import hashlib, json
+    import hashlib
     from seedsigner.models.sevenf.export_envelope import vk_export
     vk = b"\x0b" * 1952
     r = _inspect(vk_export(role, vk).decode())
@@ -508,7 +504,6 @@ process.stdout.write(JSON.stringify({{ conflict: r.kind, decoded: Buffer.from(s.
 
 
 def test_scanner_page_locks_after_a_complete_scan():
-    from pathlib import Path
     html = _page_source()
     assert "press Reset" in html and "session.isComplete" in html
 

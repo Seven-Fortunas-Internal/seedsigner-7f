@@ -1181,7 +1181,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
             captured["tbs_bytes"] = certificate.tbs_bytes
             captured["root_cert_der"] = certificate.root_cert_der
 
-        with pytest.MonkeyPatch().context() as mp:
+        with pytest.MonkeyPatch().context():
             # Same wall-clock fix as test_review_fields_are_labeled_and_ordered_root_then_deputy,
             # kept within this freshly-built Root cert's own validity window.
             self.controller.sevenf_confirmed_clock = ConfirmedClock(utc=root_not_before + 86400, monotonic=time_module.monotonic())  # the operator-confirmed "now"
@@ -1257,7 +1257,7 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
         # The real reference Root certificate's validity window starts in
         # 2027 -- fix the wall clock inside its window rather than relying
         # on the sandbox's actual system time, which may be earlier.
-        with pytest.MonkeyPatch().context() as mp:
+        with pytest.MonkeyPatch().context():
             self.controller.sevenf_confirmed_clock = ConfirmedClock(utc=ROOT_CERT_NOT_BEFORE + 86400, monotonic=time_module.monotonic())  # the operator-confirmed "now"
             destination = view._handle_complete_scan()
 
@@ -1628,8 +1628,9 @@ class TestSevenFReviewFieldPagination:
         assert len(pages) > 1
         for page in pages:
             assert len(page) <= 40
-        # No content lost, no words split mid-word, order preserved.
-        assert " ".join(pages) == long_message
+        # No content lost (spaces included), no words split mid-word, order preserved.
+        assert "".join(pages) == long_message
+        assert all(not page.startswith(" ") for page in pages[1:])
 
     def test_paginate_value_never_splits_a_single_word_wider_than_the_page(self):
         """ A single unbroken run longer than max_chars (e.g. no spaces at
@@ -1667,7 +1668,7 @@ class TestSevenFReviewFieldPagination:
         message_field = next(f for f in real_fields if f.label == "Message")
         message_chunks = sevenf_views._paginate_value(message_field.value)
         assert len(message_chunks) > 1
-        assert " ".join(message_chunks) == message_field.value == long_message.strip()
+        assert "".join(message_chunks) == message_field.value == long_message.strip()
 
 
 class _DummyConfirmedDestination(View):
@@ -1770,7 +1771,7 @@ class TestSevenFCertRequestReviewFieldView(FlowTest):
             confirmed_destination=_DummyConfirmedDestination,
         )
         assert len(view.chunks) > 1
-        assert " ".join(c.value for c in view.chunks) == long_value
+        assert "".join(c.value for c in view.chunks) == long_value
 
 
     def test_page_title_and_field_content_are_passed_to_the_screen(self):
@@ -1910,7 +1911,7 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         """ End-to-end from a real BBQr-encoded devfund-config, through
             scan -> review (5 fields, v2 schema) -> confirm+sign -> signed -> export
             -> Home. Confirms the real public_key/signature match a direct
-            derive_root_ceremony_keys(, index=0)/sign_with_devfund() call -- not a
+            derive_root_ceremony_keys(, index=0)/sign_with_root_ca() call -- not a
             placeholder. BUG FIX, 2026-10-03 (R27): this used to also assert
             the devfund key differs from the Root key -- that was the bug
             (see root_ceremony.py's own BUG FIX note); devfund now signs
@@ -1952,17 +1953,17 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
             initial_destination_view_args=dict(seed=seed),
         )
 
-        assert captured["public_key"] == keys.devfund.public_key
         assert captured["public_key"] == keys.root_ca.public_key
         assert len(captured["signature"]) == 3309
 
 
-    def test_signed_result_matches_direct_sign_with_devfund_call(self):
+    def test_signed_result_matches_a_direct_root_key_signature(self):
         """ Unit-level cross-check: SevenFConfirmSignDevFundView's output
             must match a direct devfund_config.parse_canonical_bytes() +
-            sign_with_devfund() call over the same bytes. """
+            sign_with_root_ca() call over the same bytes: the dev-fund
+            definition is signed with the Root key. """
         from seedsigner.models.sevenf.devfund_config import parse_canonical_bytes as parse_devfund_canonical_bytes
-        from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
+        from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
 
         seed = self.seed_fixture()
         canonical_bytes = _sample_devfund_canonical_bytes()
@@ -1976,8 +1977,8 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         assert destination.View_cls == sevenf_views.SevenFDevFundConfigSignedView
         artifact = destination.view_args["artifact"]
         keys = derive_root_ceremony_keys(seed_for_7f(seed), fields.network, index=0)
-        expected_pk, expected_sig = sign_with_devfund(seed_for_7f(seed), fields.network, canonical_bytes, confirmed=True, index=0)
-        assert artifact.public_key == keys.devfund.public_key == expected_pk
+        expected_pk, expected_sig = sign_with_root_ca(seed_for_7f(seed), fields.network, canonical_bytes, confirmed=True, index=0)
+        assert artifact.public_key == keys.root_ca.public_key == expected_pk
         assert len(artifact.signature) == len(expected_sig) == 3309
 
 
@@ -2076,9 +2077,9 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
 
 
     def test_signed_screen_says_root_key(self):
-        from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
+        from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
         seed = self.seed_fixture()
-        pk, sig = sign_with_devfund(seed_for_7f(seed), ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True, index=0)
+        pk, sig = sign_with_root_ca(seed_for_7f(seed), ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True, index=0)
         view = sevenf_views.SevenFDevFundConfigSignedView(artifact=sevenf_views.SevenFSignedArtifact(public_key=pk, signature=sig))
         captured = {}
 
@@ -2097,9 +2098,9 @@ class TestSevenFDevFundConfigSigningFlow(FlowTest):
         """ <ski>.devfund in an export envelope, body exactly as sf-wallet-gov
             sign-devfund writes it. """
         from seedsigner.models.sevenf.review_format import ski
-        from seedsigner.models.sevenf.root_ceremony import sign_with_devfund
+        from seedsigner.models.sevenf.root_ceremony import sign_with_root_ca
         seed = self.seed_fixture()
-        pk, sig = sign_with_devfund(seed_for_7f(seed), ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True, index=0)
+        pk, sig = sign_with_root_ca(seed_for_7f(seed), ChainKind.TESTNET, _sample_devfund_canonical_bytes(), confirmed=True, index=0)
         view = sevenf_views.SevenFExportSignedDevFundConfigQRView(artifact=sevenf_views.SevenFSignedArtifact(public_key=pk, signature=sig))
         captured = {}
 
@@ -2482,3 +2483,20 @@ class TestSevenFConfirmScreensShowTheSigningSki(FlowTest):
             key_index=0, seed=seed, chain_kind=ChainKind.TESTNET, canonical_bytes=b"x", review_fields=[])
         view = sevenf_views.SevenFConfirmSignView(state=state)
         assert self.capture(view)["subject_key_id"] == self.expected(seed)
+
+
+
+def test_the_devfund_definition_is_signed_with_the_root_key():
+    """ sf-wallet-gov sign-devfund signs as Role::Root (sign_ops.rs
+        load_signer(Role::Root, ...)), the same key as sign-genesis: the
+        dev-fund confirm view signs with this seed's Root key, never the
+        holder's dev-fund key (interoperability vector 2). """
+    from seedsigner.models.sevenf.root_ceremony import derive_devfund_key
+    seed = Seed(["abandon"] * 23 + ["art"])
+    view = sevenf_views.SevenFConfirmSignDevFundView(
+        seed=seed, chain_kind=ChainKind.TESTNET, tbs_bytes=_sample_devfund_canonical_bytes(), key_index=0)
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr(view, "run_screen", lambda *a, **kw: 0)
+        signer = view.run().view_args["artifact"].public_key
+    assert signer == derive_root_ceremony_keys(seed_for_7f(seed), ChainKind.TESTNET, index=0).root_ca.public_key
+    assert signer != derive_devfund_key(seed_for_7f(seed), ChainKind.TESTNET, index=0).public_key
