@@ -68,22 +68,43 @@ _MAX_CHARS_PER_REVIEW_PAGE = 180
 _MAX_CHARS_PER_WARNING_PAGE = 75
 
 
-def _paginate_value(value: str, max_chars: int = _MAX_CHARS_PER_REVIEW_PAGE) -> list[str]:
+def _paginate_value(value: str, max_chars: int = _MAX_CHARS_PER_REVIEW_PAGE,
+                    fits=None) -> list[str]:
     """ Splits a field value into screen-sized pages, preferring to break
-        after a space, but never letting a page exceed max_chars -- an
-        unbroken run or embedded newlines must not push signed text off the
-        screen. The pages joined are the value: no space is dropped at a cut,
-        so a run of spaces in signed text stays countable (security review
-        2026-10-08). """
+        after a space, never letting a page exceed max_chars, and (with
+        `fits`, a _ReviewPageFit) never past the lines the screen can show
+        above its button: an unbroken run or embedded newlines must not push
+        signed text off the screen (security review 2026-10-08). The pages
+        joined are the value: nothing is dropped at a cut. """
     pages = []
     rest = value
-    while len(rest) > max_chars:
-        space = rest.rfind(" ", 0, max_chars)
-        cut = space + 1 if space > 0 else max_chars
-        pages.append(rest[:cut])
-        rest = rest[cut:]
-    pages.append(rest)
-    return pages
+    while rest:
+        limit = min(len(rest), max_chars)
+        if fits is not None:
+            limit = fits.page_end(rest[:limit])
+        if limit < len(rest):
+            space = rest.rfind(" ", 0, limit)
+            if space > 0:
+                limit = space + 1
+        pages.append(rest[:limit])
+        rest = rest[limit:]
+    return pages or [value]
+
+
+class _ReviewPageFit:
+    """ How much of a value one review page can show, on this display. """
+    def __init__(self, warning_detail: str):
+        from seedsigner.gui.screens.sevenf_screens import display_size, review_lines_per_page
+        self.width, height = display_size()
+        self.max_lines = review_lines_per_page(self.width, height, warning_detail)
+
+    def page_end(self, window: str) -> int:
+        from seedsigner.gui.screens.sevenf_screens import review_page_end, review_value_lines
+        end = review_page_end(window, self.width, self.max_lines)
+        # Checked with the screen's own layout; a mismatch only shortens the page.
+        while end > 1 and review_value_lines(window[:end], self.width) > self.max_lines:
+            end -= 1
+        return max(end, 1)
 
 
 def refuse_on_unexpected_error(handle_complete_scan):
@@ -122,6 +143,7 @@ def _review_pages(review_fields: list[ReviewField]) -> list[ReviewField]:
         for chunk_value in _paginate_value(
             field.value,
             _MAX_CHARS_PER_WARNING_PAGE if field.is_warning and field.warning_detail else _MAX_CHARS_PER_REVIEW_PAGE,
+            _ReviewPageFit(field.warning_detail if field.is_warning else ""),
         )
     ]
     _last_split = (review_fields, pages)

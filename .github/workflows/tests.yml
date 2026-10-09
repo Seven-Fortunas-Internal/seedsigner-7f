@@ -96,6 +96,16 @@ jobs:
             --cov-append \
             --cov-branch \
             -vv
+      - name: 7F review pages layout check
+        # Every page of a worst-case value draws above the button, with the
+        # real Renderer (same separate-invocation reason as the EVM check).
+        run: |
+          python -m pytest tests/sevenf_review_layout_regression_check.py \
+            --color=yes \
+            --cov=seedsigner \
+            --cov-append \
+            --cov-branch \
+            -vv
       - name: Coverage report
         # Coverage was computed and printed every run but never enforced --
         # floor set just below the real current total (72.07% as of

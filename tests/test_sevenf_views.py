@@ -854,7 +854,8 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
                 FlowStep(sevenf_views.SevenFSelectChainKindForRootSelfCertView, button_data_selection=ButtonOption("testnet")),
                 FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0),  # "Index 0 (default)"
                 FlowStep(sevenf_views.SevenFBuildRootSelfCertView, is_redirect=True),
-                *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(6)],  # Root key + 5
+                *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0)
+                  for _ in range(_root_cert_review_page_count(keys.root_ca.public_key))],  # Root key + 5 fields, as paged
                 FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
                 FlowStep(sevenf_views.SevenFRootCertSignedView, before_run=capture_before_export, screen_return_value=0),  # "OK"
                 FlowStep(sevenf_views.SevenFExportRootCertQRView, screen_return_value=0),
@@ -1170,7 +1171,8 @@ class TestSevenFDeputyCrossCertificationFlow(FlowTest):
                     # 10 review pages: "Root key" (index and path), then
                     # deputy_cross_cert_v2_review_fields' 3 "Issuing Root: ..."
                     # fields, "Chain", then 5 "Deputy: ..." fields.
-                    *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0) for _ in range(10)],
+                    *[FlowStep(sevenf_views.SevenFCertRequestReviewFieldView, screen_return_value=0)
+                      for _ in range(_deputy_cert_review_page_count(root_cert_der, root_not_before + 86400))],
                     FlowStep(sevenf_views.SevenFConfirmSignRootCertView, screen_return_value=0),  # "Sign"
                     FlowStep(
                         sevenf_views.SevenFRootCertSignedView,
@@ -2501,3 +2503,25 @@ class TestTheSevenFMenu(FlowTest):
             seed=Seed(["abandon"] * 23 + ["art"]), chain_kind=ChainKind.TESTNET, role="root", key_index=0)
         with pytest.raises(ValueError, match="Self-Certify Root"):
             view.run()
+
+
+
+def _root_cert_review_page_count(subject_vk: bytes) -> int:
+    """ The Root certificate review's pages, as the flow pages them (by the
+        lines the screen shows; every field here has a fixed length). """
+    from seedsigner.models.sevenf import cert_request
+    from seedsigner.views.sevenf_views._common import _review_pages, key_index_review_field
+    not_before = 1_791_504_000
+    fields = [key_index_review_field(ChainKind.TESTNET, 0), *cert_request.root_self_cert_review_fields(
+        subject_vk, ChainKind.TESTNET, not_before, not_before + cert_request.ROOT_DAYS * 86_400, b"\x40" * 16)]
+    return len(_review_pages(fields))
+
+
+def _deputy_cert_review_page_count(root_cert_der: bytes, now: int) -> int:
+    from test_sevenf_cert_request import DEPUTY_CSR_DER
+    from seedsigner.models.sevenf import cert_request
+    from seedsigner.views.sevenf_views._common import _review_pages, key_index_review_field
+    fields = [key_index_review_field(ChainKind.TESTNET, 0), *cert_request.deputy_cross_cert_v2_review_fields(
+        cert_request.parse_root_certificate_der(root_cert_der), cert_request.verify_and_parse_csr_der(DEPUTY_CSR_DER),
+        ChainKind.TESTNET, now, cert_request.DEPUTY_DAYS, b"\x40" * 16)]
+    return len(_review_pages(fields))

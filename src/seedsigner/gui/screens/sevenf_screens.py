@@ -68,6 +68,96 @@ def break_long_words(text: str, width: int, font) -> str:
 
 
 
+def display_size() -> tuple[int, int]:
+    """ The canvas (width, height) the Renderer uses for the configured display,
+        without needing a live Renderer (the review pages are cut in the views). """
+    from seedsigner.models.settings import Settings, SettingsConstants
+    config = Settings.get_instance().get_value(SettingsConstants.SETTING__DISPLAY_CONFIGURATION, default_if_none=True)
+    kind, dims = config.split("_")[:2]
+    width, height = (int(x) for x in dims.split("x"))
+    return (width, height) if kind == "st7789" else (height, width)   # the others are rotated (renderer.py)
+
+
+def review_value_width(canvas_width: int) -> int:
+    """ The width a review value is laid out in: after the icon and its spacer
+        (rounded up, so never wider than the screen's). """
+    return canvas_width - 2 * GUIConstants.EDGE_PADDING - GUIConstants.ICON_FONT_SIZE - GUIConstants.COMPONENT_PADDING
+
+
+def review_value_lines(text: str, canvas_width: int) -> int:
+    """ How many lines the review screen draws `text` on. """
+    from seedsigner.gui.components import reflow_text_for_width
+    width = review_value_width(canvas_width)
+    font = Fonts.get_font(GUIConstants.get_body_font_name(), GUIConstants.get_body_font_size())
+    return len(reflow_text_for_width(break_long_words(text, width, font), width))
+
+
+def review_page_end(text: str, canvas_width: int, max_lines: int) -> int:
+    """ The length of the longest prefix of `text`, ending at a word (or a
+        broken-word piece), that the review screen draws on at most
+        `max_lines` lines: all of `text` if it fits. One layout pass, mirroring
+        break_long_words and reflow_text_for_width (which lays out each
+        newline-separated line on its own, splitting words on whitespace).
+        Callers check the page they cut with review_value_lines. """
+    from seedsigner.gui.components import reflow_text_for_width
+    width = review_value_width(canvas_width)
+    font = Fonts.get_font(GUIConstants.get_body_font_name(), GUIConstants.get_body_font_size())
+    used = 0
+    offset = 0
+    for original in text.split("\n"):
+        # The layout lines of this text line, as reflow sees them: break_long_words
+        # puts each later piece of a too-wide word on a line of its own.
+        segments = [[]]                         # [(start, end)] word pieces per layout segment
+        position = offset
+        for word in original.split(" "):
+            if word:
+                pieces = break_long_words(word, width, font).split("\n")
+                start = position
+                for i, piece in enumerate(pieces):
+                    if i:
+                        segments.append([])
+                    segments[-1].append((start, start + len(piece)))
+                    start += len(piece)
+            position += len(word) + 1
+        for segment in segments:
+            if not segment:
+                lines = [[]]                    # a blank line
+            else:
+                laid = reflow_text_for_width(" ".join(text[a:b] for a, b in segment), width)
+                lines, k = [], 0
+                for line in laid:
+                    n = len(line["text"].split())
+                    lines.append(segment[k:k + n])
+                    k += n
+            for line in lines:
+                if used == max_lines:
+                    return line[0][0] if line else offset
+                used += 1
+        offset += len(original) + 1
+    return len(text)
+
+
+def review_lines_per_page(canvas_width: int, canvas_height: int, warning_detail: str = "") -> int:
+    """ The most value lines that fit between the field label and the button,
+        below the warning text if there is one. TextArea's own height formula
+        (n lines: n * above-baseline + (n - 1) * spacing + below-baseline), with
+        the font's full ascent and descent as the worst case. A page cut to this
+        never draws signed text under the button (security review 2026-10-08:
+        180-character pages hid their last lines). """
+    from seedsigner.gui.components import reflow_text_for_width
+    body = Fonts.get_font(GUIConstants.get_body_font_name(), GUIConstants.get_body_font_size())
+    label = Fonts.get_font(GUIConstants.get_body_font_name(), GUIConstants.get_body_font_size() - 2)
+    ascent, descent = body.getmetrics()
+    spacing = GUIConstants.BODY_LINE_SPACING
+    top = GUIConstants.TOP_NAV_HEIGHT + GUIConstants.COMPONENT_PADDING + sum(label.getmetrics()) + GUIConstants.COMPONENT_PADDING // 2
+    bottom = canvas_height - GUIConstants.EDGE_PADDING - GUIConstants.BUTTON_HEIGHT - GUIConstants.COMPONENT_PADDING
+    if warning_detail:
+        detail_lines = len(reflow_text_for_width(warning_detail, canvas_width - 2 * GUIConstants.EDGE_PADDING))
+        bottom -= GUIConstants.COMPONENT_PADDING + detail_lines * ascent + (detail_lines - 1) * spacing + descent
+    return max(1, (bottom - top - descent + spacing) // (ascent + spacing))
+
+
+
 @dataclass
 class SevenFReviewFieldScreen(ButtonListScreen):
     """
@@ -98,9 +188,7 @@ class SevenFReviewFieldScreen(ButtonListScreen):
         icon_name = SeedSignerIconConstants.WARNING if self.is_warning else SeedSignerIconConstants.INFO
         icon_color = GUIConstants.DIRE_WARNING_COLOR if self.is_warning else GUIConstants.INFO_COLOR
 
-        # The value's text starts after the icon and its spacer.
-        value_width = (self.canvas_width - 2 * GUIConstants.EDGE_PADDING - GUIConstants.ICON_FONT_SIZE
-                       - GUIConstants.COMPONENT_PADDING)
+        value_width = review_value_width(self.canvas_width)
         value_font = Fonts.get_font(GUIConstants.get_body_font_name(), GUIConstants.get_body_font_size())
         value_display = IconTextLine(
             icon_name=icon_name,

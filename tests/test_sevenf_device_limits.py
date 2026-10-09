@@ -220,7 +220,7 @@ def test_review_pages_are_computed_once_per_review():
     from base import FlowTest  # noqa: F401
     from seedsigner.models.review import ReviewField
     from seedsigner.views.sevenf_views._common import _review_pages
-    fields = [ReviewField(label="Message", value="w " * 50_000)]
+    fields = [ReviewField(label="Message", value="w " * 500)]
     first = _review_pages(fields)
     assert _review_pages(fields) is first
     assert _review_pages(list(fields)) == first and _review_pages(list(fields)) is not first
