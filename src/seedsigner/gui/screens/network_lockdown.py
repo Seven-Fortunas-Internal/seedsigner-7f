@@ -12,8 +12,8 @@ from PIL import Image, ImageDraw
 from seedsigner.gui.components import Fonts, GUIConstants
 
 HEADLINE = "NETWORK DETECTED"
-BODY = ("Signing is disabled and the seeds were cleared from memory. Power off now. "
-        "If this happens again, this card or image is the wrong one.")
+BODY = ("Signing is disabled and the app has stopped. Power off now: that clears its memory. "
+        "If this shows again, this card or image is the wrong one.")
 _WRAP = 24          # characters per line at the body size on a 240px display
 _FINDING_WRAP = 30
 

@@ -33,7 +33,7 @@ class Seed:
         self._passphrase: str = ""
         self.set_passphrase(passphrase, regenerate_seed=False)
 
-        self.seed_bytes: bytes = None
+        self._seed_bytes: bytes = None
         self._generate_seed()
 
 
@@ -44,6 +44,19 @@ class Seed:
             return bip39.WORDLIST
         else:
             raise Exception(f"Unrecognized wordlist_language_code {wordlist_language_code}")
+
+
+    @property
+    def seed_bytes(self) -> bytes:
+        """ Every key this seed yields is derived from these bytes, so the
+            network tripwire gates every read of them. """
+        network_tripwire.assert_clean()
+        return self._seed_bytes
+
+
+    @seed_bytes.setter
+    def seed_bytes(self, value: bytes) -> None:
+        self._seed_bytes = value
 
 
     def _generate_seed(self):
@@ -182,9 +195,9 @@ class Seed:
             # SeedStorage.finalize_pending_seed()'s dedup check) with no attacker
             # able to observe comparison timing -- but hmac.compare_digest costs
             # nothing over `==` and removes the question entirely.
-            if self.seed_bytes is None or other.seed_bytes is None:
-                return self.seed_bytes is other.seed_bytes
-            return hmac.compare_digest(self.seed_bytes, other.seed_bytes)
+            if self._seed_bytes is None or other._seed_bytes is None:
+                return self._seed_bytes is other._seed_bytes
+            return hmac.compare_digest(self._seed_bytes, other._seed_bytes)
         return False
 
 
@@ -192,6 +205,7 @@ class Seed:
 class ElectrumSeed(Seed):
 
     def _generate_seed(self):
+        network_tripwire.assert_clean()
         if len(self._mnemonic) != 12:
             raise InvalidSeedException(f"Unsupported Electrum seed length: {len(self._mnemonic)}")
 

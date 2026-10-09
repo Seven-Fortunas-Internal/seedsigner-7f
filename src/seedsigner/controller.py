@@ -284,23 +284,32 @@ class Controller(Singleton):
 
 
     def _on_network_trip(self, findings):
-        """ The network tripwire's trip handler: wipe, leave the warning on
-            the display, and end the process. Nothing restarts the app, so
-            only a power-off brings the device back, and its boot gate checks
-            again. Nothing is written anywhere. """
+        """ The network tripwire's trip handler: leave the warning on the
+            display, drop the secrets, and end the process. Nothing restarts
+            the app, so only a power-off brings the device back, and its boot
+            gate checks again. Nothing is written anywhere.
+
+            The screensaver and a toast draw from their own threads and hold
+            the display lock while they run, so they are stopped first; the
+            lock is then kept, so nothing draws over the warning before the
+            process ends. The wipe only drops references (other threads'
+            frames may still hold a seed for the moment until exit); the
+            image's init_on_free=1 and the power-off clear the memory. """
+        from seedsigner.gui.renderer import Renderer
         try:
-            self.wipe_secrets()
-            from seedsigner.gui.renderer import Renderer
+            if self.is_screensaver_running:
+                self.screensaver.stop()
+            if self.toast_notification_thread is not None:
+                self.toast_notification_thread.stop()
+            Renderer.lock.acquire(timeout=2)       # draw anyway if it is not free
             from seedsigner.gui.screens.network_lockdown import render_network_lockdown
             renderer = Renderer.get_instance()
-            # Draw even if another thread holds the display: the warning
-            # matters more than a torn frame.
-            locked = Renderer.lock.acquire(timeout=1)
             renderer.show_image(render_network_lockdown(renderer.canvas_width, renderer.canvas_height, findings))
-            if locked:
-                Renderer.lock.release()
         finally:
-            os._exit(EXIT_NETWORK_TRIPPED)
+            try:
+                self.wipe_secrets()
+            finally:
+                os._exit(EXIT_NETWORK_TRIPPED)
 
 
     def pop_prev_from_back_stack(self):
@@ -420,6 +429,18 @@ class Controller(Singleton):
                     # Re-raise so the test suite can handle it.
                     raise e
 
+                except network_tripwire.NetworkCapableImageRefusal as e:
+                    # The dev image refusing a 7F mainnet key: an ordinary
+                    # refusal, from wherever in a flow the key was asked for.
+                    from seedsigner.views.view import ErrorView
+                    next_destination = Destination(ErrorView, view_args=dict(
+                        title="Error",
+                        status_headline="Development Image",
+                        text=str(e),
+                        button_text="Back",
+                        next_destination=Destination(BackStackView, skip_current_view=True),
+                    ))
+
                 except Exception as e:
                     # Display user-friendly error screen w/debugging info
                     import traceback
@@ -466,9 +487,11 @@ class Controller(Singleton):
             if self.toast_notification_thread and self.toast_notification_thread.is_alive():
                 self.toast_notification_thread.stop()
 
-            # Clear the screen when exiting
-            logger.info("Clearing screen, exiting")
-            Renderer.get_instance().display_blank_screen()
+            # Clear the screen when exiting, unless it shows the network
+            # tripwire's warning.
+            if not network_tripwire.is_tripped():
+                logger.info("Clearing screen, exiting")
+                Renderer.get_instance().display_blank_screen()
 
 
     @property

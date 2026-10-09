@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+import os
 import re
 import threading
 import time
@@ -198,14 +199,18 @@ def check_kernel_config(root: Path) -> list[Finding]:
             for name in KERNEL_OPTIONS_REFUSED if built.get(name) in ("y", "m")]
 
 
-def detect_mode(root: Path = Path("/"), force_enforce: bool = False) -> str:
+def detect_mode(root: Path = Path("/"), force_enforce: bool = False, machine: str | None = None) -> str:
     """ ENFORCE, WARN or OFF, from the image itself. `force_enforce` (main.py
         --tripwire=enforce) can raise the dev image to ENFORCE for testing;
-        nothing lowers ENFORCE. """
+        nothing lowers ENFORCE. OFF needs positive evidence of another
+        computer: a device-tree model that is not a Pi, or no device tree on
+        a CPU that is not 32-bit ARM like the device's. An unreadable device
+        tree on the device itself enforces (review 2026-10-09). """
     try:
         model = (root / "proc/device-tree/model").read_text().rstrip("\x00\n")
     except OSError:
-        return OFF
+        machine = machine if machine is not None else os.uname().machine
+        return ENFORCE if machine.startswith("armv") else OFF
     if not model.startswith("Raspberry Pi"):
         return OFF
     if force_enforce:
@@ -232,6 +237,7 @@ class _State:
         self.kernel_findings: list[Finding] | None = None
         self.heartbeat: float | None = None
         self.lock = threading.Lock()
+        self.handler_done = threading.Event()
 
 
 _state = _State()
@@ -255,8 +261,11 @@ def is_tripped() -> bool:
 
 
 def trip(found: list[Finding]) -> None:
-    """ Latch, run the trip handler once (on the device it wipes, warns and
-        ends the process), and raise. Never returns. """
+    """ Latch, run the trip handler once (on the device it draws the warning,
+        wipes and ends the process), and raise. Never returns. Every other
+        caller waits for that handler first: raising at once would let the
+        main thread unwind (and blank the display) while the handler is still
+        drawing (review 2026-10-09). """
     state = _state
     with state.lock:
         first = not state.tripped.is_set()
@@ -265,11 +274,15 @@ def trip(found: list[Finding]) -> None:
             state.findings = list(found)
     if first:
         logger.critical("Network tripwire: %s", "; ".join(map(str, found)))
-        if state.on_trip is not None:
-            try:
+        try:
+            if state.on_trip is not None:
                 state.on_trip(list(found))
-            except Exception:
-                logger.exception("Network tripwire: the trip handler failed; the gates stay closed")
+        except Exception:
+            logger.exception("Network tripwire: the trip handler failed; the gates stay closed")
+        finally:
+            state.handler_done.set()
+    else:
+        state.handler_done.wait()
     raise NetworkTripwireTripped("; ".join(map(str, state.findings)))
 
 
@@ -304,7 +317,7 @@ def assert_clean(network: str | None = None) -> None:
     if state.mode != ENFORCE:
         return
     if state.tripped.is_set():
-        raise NetworkTripwireTripped("; ".join(map(str, state.findings)))
+        trip(state.findings)
     found = _kernel_findings(state) + sweep(state.root)
     if state.heartbeat is not None and time.monotonic() - state.heartbeat > MONITOR_STALE_SECONDS:
         found.append(Finding("monitor_stalled", f"{time.monotonic() - state.heartbeat:.1f}s"))

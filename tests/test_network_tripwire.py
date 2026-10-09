@@ -183,8 +183,18 @@ class TestMode:
 
 
     def test_off_a_pi_it_is_off(self, release):
+        _write(release / "proc/device-tree/model", "QEMU Virt\x00")
+        assert nt.detect_mode(release, machine="armv7l") == nt.OFF
         (release / "proc/device-tree/model").unlink()
-        assert nt.detect_mode(release) == nt.OFF
+        assert nt.detect_mode(release, machine="x86_64") == nt.OFF
+        assert nt.detect_mode(release, machine="arm64") == nt.OFF
+
+
+    def test_an_unreadable_device_tree_on_the_device_enforces(self, release):
+        """ Fail closed: the device's own CPU with no readable model is not
+            evidence of another computer (review 2026-10-09). """
+        (release / "proc/device-tree/model").unlink()
+        assert nt.detect_mode(release, machine="armv7l") == nt.ENFORCE
 
 
     def test_any_other_hostname_on_a_pi_enforces(self, release):
@@ -272,6 +282,37 @@ class TestGates:
         with pytest.raises(nt.NetworkTripwireTripped):
             nt.assert_clean()
         assert codes(calls[0]) == ["monitor_stalled"]
+
+
+    def test_a_second_caller_waits_for_the_trip_handler_before_raising(self, release):
+        """ The monitor trips and draws; the main thread hitting a gate
+            meanwhile must not unwind (and blank the display) before the
+            handler is done (review 2026-10-09). """
+        drawing, release_handler = threading.Event(), threading.Event()
+
+        def slow_handler(found):
+            drawing.set()
+            release_handler.wait(2)
+        nt.configure(nt.ENFORCE, root=release, on_trip=slow_handler)
+        try:
+            make_iface(release, "eth0")
+            first = threading.Thread(target=lambda: pytest.raises(nt.NetworkTripwireTripped, nt.assert_clean))
+            first.start()
+            assert drawing.wait(2)
+            raised_at = []
+            second = threading.Thread(target=lambda: (pytest.raises(nt.NetworkTripwireTripped, nt.assert_clean),
+                                                      raised_at.append(time.monotonic())))
+            second.start()
+            time.sleep(0.3)
+            assert raised_at == []                   # still waiting on the handler
+            released = time.monotonic()
+            release_handler.set()
+            second.join(2)
+            first.join(2)
+            assert raised_at and raised_at[0] >= released
+        finally:
+            release_handler.set()
+            nt.configure(nt.OFF)
 
 
     def test_a_trip_handler_that_fails_still_leaves_the_gate_closed(self, release):
@@ -398,6 +439,28 @@ class TestGatePlacement:
             seed_for_7f(seed)
 
 
+    def test_every_read_of_seed_bytes(self, release):
+        """ Every key a seed yields is derived from seed_bytes (BIP-32 roots,
+            xpubs, PSBT, BIP-85, EVM, 7F), so reading them is gated. """
+        from seedsigner.models.seed import Seed
+        seed = Seed(ABANDON_ART)
+        make_iface(release, "eth0")
+        nt.configure(nt.ENFORCE, root=release, on_trip=lambda f: None)
+        try:
+            for use in (lambda: seed.seed_bytes, lambda: seed.get_xpub("m/84h/0h/0h"),
+                        lambda: seed.get_bip85_child_mnemonic(0, 12), lambda: seed.get_fingerprint()):
+                with pytest.raises(nt.NetworkTripwireTripped):
+                    use()
+        finally:
+            nt.configure(nt.OFF)
+
+
+    def test_an_electrum_seed(self, tripping):
+        from seedsigner.models.seed import ElectrumSeed
+        with pytest.raises(nt.NetworkTripwireTripped):
+            ElectrumSeed(["abandon"] * 12)
+
+
     def test_every_bip39_seed(self, tripping):
         from seedsigner.models.seed import Seed
         with pytest.raises(nt.NetworkTripwireTripped):
@@ -449,6 +512,17 @@ class TestGatePlacement:
 
 
 class TestDevImageMainnet:
+    def test_a_7f_scan_wrapper_passes_the_refusal_to_the_controller(self):
+        from seedsigner.views.sevenf_views._common import refuse_on_unexpected_error
+
+        @refuse_on_unexpected_error
+        def handler(self):
+            raise nt.NetworkCapableImageRefusal("dev image")
+
+        with pytest.raises(nt.NetworkCapableImageRefusal):
+            handler(object())
+
+
     def test_7f_mainnet_keys_are_refused_on_the_dev_image(self, release, no_7f_library):
         from seedsigner.models.sevenf import mldsa
         nt.configure(nt.WARN, root=release)
@@ -510,6 +584,29 @@ class TestTripHandler:
         assert len(controller.back_stack) == 0
         assert drawn == [[nt.Finding("usb_device", "1-1 class 03 046d:c31c")]]
         renderer.show_image.assert_called_once_with("warning")
+        Renderer.lock.acquire.assert_called()
+        Renderer.lock.release.assert_not_called()      # kept: nothing draws over the warning
+
+
+    def test_it_stops_the_screensaver_and_toast_before_drawing(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from seedsigner import controller as controller_module
+        from seedsigner.controller import Controller
+        from seedsigner.gui.screens import network_lockdown
+
+        controller = Controller.get_instance()
+        order = []
+        controller.screensaver = MagicMock(is_running=True, stop=lambda: order.append("screensaver"))
+        controller.toast_notification_thread = MagicMock(stop=lambda: order.append("toast"))
+        monkeypatch.setattr(network_lockdown, "render_network_lockdown", lambda w, h, f: order.append("draw"))
+        monkeypatch.setattr(controller_module.os, "_exit", lambda code: (_ for _ in ()).throw(_Exited()))
+        try:
+            with pytest.raises(_Exited):
+                controller._on_network_trip([])
+        finally:
+            controller.screensaver = None
+            controller.toast_notification_thread = None
+        assert order == ["screensaver", "toast", "draw"]
 
 
     def test_it_exits_even_if_drawing_fails(self, monkeypatch):

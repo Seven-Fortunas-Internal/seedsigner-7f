@@ -116,8 +116,11 @@ def refuse_on_unexpected_error(handle_complete_scan):
 
     @functools.wraps(handle_complete_scan)
     def wrapper(self, *args, **kwargs):
+        from seedsigner.models.network_tripwire import NetworkCapableImageRefusal
         try:
             return handle_complete_scan(self, *args, **kwargs)
+        except NetworkCapableImageRefusal:
+            raise                       # the controller shows it as itself, not as a bad QR
         except Exception as e:  # noqa: BLE001 -- deliberate boundary
             logging.getLogger(__name__).warning("7F scan refused: %r", e)
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
