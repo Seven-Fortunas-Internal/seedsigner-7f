@@ -364,7 +364,8 @@ def test_inspect_export_accepts_device_signatures(kind):
     r = _inspect(json.dumps(env))
     assert r["error"] is None
     assert r["kind"] == f"{kind}-sig"
-    assert r["file"] == f"{hashlib.sha256(b'\x07' * 1952).hexdigest()[:40]}.{kind}"
+    ski = hashlib.sha256(b"\x07" * 1952).hexdigest()[:40]      # no backslash inside an f-string: Python 3.10
+    assert r["file"] == f"{ski}.{kind}"
     assert r["ski"] == r["file"].split(".")[0]
     assert r["body"] == env["body"]
 
