@@ -28,6 +28,7 @@
     root_self_cert_review_fields()/deputy_cross_cert_v2_review_fields() now
     flag their "Subject key id" fields this way.
 """
+import re
 from dataclasses import dataclass
 from gettext import gettext as _
 
@@ -38,6 +39,10 @@ from seedsigner.models.sevenf.ceremony_clock import DateTimeFields
 from seedsigner.gui.keyboard import Keyboard
 
 from .screen import RET_CODE__BACK_BUTTON, BaseTopNavScreen, ButtonListScreen, ButtonOption, KeyboardScreen
+
+
+# A visible_text escape (\\uXXXX, \\UXXXXXXXX, \\n, \\t, \\\\), or one character.
+_ESCAPE_OR_CHAR = re.compile(r"\\u[0-9a-f]{4}|\\U[0-9a-f]{8}|\\[nt\\]|.", re.S)
 
 
 def break_long_words(text: str, width: int, font) -> str:
@@ -55,12 +60,12 @@ def break_long_words(text: str, width: int, font) -> str:
                 words.append(word)
                 continue
             chunks, current = [], ""
-            for ch in word:
-                if current and font.getlength(current + ch) > width:
+            for unit in _ESCAPE_OR_CHAR.findall(word):     # never inside a visible_text escape
+                if current and font.getlength(current + unit) > width:
                     chunks.append(current)
-                    current = ch
+                    current = unit
                 else:
-                    current += ch
+                    current += unit
             chunks.append(current)
             words.append("\n".join(chunks))
         lines.append(" ".join(words))

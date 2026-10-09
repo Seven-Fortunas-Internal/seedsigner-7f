@@ -297,3 +297,34 @@ def test_a_signature_that_fails_its_self_check_is_refused_on_screen(which):
 def test_the_library_error_names_its_code():
     from seedsigner.models.sevenf.mldsa import MlDsaError
     assert "SIGNATURE_SELF_CHECK_FAILED" in str(MlDsaError(-28, "derive_and_sign"))
+
+
+# --- the Deputy's two scans name the file they got (Jorge, dev unit 2026-10-08) ------
+
+@requires_mldsa7f
+class TestTheDeputyScansSayWhatTheyGot(FlowTest):
+    def _scan(self, view, payload):
+        view.decoder = MagicMock(is_complete=True, is_sevenf_bbqr=True)
+        view.decoder.get_sevenf_bbqr_data.return_value = payload
+        return view._handle_complete_scan()
+
+    def test_a_deputy_request_at_the_root_certificate_scan(self):
+        from test_sevenf_cert_request import DEPUTY_CSR_DER
+        self.controller.active_chain_id = "sevenf"
+        view = sevenf_views.SevenFScanRootCertificateView(seed=Seed(ABANDON_ART), chain_kind=ChainKind.TESTNET, key_index=0)
+        destination = self._scan(view, DEPUTY_CSR_DER)
+        assert destination.View_cls is sevenf_views.SevenFUnsupportedArtefactView
+        assert "Deputy's certificate request" in destination.view_args["reason"]
+        assert "your Root certificate" in destination.view_args["reason"]
+
+    def test_a_root_certificate_at_the_deputy_request_scan(self):
+        from test_sevenf_cert_request import ROOT_CERT_DER
+        from seedsigner.models.sevenf import cert_request
+        self.controller.active_chain_id = "sevenf"
+        view = sevenf_views.SevenFScanDeputyCsrView(seed=Seed(ABANDON_ART), chain_kind=ChainKind.TESTNET, key_index=0,
+                                                   root_cert_der=ROOT_CERT_DER,
+                                                   root_cert=cert_request.parse_root_certificate_der(ROOT_CERT_DER))
+        destination = self._scan(view, ROOT_CERT_DER)
+        assert destination.View_cls is sevenf_views.SevenFUnsupportedArtefactView
+        assert "Root certificate" in destination.view_args["reason"]
+        assert "Deputy's certificate request" in destination.view_args["reason"]

@@ -583,8 +583,8 @@ class SeedOptionsView(View):
     # model the same way EVM does).
     # The order is 7fchain's ceremony-federation-member.md, step by step. No
     # separate Root enrollment: Self-Certify Root exports the .vk with the
-    # certificate, as sf-wallet-gov sign-root-cert does (derive-vk refuses a
-    # Root key since 7fchain 7cf3d6c).
+    # certificate, as sf-wallet-gov sign-root-cert does (derive-vk writes
+    # nothing for a Root key since 7fchain 7cf3d6c, and points to sign-root-cert).
     SEVENF_EXPORT_DEVFUND_VK = ButtonOption("7F: Enroll Dev-fund (export VK)")
     SEVENF_SCAN_GENESIS_CONFIG = ButtonOption("7F: Sign Genesis Config")
     SEVENF_SCAN_ROOT_CERT_REQUEST = ButtonOption("7F: Self-Certify Root")

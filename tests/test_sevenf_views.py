@@ -2474,7 +2474,7 @@ class TestTheSevenFMenu(FlowTest):
         by step: Root key and certificate (sign-root-cert, which writes the
         .vk too), dev-fund key, sign genesis, sign dev-fund, certify the
         Deputy. There is no separate "Enroll Root": sf-wallet-gov derive-vk
-        refuses a Root key since 7fchain 7cf3d6c ("A Root key needs no
+        writes nothing for a Root key since 7fchain 7cf3d6c ("A Root key needs no
         separate derive step ... so the two cannot disagree"). """
     def test_the_7f_items_are_in_the_runbook_order(self):
         self.controller.active_chain_id = "sevenf"

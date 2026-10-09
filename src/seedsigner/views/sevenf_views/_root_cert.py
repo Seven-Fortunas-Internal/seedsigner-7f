@@ -48,10 +48,10 @@ class SevenFSelectChainKindForRootSelfCertView(View):
 
         Removing the scanned CertRequest also removes the old
         `subject_matches()` fail-closed cross-check it carried (nothing
-        left to compare the derived key against) -- the plan's §5.1/§8
-        compensating control is the mandatory enrollment-fingerprint check
-        on the review screen this view routes to, not a device-side
-        pin allowlist (deferred, a federation-level question). """
+        left to compare the derived key against) -- the compensating control
+        is the subject key id on the review screen, read to the coordinator
+        and checked against the Root key they enrolled, not a device-side pin
+        allowlist (deferred, a federation-level question). """
     def __init__(self, seed: Seed, date_confirmed: bool = False):
         super().__init__()
         self.seed = seed
@@ -164,9 +164,9 @@ class SevenFSelectChainKindForDevfundEnrollmentView(View):
         (ceremony-federation-member.md Step 3, sf-wallet-gov `derive-vk --role
         devfund`). 7fchain 89d3d39 locks the dev fund with per-holder keys at
         devfund/<chain_kind>/0/ml-dsa/v1 -- NOT the Root key, and the runbook
-        says a dev-fund id equal to the Root id means "stop and call". Same
-        chain-select -> subject key id -> pin -> QR flow as Root enrollment,
-        titled "Dev-fund VK" so the two can't be confused on screen. """
+        says a dev-fund id equal to the Root id means "stop and call".
+        Chain, index, subject key id, then the QR (no pin screen: derive-vk
+        prints none for a dev-fund key), titled "Dev-fund VK". """
     def __init__(self, seed: Seed):
         super().__init__()
         self.seed = seed
@@ -204,7 +204,7 @@ class SevenFDeriveEnrollmentVkView(View):
         dev-fund index is asked for on its own; it is never taken from the Root
         index (what pairs them is open on 7fchain#7). A Root key is not
         enrolled on its own: Self-Certify Root exports its .vk with the
-        certificate, as sf-wallet-gov does (derive-vk refuses a Root key). """
+        certificate, as sf-wallet-gov does (derive-vk writes nothing for a Root key). """
     def __init__(self, seed: Seed, chain_kind: ChainKind, role: str, key_index: int):
         super().__init__()
         self.seed = seed
@@ -216,7 +216,7 @@ class SevenFDeriveEnrollmentVkView(View):
     def run(self):
         if self.role == "root":
             raise ValueError("a Root key needs no separate derive step: Self-Certify Root exports its .vk "
-                             "with the certificate (sf-wallet-gov derive-vk refuses a Root key)")
+                             "with the certificate (sf-wallet-gov derive-vk writes nothing for a Root key)")
         if self.role != "devfund":
             raise ValueError(f"no enrollment key for role {self.role!r}")
         public_key = root_ceremony.derive_devfund_key(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).public_key

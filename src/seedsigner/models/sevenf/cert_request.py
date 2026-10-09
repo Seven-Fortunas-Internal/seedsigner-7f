@@ -538,7 +538,7 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
     return [
         ReviewField(
             label="Subject key id", value=group_hex_for_display(ski(subject_vk.hex())), is_warning=True,
-            warning_detail="Compare against your recorded subject key id.",
+            warning_detail="Read this subject key id to the coordinator: it must be your enrolled Root key's.",
         ),
         ReviewField(label="Chain", value=chain_kind.name.lower()),
         ReviewField(label="Valid from", value=_validity_date(not_before)),

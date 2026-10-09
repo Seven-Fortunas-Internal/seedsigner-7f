@@ -55,3 +55,37 @@ def test_a_long_value_is_paged_in_one_layout_pass_per_page():
     pages = _review_pages([ReviewField(label="Message", value=value)])
     assert "".join(p.value for p in pages) == value
     assert time.monotonic() - start < 15
+
+
+# --- what is signed is what is read (adversarial review 2026-10-08) -----------------
+
+@pytest.mark.parametrize("a, b", [
+    ("́", "\\u0301"),        # a real combining mark vs the six typed characters
+    ("\n", "\\n"),                # a real newline vs a typed backslash-n
+    ("a  b", "a b"),              # the screen collapses runs of spaces
+    (" a", "a"), ("a ", "a"),     # and drops them at line ends
+    ("pаy", "pay"),          # Cyrillic a, a look-alike
+    ("中", "二"),         # two characters the font draws as the same box
+])
+def test_two_different_texts_never_look_the_same(a, b):
+    from seedsigner.models.sevenf.review_format import visible_text
+    assert visible_text(a) != visible_text(b)
+
+
+def test_ordinary_text_and_latin_letters_are_shown_as_they_are():
+    from seedsigner.models.sevenf.review_format import visible_text
+    for text in ("No meme coins. No spam. No scams. Only utility.", "café naïve Ångström"):
+        assert visible_text(text) == text
+
+
+def test_a_long_word_is_never_broken_inside_an_escape():
+    from seedsigner.gui.screens.sevenf_screens import break_long_words
+
+    class TenPxFont:
+        def getlength(self, text):
+            return 10 * len(text)
+
+    out = break_long_words("\\u0301" * 6 + "\\\\" * 3, width=100, font=TenPxFont())
+    for line in out.split("\n"):
+        assert not line.endswith("\\") or line.endswith("\\\\"), out
+        assert "\\u" not in line or all(len(part) >= 4 for part in line.split("\\u")[1:]), out

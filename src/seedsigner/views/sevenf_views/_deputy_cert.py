@@ -141,6 +141,11 @@ class SevenFScanRootCertificateView(ScanView):
         try:
             root_cert = cert_request.parse_root_certificate_der(data)
         except CertRequestError as e:
+            if _is_deputy_request(data):
+                return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                    headline=_("Wrong File"),
+                    reason=_("This is the Deputy's certificate request. Scan your Root certificate "
+                             "(root-<ski>.pem) first; the Deputy's request is the next scan.")))
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't parse this as a Root certificate: {}").format(e)))
 
@@ -211,6 +216,11 @@ class SevenFScanDeputyCsrView(ScanView):
         try:
             csr = cert_request.verify_and_parse_csr_der(deputy_csr_der)
         except CertRequestError as e:
+            if _is_root_certificate(deputy_csr_der):
+                return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                    headline=_("Wrong File"),
+                    reason=_("This is a Root certificate. Scan the Deputy's certificate request "
+                             "(deputy-<ski>-csr.pem) here.")))
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't verify this certificate request: {}").format(e)))
 
@@ -229,10 +239,14 @@ class SevenFScanDeputyCsrView(ScanView):
             return Destination(SevenFUnsupportedArtefactView, view_args=dict(
                 reason=_("Couldn't build the Deputy certificate body: {}").format(e)))
 
-        review_fields = [
-            key_index_review_field(self.chain_kind, self.key_index),
-            *cert_request.deputy_cross_cert_v2_review_fields(self.root_cert, csr, self.chain_kind, now, days, serial),
-        ]
+        try:
+            review_fields = [
+                key_index_review_field(self.chain_kind, self.key_index),
+                *cert_request.deputy_cross_cert_v2_review_fields(self.root_cert, csr, self.chain_kind, now, days, serial),
+            ]
+        except CertRequestError as e:
+            return Destination(SevenFUnsupportedArtefactView, view_args=dict(
+                reason=_("Couldn't show the certificate for review: {}").format(e)))
 
         return Destination(
             SevenFCertRequestReviewFieldView,
@@ -295,3 +309,22 @@ class SevenFExportDeputyCertQRView(View):
             qr_encoder=BBQrEncoder(data=deputy_cert_export(cert_der, self.certificate.public_key), file_type="J"),
         )
         return Destination(MainMenuView, skip_current_view=True)
+
+
+
+def _is_deputy_request(data: bytes) -> bool:
+    """ Whether a refused Root-certificate scan is in fact a Deputy CSR. """
+    try:
+        cert_request.verify_and_parse_csr_der(data)
+        return True
+    except CertRequestError:
+        return False
+
+
+def _is_root_certificate(data: bytes) -> bool:
+    """ Whether a refused CSR scan is in fact a Root certificate. """
+    try:
+        cert_request.parse_root_certificate_der(data)
+        return True
+    except CertRequestError:
+        return False

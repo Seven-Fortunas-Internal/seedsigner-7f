@@ -31,8 +31,8 @@ def format_timestamp(timestamp: int) -> str:
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 # The warning beside a coordinator-supplied timestamp that is no calendar date.
-NOT_A_CALENDAR_DATE = ("Not a calendar date. sf-wallet-gov signs any non-zero timestamp, "
-                       "but ask the coordinator before signing this one.")
+# sf-wallet-gov signs any non-zero timestamp (sign_ops.rs), so this warns only.
+NOT_A_CALENDAR_DATE = "Not a calendar date. Ask the coordinator before signing."
 
 
 def utc_datetime(timestamp: int) -> datetime | None:
@@ -88,21 +88,46 @@ def canonical_digest(canonical_bytes: bytes) -> str:
     return group_hex_for_display(hashlib.sha256(canonical_bytes).hexdigest()[:32])
 
 
+def _shown_as_is(ch: str) -> bool:
+    """ Printable ASCII, and the Latin letters and signs of Latin-1 and Latin
+        Extended-A/B, which the device's font draws and nothing else imitates. """
+    code = ord(ch)
+    if 0x21 <= code <= 0x7E:
+        return ch != "\\"
+    return 0xA1 <= code <= 0x24F and unicodedata.category(ch)[0] not in "CMZ"
+
+
+def _escape(ch: str) -> str:
+    code = ord(ch)
+    return f"\\u{code:04x}" if code <= 0xFFFF else f"\\U{code:08x}"
+
+
 def visible_text(s: str) -> str:
-    """ Coordinator-supplied free text as it must be shown before signing:
-        newlines, tabs, bidi overrides, combining marks (which draw over the
-        character before them) and every other control/format/surrogate/
-        unassigned character become a visible escape (\\n, \\t, \\uXXXX),
-        so no signed character can be hidden or reorder what the operator
-        reads (security review 2026-10-08). """
+    """ Coordinator-supplied free text as it must be shown before signing, so
+        that two different texts never look the same on the device (security
+        and adversarial reviews 2026-10-08):
+        - a newline or tab is \\n or \\t, and a backslash is \\\\ (so a typed
+          "\\u0301" can't pass for an escaped one);
+        - a space shows as a space only between two other characters: the
+          screen collapses a run of spaces and drops them at a line's ends, so
+          the others are \\u0020;
+        - anything but printable ASCII and Latin letters is \\uXXXX: combining
+          marks, bidi and other controls, look-alike letters from other scripts
+          (Cyrillic "\\u0430" for "a"), and characters the font draws as the
+          same box. """
     out = []
-    for ch in s:
+    for i, ch in enumerate(s):
         if ch == "\n":
             out.append("\\n")
         elif ch == "\t":
             out.append("\\t")
-        elif unicodedata.category(ch)[0] in "CMZ" and ch != " ":
-            out.append(f"\\u{ord(ch):04x}")
-        else:
+        elif ch == "\\":
+            out.append("\\\\")
+        elif ch == " ":
+            shown = 0 < i < len(s) - 1 and s[i - 1] != " "    # the first of a run, not at an end
+            out.append(" " if shown else "\\u0020")
+        elif _shown_as_is(ch):
             out.append(ch)
+        else:
+            out.append(_escape(ch))
     return "".join(out)

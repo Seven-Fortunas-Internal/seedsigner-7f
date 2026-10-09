@@ -54,7 +54,11 @@ def _render(screen):
 
 
 @pytest.mark.parametrize("name", sorted(VALUES))
-@pytest.mark.parametrize("warning", ["", WARNING])
+@pytest.mark.parametrize("warning", [
+    "", WARNING, "Read this subject key id to the coordinator: it must be your enrolled Root key's.",
+    "Not a calendar date. Ask the coordinator before signing.",
+    "Not the testnet default (420s). A different tempo is a different chain: continue only if the coordinator meant it.",
+])
 def test_every_page_draws_above_the_button(name, warning):
     pages = _review_pages([ReviewField(label="Message", value=VALUES[name], is_warning=bool(warning), warning_detail=warning)])
     assert "".join(p.value for p in pages) == VALUES[name]
