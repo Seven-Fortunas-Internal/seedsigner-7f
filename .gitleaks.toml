@@ -50,7 +50,8 @@ regexes = [
   # The subject key id (SHA-256 of a PUBLIC key, first 20 bytes) of the
   # "abandon x 23 art" testnet Root key, as sf-wallet-gov prints it, in
   # tests/test_sevenf_root_ceremony.py. Public by design. Verified 2026-10-08.
-  '''591c511984a2d73c6bee1f4dc149d48f7f97fc55''',
+  # Anchored (\b): a longer value that merely contains these 40 hex is still scanned.
+  '''\b591c511984a2d73c6bee1f4dc149d48f7f97fc55\b''',
 ]
 
 # Path-excluded, not regex-allowlisted: these are official NIST ACVP test
