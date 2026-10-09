@@ -157,51 +157,6 @@ class SevenFBuildRootSelfCertView(View):
 
 
 
-class SevenFSelectChainKindForRootEnrollmentView(View):
-    """ Standalone Root enrollment: derive the Root CA verification key for a
-        chosen chain and export it as bare hex -- no genesis-ceremony state
-        required, no signing at all. Closes
-        7f-signing-support-standalone-pubkey-enrollment-menu-entry.
-
-        This is the real enrollment operation (sf-wallet-gov's `derive-vk`
-        equivalent; sign-root-cert also writes the same `<ski>.vk` beside the
-        certificate, sign_ops.rs cmd_sign_root_cert): no
-        self-signature, no path, no fingerprint field, just the bare vk a
-        coordinator compiles into a node's trust list. Previously only
-        reachable as a side effect of SevenFExportPubkeyQRView being gated
-        behind starting a genesis-signing ceremony -- a Root holder who
-        hasn't signed genesis yet had no way to just publish their
-        enrollment key. Mirrors SevenFSelectChainKindForRootSelfCertView's
-        own chain-selection pattern exactly. """
-    def __init__(self, seed: Seed):
-        super().__init__()
-        self.seed = seed
-
-        if guard_active_chain(self, "sevenf"):
-            return
-
-
-    def run(self):
-        from seedsigner.gui.screens.screen import ButtonListScreen
-        kinds = list(ChainKind)
-        button_data = [ButtonOption(k.name.lower()) for k in kinds]
-
-        selected_menu_num = self.run_screen(
-            ButtonListScreen,
-            title=_("Root Enrollment: Chain"),
-            is_button_text_centered=True,
-            button_data=button_data,
-        )
-
-        if selected_menu_num == RET_CODE__BACK_BUTTON:
-            return Destination(BackStackView)
-
-        return Destination(SevenFSelectKeyIndexView, view_args=dict(
-            role="root",
-            next_destination=SevenFDeriveEnrollmentVkView,
-            next_view_args=dict(seed=self.seed, chain_kind=kinds[selected_menu_num], role="root"),
-        ))
-
 
 
 class SevenFSelectChainKindForDevfundEnrollmentView(View):
@@ -244,10 +199,12 @@ class SevenFSelectChainKindForDevfundEnrollmentView(View):
 
 
 class SevenFDeriveEnrollmentVkView(View):
-    """ After the network and the key index: derive the Root or dev-fund
-        key at that index and show its ski (7f-signing-support-key-index-
-        selector). The dev-fund index is asked for on its own; it is never
-        taken from the Root index (what pairs them is open on 7fchain#7). """
+    """ After the network and the key index: derive the dev-fund key at that
+        index and show its ski (7f-signing-support-key-index-selector). The
+        dev-fund index is asked for on its own; it is never taken from the Root
+        index (what pairs them is open on 7fchain#7). A Root key is not
+        enrolled on its own: Self-Certify Root exports its .vk with the
+        certificate, as sf-wallet-gov does (derive-vk refuses a Root key). """
     def __init__(self, seed: Seed, chain_kind: ChainKind, role: str, key_index: int):
         super().__init__()
         self.seed = seed
@@ -258,13 +215,12 @@ class SevenFDeriveEnrollmentVkView(View):
 
     def run(self):
         if self.role == "root":
-            public_key = root_public_key(self.seed, self.chain_kind, self.key_index)
-            title = _("Root VK")
-        elif self.role == "devfund":
-            public_key = root_ceremony.derive_devfund_key(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).public_key
-            title = _("Dev-fund VK")
-        else:
+            raise ValueError("a Root key needs no separate derive step: Self-Certify Root exports its .vk "
+                             "with the certificate (sf-wallet-gov derive-vk refuses a Root key)")
+        if self.role != "devfund":
             raise ValueError(f"no enrollment key for role {self.role!r}")
+        public_key = root_ceremony.derive_devfund_key(root_ceremony.seed_for_7f(self.seed), self.chain_kind, index=self.key_index).public_key
+        title = _("Dev-fund VK")
 
         return Destination(
             SevenFRootVkFingerprintView,

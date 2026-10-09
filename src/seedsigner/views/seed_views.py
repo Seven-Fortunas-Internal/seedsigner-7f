@@ -581,7 +581,10 @@ class SeedOptionsView(View):
     # didn't match how every other chain-specific feature in this menu is gated
     # (see chains/sevenf/plugin.py's own docstring for why 7F fits the ChainPlugin
     # model the same way EVM does).
-    SEVENF_EXPORT_ROOT_VK = ButtonOption("7F: Enroll Root (export VK)")
+    # The order is 7fchain's ceremony-federation-member.md, step by step. No
+    # separate Root enrollment: Self-Certify Root exports the .vk with the
+    # certificate, as sf-wallet-gov sign-root-cert does (derive-vk refuses a
+    # Root key since 7fchain 7cf3d6c).
     SEVENF_EXPORT_DEVFUND_VK = ButtonOption("7F: Enroll Dev-fund (export VK)")
     SEVENF_SCAN_GENESIS_CONFIG = ButtonOption("7F: Sign Genesis Config")
     SEVENF_SCAN_ROOT_CERT_REQUEST = ButtonOption("7F: Self-Certify Root")
@@ -589,7 +592,6 @@ class SeedOptionsView(View):
     SEVENF_SCAN_DEVFUND_CONFIG = ButtonOption("7F: Sign Devfund Config")
     # Each 7F button and the first view of its flow (in seedsigner.views.sevenf_views).
     _SEVENF_ROUTES = (
-        (SEVENF_EXPORT_ROOT_VK, "SevenFSelectChainKindForRootEnrollmentView"),
         (SEVENF_EXPORT_DEVFUND_VK, "SevenFSelectChainKindForDevfundEnrollmentView"),
         (SEVENF_SCAN_GENESIS_CONFIG, "SevenFScanGenesisConfigView"),
         (SEVENF_SCAN_ROOT_CERT_REQUEST, "SevenFSelectChainKindForRootSelfCertView"),
@@ -698,12 +700,11 @@ class SeedOptionsView(View):
             button_data.append(self.EVM_SIGN)
 
         elif self.controller.active_chain_id == "sevenf":
-            button_data.append(self.SEVENF_EXPORT_ROOT_VK)
-            button_data.append(self.SEVENF_EXPORT_DEVFUND_VK)
-            button_data.append(self.SEVENF_SCAN_GENESIS_CONFIG)
-            button_data.append(self.SEVENF_SCAN_ROOT_CERT_REQUEST)
-            button_data.append(self.SEVENF_SCAN_DEPUTY_CROSS_CERT)
-            button_data.append(self.SEVENF_SCAN_DEVFUND_CONFIG)
+            button_data.append(self.SEVENF_SCAN_ROOT_CERT_REQUEST)     # step 2: Root key and certificate
+            button_data.append(self.SEVENF_EXPORT_DEVFUND_VK)          # step 3: dev-fund key
+            button_data.append(self.SEVENF_SCAN_GENESIS_CONFIG)        # step 5
+            button_data.append(self.SEVENF_SCAN_DEVFUND_CONFIG)        # step 6
+            button_data.append(self.SEVENF_SCAN_DEPUTY_CROSS_CERT)     # step 7
 
         if self.settings.get_value(SettingsConstants.SETTING__BIP85_CHILD_SEEDS) == SettingsConstants.OPTION__ENABLED and self.seed.bip85_supported:
             button_data.append(self.BIP85_CHILD_SEED)

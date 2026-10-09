@@ -67,21 +67,6 @@ class _IndexFlowTest(FlowTest):
 
 
 class TestEnrollmentAtAnIndex(_IndexFlowTest):
-    def test_root_vk_at_index_2_is_sf_wallet_gov_s(self):
-        seed = self.seed_fixture()
-        view = sevenf_views.SevenFSelectChainKindForRootEnrollmentView(seed=seed)
-        destination = _past_key_index(_run(view, 1), key_index=2)  # 1 == testnet
-
-        assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
-        assert ski(destination.view_args["public_key"].hex()) == ROOT_SKI[2]
-        assert destination.view_args["key_index"] == 2
-
-        captured = {}
-        pin_destination = _run(sevenf_views.SevenFRootVkFingerprintView(**destination.view_args), 0, captured)
-        assert captured["text"].endswith("\nindex 2")
-        assert pin_destination.view_args["key_index"] == 2
-
-
     def test_devfund_vk_at_index_7_is_sf_wallet_gov_s_and_asks_a_devfund_index(self):
         seed = self.seed_fixture()
         view = sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView(seed=seed)
@@ -241,13 +226,13 @@ class TestBackFromAfterTheIndex(_IndexFlowTest):
         captured = {}
         self.run_sequence(
             [
-                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_EXPORT_ROOT_VK),
-                FlowStep(sevenf_views.SevenFSelectChainKindForRootEnrollmentView, button_data_selection=ButtonOption("testnet")),
+                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_EXPORT_DEVFUND_VK),
+                FlowStep(sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView, button_data_selection=ButtonOption("testnet")),
                 *index_steps,
                 FlowStep(sevenf_views.SevenFDeriveEnrollmentVkView, is_redirect=True),
                 FlowStep(sevenf_views.SevenFRootVkFingerprintView, screen_return_value=0,
                          before_run=lambda v: captured.update(stack=[d.View_cls for d in self.controller.back_stack])),
-                FlowStep(sevenf_views.SevenFVkPinView),
+                FlowStep(sevenf_views.SevenFExportRootVkQRView),   # no pin for a dev-fund key
             ],
             initial_destination_view_args=dict(seed=self.seed_fixture()),
         )
@@ -260,7 +245,7 @@ class TestBackFromAfterTheIndex(_IndexFlowTest):
     def test_default_index(self):
         from base import FlowStep
         stack = self._back_stack_at_fingerprint([FlowStep(sevenf_views.SevenFSelectKeyIndexView, screen_return_value=0)])
-        assert stack[-1] is sevenf_views.SevenFSelectChainKindForRootEnrollmentView
+        assert stack[-1] is sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView
 
 
     def test_other_index_through_the_keypad_and_warning(self):
@@ -270,7 +255,7 @@ class TestBackFromAfterTheIndex(_IndexFlowTest):
             FlowStep(sevenf_views.SevenFEnterKeyIndexView, screen_return_value="5"),
             FlowStep(sevenf_views.SevenFConfirmKeyIndexView, screen_return_value=0),  # "Use index 5"
         ])
-        assert stack[-1] is sevenf_views.SevenFSelectChainKindForRootEnrollmentView
+        assert stack[-1] is sevenf_views.SevenFSelectChainKindForDevfundEnrollmentView
         index_views = {sevenf_views.SevenFSelectKeyIndexView, sevenf_views.SevenFEnterKeyIndexView,
                        sevenf_views.SevenFConfirmKeyIndexView, sevenf_views.SevenFInvalidKeyIndexView}
         assert not index_views & set(stack)

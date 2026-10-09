@@ -470,11 +470,8 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         return seed
 
 
-    def test_seed_options_view_offers_the_enroll_root_vk_button_only_in_sevenf_mode(self):
-        """ Standalone enrollment entry (7f-signing-support-standalone-pubkey-
-            enrollment-menu-entry): "7F: Enroll Root (export VK)" -> no
-            genesis-ceremony state required, same chain-gating as every
-            other 7F menu button. """
+    def test_seed_options_view_offers_the_7f_items_only_in_sevenf_mode(self):
+        """ Every 7F menu item is gated on the 7F chain being active. """
         seed = self.seed_fixture()
         for active_chain_id, should_appear in [("sevenf", True), ("bitcoin", False), ("evm", False), (None, False)]:
             self.controller.active_chain_id = active_chain_id
@@ -488,7 +485,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
             with pytest.MonkeyPatch().context() as mp:
                 mp.setattr(view, "run_screen", fake_run_screen)
                 view.run()
-            is_present = seed_views.SeedOptionsView.SEVENF_EXPORT_ROOT_VK in captured["button_data"]
+            is_present = seed_views.SeedOptionsView.SEVENF_SCAN_ROOT_CERT_REQUEST in captured["button_data"]
             assert is_present == should_appear, f"active_chain_id={active_chain_id!r}: expected present={should_appear}, got {is_present}"
 
 
@@ -524,7 +521,7 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
 
 
     @pytest.mark.parametrize("button", [
-        "SEVENF_EXPORT_ROOT_VK", "SEVENF_EXPORT_DEVFUND_VK", "SEVENF_SCAN_GENESIS_CONFIG",
+        "SEVENF_EXPORT_DEVFUND_VK", "SEVENF_SCAN_GENESIS_CONFIG",
         "SEVENF_SCAN_ROOT_CERT_REQUEST", "SEVENF_SCAN_DEPUTY_CROSS_CERT", "SEVENF_SCAN_DEVFUND_CONFIG",
     ])
     def test_every_7f_button_refuses_a_seed_7fchain_would_not_derive_from(self, button):
@@ -554,38 +551,6 @@ class TestSevenFRootSelfCertificationFlow(FlowTest):
         from seedsigner.views.view import BackStackView
         assert "24 words" in captured["text"]
         assert destination.View_cls is BackStackView
-
-    def test_seed_options_view_routes_to_select_chain_kind_for_enrollment_view(self):
-        seed = self.seed_fixture()
-        self.run_sequence(
-            [
-                FlowStep(seed_views.SeedOptionsView, button_data_selection=seed_views.SeedOptionsView.SEVENF_EXPORT_ROOT_VK),
-                FlowStep(sevenf_views.SevenFSelectChainKindForRootEnrollmentView),
-            ],
-            initial_destination_view_args=dict(seed=seed),
-        )
-
-
-    def test_enrollment_chain_kind_select_derives_the_real_key_and_routes_to_fingerprint(self):
-        """ Unit-level: selecting a chain derives THIS seed's own real Root CA
-            key for that chain and routes to the fingerprint confirmation
-            screen -- no signing, no TBS, no multi-field review (there's
-            nothing to review: this operation makes no claim beyond "here is
-            a public key"), just the one on-screen fact worth confirming
-            before export. """
-        seed = self.seed_fixture()
-        keys = derive_root_ceremony_keys(seed_for_7f(seed), ChainKind.TESTNET, index=0)
-
-        view = sevenf_views.SevenFSelectChainKindForRootEnrollmentView(seed=seed)
-        with pytest.MonkeyPatch().context() as mp:
-            mp.setattr(view, "run_screen", lambda *a, **kw: 1)  # index 1 == TESTNET (Mainnet=0, Testnet=1, Devnet=2)
-            destination = _past_key_index(view.run())
-
-        assert destination.View_cls == sevenf_views.SevenFRootVkFingerprintView
-        assert destination.view_args["public_key"] == keys.root_ca.public_key
-        assert destination.view_args["title"] == "Root VK"
-        assert destination.view_args["key_index"] == 0
-
 
     def test_fingerprint_view_shows_the_real_ski_and_routes_to_export(self):
         """ Confirms the on-screen id is the REAL subject key id (ski) of this
@@ -2500,3 +2465,39 @@ def test_the_devfund_definition_is_signed_with_the_root_key():
         signer = view.run().view_args["artifact"].public_key
     assert signer == derive_root_ceremony_keys(seed_for_7f(seed), ChainKind.TESTNET, index=0).root_ca.public_key
     assert signer != derive_devfund_key(seed_for_7f(seed), ChainKind.TESTNET, index=0).public_key
+
+
+class TestTheSevenFMenu(FlowTest):
+    """ The 7F seed menu follows 7fchain's ceremony-federation-member.md, step
+        by step: Root key and certificate (sign-root-cert, which writes the
+        .vk too), dev-fund key, sign genesis, sign dev-fund, certify the
+        Deputy. There is no separate "Enroll Root": sf-wallet-gov derive-vk
+        refuses a Root key since 7fchain 7cf3d6c ("A Root key needs no
+        separate derive step ... so the two cannot disagree"). """
+    def test_the_7f_items_are_in_the_runbook_order(self):
+        self.controller.active_chain_id = "sevenf"
+        view = seed_views.SeedOptionsView(seed=Seed(["abandon"] * 23 + ["art"]))
+        captured = {}
+
+        def fake_run_screen(screen_cls, button_data=None, **kwargs):
+            captured["labels"] = [b.button_label for b in button_data]
+            return RET_CODE__BACK_BUTTON
+
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(view, "run_screen", fake_run_screen)
+            view.run()
+        assert [label for label in captured["labels"] if label.startswith("7F:")] == [
+            "7F: Self-Certify Root",
+            "7F: Enroll Dev-fund (export VK)",
+            "7F: Sign Genesis Config",
+            "7F: Sign Devfund Config",
+            "7F: Cross-Certify Deputy",
+        ]
+
+    def test_there_is_no_separate_root_enrollment(self):
+        assert not hasattr(seed_views.SeedOptionsView, "SEVENF_EXPORT_ROOT_VK")
+        assert not hasattr(sevenf_views, "SevenFSelectChainKindForRootEnrollmentView")
+        view = sevenf_views.SevenFDeriveEnrollmentVkView(
+            seed=Seed(["abandon"] * 23 + ["art"]), chain_kind=ChainKind.TESTNET, role="root", key_index=0)
+        with pytest.raises(ValueError, match="Self-Certify Root"):
+            view.run()
