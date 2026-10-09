@@ -30,7 +30,7 @@
 from dataclasses import dataclass
 
 from seedsigner.models.sevenf import mldsa
-from seedsigner.models.sevenf.constants import ChainKind, DerivedKey, Layer, devfund_path, root_path
+from seedsigner.models.sevenf.constants import ChainKind, DerivedKey, devfund_path, root_path
 
 
 @dataclass(frozen=True)
@@ -58,12 +58,7 @@ def derive_root_ceremony_keys(seed_bytes: bytes, chain_kind: ChainKind, *, index
         seedsigner.models.sevenf.mldsa.MlDsaError on any derivation
         failure, ValueError if seed_bytes is the wrong length.
     """
-    root_pk, root_address = mldsa.derive_pubkey(
-        seed_bytes,
-        root_path(chain_kind, index),
-        int(chain_kind),
-        int(Layer.L1),
-    )
+    root_pk, root_address = mldsa.derive_pubkey(seed_bytes, root_path(chain_kind, index))
     root_key = DerivedKey(public_key=root_pk, address=root_address)
 
     return RootCeremonyKeys(
@@ -83,12 +78,7 @@ def derive_devfund_key(seed_bytes: bytes, chain_kind: ChainKind, *, index: int) 
         to sign the devfund-config (the Roots declare the recipient; these
         devfund keys spend from it). Export only: nothing on this device signs
         with it yet. """
-    public_key, address = mldsa.derive_pubkey(
-        seed_bytes,
-        devfund_path(chain_kind, index),
-        int(chain_kind),
-        int(Layer.L1),
-    )
+    public_key, address = mldsa.derive_pubkey(seed_bytes, devfund_path(chain_kind, index))
     return DerivedKey(public_key=public_key, address=address)
 
 

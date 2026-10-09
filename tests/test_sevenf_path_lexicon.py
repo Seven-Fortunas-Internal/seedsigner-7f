@@ -1,116 +1,38 @@
 """
-    Tests for path_lexicon.py, translated directly from 7fchain's own
-    crates/sf-keytree/src/path.rs test module -- the same test oracle as
-    the real reference, not independently invented cases. If path.rs's
-    test module ever changes, re-diff this file against it.
-
-    RE-PORTED 2026-10-03 (R27): path.rs collapsed its two-level
-    purpose-path/role-path grammar into one combined path; this file is a
-    full re-port against that single grammar, not an incremental patch of
-    the old two-level test file.
+    Key paths are checked by 7fchain's own rules: crates/sf-keytree/src/path.rs,
+    ported verbatim into firmware/mldsa7f (src/path.rs) and called through
+    the FFI (mldsa7f_path_validate). 7fchain's lexicon requires this: "The
+    device must apply the same rules, and must do so by calling this code
+    over FFI rather than reimplementing it" (docs/derivation-path-lexicon.md).
+    There is no Python copy of the rules; every case below runs the Rust
+    validator, and 7fchain's own tests (role spellings, layers, chain-bound
+    roles, leaves) run in firmware/mldsa7f with the ported code.
 """
 import pytest
 
+from seedsigner.models.sevenf import path_lexicon
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.path_lexicon import (
-    Algorithm,
-    Leaf,
-    PathLexiconError,
-    Role,
-    _validate_segment,
-    parse,
-    validate,
-)
+from seedsigner.models.sevenf.path_lexicon import PathLexiconError, validate
 
 
-def _ok(path):
-    validate(path)  # raises on failure; success is silent
+def _ok(p):
+    validate(p)
 
 
-def _rejects(path):
+def _rejects(p):
     with pytest.raises(PathLexiconError):
-        validate(path)
+        validate(p)
 
 
-# ─── R-L2: every lexicon value renders a legal segment ───────────────────
-
-def test_every_role_renders_a_legal_segment():
-    for r in Role:
-        _validate_segment(r.value)
+def test_the_rules_are_7fchains_not_a_python_copy():
+    for name in ("Role", "Algorithm", "Leaf", "parse", "_validate_segment", "_parse_u32", "_parse_version", "MAX_SEGMENT_LEN"):
+        assert not hasattr(path_lexicon, name), name
 
 
-def test_every_algorithm_renders_a_legal_segment():
-    for a in Algorithm:
-        _validate_segment(a.value)
-
-
-def test_every_leaf_renders_a_legal_segment():
-    for leaf in Leaf:
-        _validate_segment(leaf.value)
-
-
-def test_role_spellings_are_pinned():
-    """ The spellings are load-bearing: changing one changes every key
-        under that role, so they are pinned rather than merely derived. """
-    assert Role.ROOT.value == "root"
-    assert Role.MINER.value == "miner"
-    assert Role.WALLET.value == "wallet"
-    assert Role.DEPUTY.value == "deputy"
-    assert Role.CENTCOM.value == "centcom"
-    assert Role.MINER_REGISTRAR.value == "miner-registrar"
-    assert Role.L2_VERIFIER_REGISTRAR.value == "l2-verifier-registrar"
-    assert Role.L2_SEQUENCER_REGISTRAR.value == "l2-sequencer-registrar"
-    assert Role.L2_WALLET.value == "l2-wallet"
-    assert Role.SEQUENCER.value == "sequencer"
-    assert Role.MASTER_MINTER.value == "master-minter"
-    assert Role.GUARDIAN.value == "guardian"
-    assert Role.VERIFIER.value == "verifier"
-    assert Role.RECHECKER.value == "rechecker"
-    assert Role.FEDERATION.value == "federation"
-    assert Algorithm.ML_DSA.value == "ml-dsa"
-    assert Algorithm.FALCON.value == "falcon"
-    assert Leaf.HOT.value == "hot"
-    assert Leaf.BLOCK_REWARD.value == "block-reward"
-
-
-# ─── Structure ─────────────────────────────────────────────────────────
-
-def test_no_role_spans_layers_so_the_layer_is_implied():
-    for r in (
-        Role.ROOT, Role.MINER, Role.WALLET, Role.DEPUTY, Role.CENTCOM,
-        Role.MINER_REGISTRAR, Role.L2_VERIFIER_REGISTRAR, Role.L2_SEQUENCER_REGISTRAR,
-    ):
-        assert not r.is_l2, r
-    for r in (
-        Role.L2_WALLET, Role.SEQUENCER, Role.MASTER_MINTER,
-        Role.GUARDIAN, Role.VERIFIER, Role.RECHECKER, Role.FEDERATION,
-    ):
-        assert r.is_l2, r
-
-
-def test_chain_bound_roles_are_exactly_the_four():
-    bound = [r.value for r in Role if r.is_chain_bound]
-    assert bound == ["l2-wallet", "sequencer", "master-minter", "guardian"]
-
-
-def test_the_three_registrar_roles_are_l1_not_chain_bound_no_leaf():
-    """ Pins the three "judgement call" decisions path.rs's own doc comment
-        and docs/sf-wallet-gov-requirements.md's RESOLVED-9 record: all
-        three registrar roles are L1 (same tier as Deputy/CentCom -- the
-        PKI is L1's PKI even when it certifies L2 services), none is
-        chain-bound (an l2-sequencer-registrar's chain scope lives in its
-        certificate's id-sf-l2-chain-id-ranges grant, not its derivation
-        path), and none allows a leaf (unchanged: only miner does). """
-    for r in (Role.MINER_REGISTRAR, Role.L2_VERIFIER_REGISTRAR, Role.L2_SEQUENCER_REGISTRAR):
-        assert not r.is_l2, r
-        assert not r.is_chain_bound, r
-        assert not r.allows_leaf, r
-
-
-def test_only_miner_carries_a_leaf():
-    """ R-L5, as a test rather than a comment. """
-    for r in Role:
-        assert r.allows_leaf == (r is Role.MINER), r
+def test_the_refusal_message_is_7fchains():
+    with pytest.raises(PathLexiconError) as e:
+        validate("root/testnet/0/ml-dsa")
+    assert "version" in str(e.value) or "v<" in str(e.value) or "segments" in str(e.value), str(e.value)
 
 
 # ─── The settled paths ───────────────────────────────────────────────────
@@ -264,7 +186,7 @@ def test_segment_and_index_validation_are_strictly_ascii():
         actual semantics rather than trusting a passing test suite alone;
         re-verified against the R27 single-grammar rewrite, 2026-10-03. """
     with pytest.raises(PathLexiconError):
-        _validate_segment("à")  # non-ASCII lowercase letter
+        validate("root/testnet/0/ml-dsà/v1")  # non-ASCII lowercase letter
     with pytest.raises(PathLexiconError):
         validate("root/testnet/²/ml-dsa/v1")  # non-ASCII "digit" (superscript 2)
     with pytest.raises(PathLexiconError):
@@ -272,27 +194,8 @@ def test_segment_and_index_validation_are_strictly_ascii():
 
 
 def test_segment_max_length():
-    with pytest.raises(PathLexiconError):
-        _validate_segment("a" * 33)
-    _validate_segment("a" * 32)  # must not raise
-
-
-def test_parse_returns_the_expected_fields():
-    """ Not in the Rust reference's own test list (there, parse() returns
-        a typed DerivationPath; here it returns a dict -- see
-        path_lexicon.py's own docstring for why) -- pins this port's own
-        return shape. """
-    parsed = parse("l2-wallet/mainnet/999/7/ml-dsa/v1")
-    assert parsed["role"] is Role.L2_WALLET
-    assert parsed["chain_kind"] == ChainKind.MAINNET
-    assert parsed["chain_id"] == 999
-    assert parsed["index"] == 7
-    assert parsed["algorithm"] is Algorithm.ML_DSA
-    assert parsed["version"] == 1
-    assert parsed["leaf"] is None
-
-    parsed_leaf = parse("miner/testnet/3/ml-dsa/v1/block-reward")
-    assert parsed_leaf["leaf"] is Leaf.BLOCK_REWARD
+    _rejects(f"root/testnet/0/ml-dsa/v1/{'a' * 33}")
+    _rejects(f"root/testnet/0/{'a' * 33}/v1")
 
 
 def test_devfund_is_a_role_and_is_not_the_root_path():
@@ -303,9 +206,6 @@ def test_devfund_is_a_role_and_is_not_the_root_path():
     from seedsigner.models.sevenf.constants import devfund_path, root_path
     _ok("devfund/testnet/0/ml-dsa/v1")
     _ok("devfund/devnet/1/ml-dsa/v1")
-    assert not Role.DEVFUND.is_l2
-    assert not Role.DEVFUND.is_chain_bound
-    assert not Role.DEVFUND.allows_leaf
     _rejects("devfund/testnet/7/0/ml-dsa/v1")  # no chain-id segment
     assert devfund_path(ChainKind.TESTNET) == "devfund/testnet/0/ml-dsa/v1"
     assert devfund_path(ChainKind.TESTNET) != root_path(ChainKind.TESTNET)

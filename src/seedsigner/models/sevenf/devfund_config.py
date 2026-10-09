@@ -162,7 +162,11 @@ def _lib():
 # function existed fails only address validation, not every devfund call.
 _ADDRESS_ARGTYPES = {
     "mldsa7f_address_validate": ([ctypes.c_char_p, ctypes.c_size_t], ctypes.c_int32),
+    "mldsa7f_address_describe": ([ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p], ctypes.c_int32),
 }
+_NETWORK_NAMES = ("mainnet", "testnet", "devnet")
+_LAYER_NAMES = ("L1", "L2")
+_SIG_TYPE_NAMES = ("ML-DSA", "Falcon", "WOTS+")
 
 
 def _address_is_valid(address: str) -> bool:
@@ -176,6 +180,19 @@ def _address_is_valid(address: str) -> bool:
             "this device's signing library is too old to check a recipient address; update the firmware") from e
     raw = address.encode("utf-8")
     return lib.mldsa7f_address_validate(raw, len(raw)) == 0
+
+
+def describe_address(address: str) -> tuple[str, str, str]:
+    """ (network, layer, signature type) of an address, as 7fchain's
+        Address::decode reads it. For display; acceptance is _address_is_valid. """
+    lib = mldsa._lib_handle()
+    register_argtypes(lib, "_sevenf_address_argtypes_registered", _ADDRESS_ARGTYPES)
+    raw = _clean_address(address).encode("utf-8")
+    out = ctypes.create_string_buffer(3)
+    if lib.mldsa7f_address_describe(raw, len(raw), out) != 0:
+        raise DevFundConfigJsonError(f"recipient address {address!r} does not decode")
+    n, l, t = out.raw
+    return _NETWORK_NAMES[n], _LAYER_NAMES[l], _SIG_TYPE_NAMES[t]
 
 
 def build_canonical_bytes(network: ChainKind, recipient: DevfundRecipient, effective_block: int, timestamp: int) -> bytes:
@@ -401,6 +418,20 @@ def review_fields(fields: DevFundConfigFields, canonical_bytes: bytes | None = N
                                    warning_detail="This recipient receives the ENTIRE genesis reward."))
         else:
             out.append(ReviewField(label=label, value=value))
+        if label == "Recipient" and fields.recipient.tag == DevfundRecipient.ADDRESS:
+            # 7fchain accepts any address that decodes (DevfundRecipient::validate
+            # checks nothing more), so this device does too; it only shows what
+            # the address is, and flags one that is not on this dev fund's network.
+            try:
+                network, layer, sig_type = describe_address(fields.recipient.payload)
+            except DevFundConfigJsonError:
+                out.append(ReviewField(label="Recipient address", value="does not decode", is_warning=True,
+                                       warning_detail="7fchain would refuse this recipient. Do not sign."))
+            else:
+                other = network != fields.network.name.lower()
+                out.append(ReviewField(
+                    label="Recipient address", value=f"{network}, {layer}, {sig_type}", is_warning=other,
+                    warning_detail=f"This address is on {network}, not {fields.network.name.lower()}." if other else None))
     # The digest of the exact bytes being signed; callers pass them. Rebuilt
     # from the fields only when not given (tests, tooling).
     canonical = canonical_bytes if canonical_bytes is not None else build_canonical_bytes(fields.network, fields.recipient, fields.effective_block, fields.timestamp)

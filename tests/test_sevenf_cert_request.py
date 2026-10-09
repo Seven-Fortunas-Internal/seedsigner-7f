@@ -711,7 +711,7 @@ def _derive_root_keypair(chain_kind: ChainKind) -> bytes:
     from seedsigner.models.sevenf import mldsa
     from seedsigner.models.sevenf.constants import Layer, root_path
     master_seed = bytes([0x07]) * 64
-    vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind), int(chain_kind), int(Layer.L1))
+    vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind))
     return vk, master_seed
 
 
@@ -841,7 +841,7 @@ def _fresh_root_cert(chain_kind: ChainKind, not_before: int = 1_800_000_000, see
         Returns (root_cert_der, root_vk, root_master_seed). """
     from seedsigner.models.sevenf.constants import Layer
     master_seed = bytes([seed_byte]) * 64
-    vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind), int(chain_kind), int(Layer.L1))
+    vk, _address = mldsa.derive_pubkey(master_seed, root_path(chain_kind))
     serial = generate_serial()
     tbs = build_root_tbs(vk, chain_kind, not_before, ROOT_DAYS, serial)
     _, signature = mldsa.derive_and_sign(master_seed, root_path(chain_kind), tbs)
@@ -931,7 +931,7 @@ def _derive_csr_keypair(seed_byte: int = 0x52) -> tuple[bytes, bytes]:
     from seedsigner.models.sevenf import mldsa
     from seedsigner.models.sevenf.constants import Layer, root_path
     master_seed = bytes([seed_byte]) * 64
-    vk, _address = mldsa.derive_pubkey(master_seed, root_path(ChainKind.TESTNET), int(ChainKind.TESTNET), int(Layer.L1))
+    vk, _address = mldsa.derive_pubkey(master_seed, root_path(ChainKind.TESTNET))
     return vk, master_seed
 
 

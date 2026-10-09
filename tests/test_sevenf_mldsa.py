@@ -54,7 +54,7 @@ def test_derive_pubkey_root_matches_rust_kat():
     """ Pinned against `cargo test --release ffi_kat_capture_for_python
         -- --nocapture --ignored`'s actual printed output, re-captured
         2026-10-03 against the new single-grammar path (R27). """
-    pk, address = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
+    pk, address = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
     assert len(pk) == ML_DSA_PK_LEN
     assert hashlib.sha256(pk).hexdigest() == "920d8addc431773ed0f40e441593b609353b3f2ed18181fb21213743059a19f0"
     assert address == "t136pq48mt9f3ym9dn3k3nh6f8dkpw6uje40rjx9djfnqg28v"
@@ -84,7 +84,7 @@ REMAINING_CATEGORY_KATS = [
 
 
 def _assert_derive_pubkey_matches_kat(path, expected_pk_sha256, expected_address):
-    pk, address = mldsa.derive_pubkey(FIXED_SEED, path, network=1, layer=0)
+    pk, address = mldsa.derive_pubkey(FIXED_SEED, path)
     assert hashlib.sha256(pk).hexdigest() == expected_pk_sha256
     assert address == expected_address
 
@@ -110,32 +110,32 @@ def test_derive_and_sign_uses_hedged_default_signing():
     assert pk1 == pk2, "same path must derive the same keypair every call"
     assert sig1 != sig2, "the default signing path must stay hedged"
     # Same pubkey either entry point, for the same path.
-    pk_only, _ = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
+    pk_only, _ = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
     assert pk1 == pk_only
 
 
 def test_derive_pubkey_is_deterministic():
-    pk1, addr1 = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
-    pk2, addr2 = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
+    pk1, addr1 = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
+    pk2, addr2 = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
     assert pk1 == pk2
     assert addr1 == addr2
 
 
 def test_derive_pubkey_differs_per_chain_kind():
-    pk_testnet, _ = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
-    pk_mainnet, _ = mldsa.derive_pubkey(FIXED_SEED, "root/mainnet/0/ml-dsa/v1", network=0, layer=0)
+    pk_testnet, _ = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
+    pk_mainnet, _ = mldsa.derive_pubkey(FIXED_SEED, "root/mainnet/0/ml-dsa/v1")
     assert pk_testnet != pk_mainnet
 
 
 def test_root_and_deputy_differ():
-    root_pk, _ = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
-    deputy_pk, _ = mldsa.derive_pubkey(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1", network=1, layer=0)
+    root_pk, _ = mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
+    deputy_pk, _ = mldsa.derive_pubkey(FIXED_SEED, "deputy/testnet/0/ml-dsa/v1")
     assert root_pk != deputy_pk
 
 
 def test_wrong_master_seed_length_raises_value_error():
     with pytest.raises(ValueError):
-        mldsa.derive_pubkey(b"\x00" * 32, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
+        mldsa.derive_pubkey(b"\x00" * 32, "root/testnet/0/ml-dsa/v1")
 
 
 def test_derive_pubkey_rejects_an_invalid_path_before_reaching_the_ffi():
@@ -146,7 +146,7 @@ def test_derive_pubkey_rejects_an_invalid_path_before_reaching_the_ffi():
         7f-signing-support-path-validation-not-enforced. A retired-grammar
         path must never reach the FFI (or derive a key) at all. """
     with pytest.raises(PathLexiconError):
-        mldsa.derive_pubkey(FIXED_SEED, "root-ca/l1/testnet/0", network=1, layer=0)
+        mldsa.derive_pubkey(FIXED_SEED, "root-ca/l1/testnet/0")
 
 
 def test_derive_and_sign_rejects_an_invalid_path_before_reaching_the_ffi():
@@ -189,15 +189,48 @@ def test_load_library_raises_file_not_found_with_helpful_message(monkeypatch):
         mldsa._load_library()
 
 
-def test_derive_pubkey_raises_mldsa_error_on_bad_network_byte():
-    """ 99 is not a valid Network discriminant (see
-        firmware/mldsa7f/src/ffi.rs's decode_network) -- exercises the
-        derive_pubkey error-raising branch with a real failure from the
-        FFI boundary, not a mocked one. """
-    with pytest.raises(mldsa.MlDsaError) as exc_info:
-        mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=99, layer=0)
-    assert exc_info.value.code == -4  # ERR_BAD_NETWORK, ffi.rs
-    assert exc_info.value.operation == "derive_pubkey"
+def test_a_refused_path_raises_with_7fchains_message():
+    from seedsigner.models.sevenf.path_lexicon import PathLexiconError
+    with pytest.raises(PathLexiconError, match="must not start with 'm/'"):
+        mldsa.derive_pubkey(FIXED_SEED, "m/root/testnet/0/ml-dsa/v1")
+
+
+def test_the_library_validates_inside_derivation(monkeypatch):
+    """ K1: even with the Python-side message check skipped, the library
+        refuses the path itself (ERR_BAD_PATH), as 7fchain's derive_seed does. """
+    from seedsigner.models.sevenf import path_lexicon
+    monkeypatch.setattr(path_lexicon, "validate", lambda path: None)
+    for call in (lambda: mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa"),
+                 lambda: mldsa.derive_and_sign(FIXED_SEED, "root/testnet/0/ml-dsa", b"x")):
+        with pytest.raises(mldsa.MlDsaError) as exc_info:
+            call()
+        assert exc_info.value.code == -27  # ERR_BAD_PATH, ffi.rs
+
+
+def test_a_falcon_algorithm_path_derives_an_ml_dsa_key_as_7fchain_does():
+    """ phrase_file::keypair_at derives an ML-DSA key for any valid path,
+        `falcon` algorithm segment included (leaf_to_ml_dsa). """
+    pk, address = mldsa.derive_pubkey(FIXED_SEED, "wallet/testnet/0/falcon/v1")
+    assert len(pk) == ML_DSA_PK_LEN and address.startswith("t1")
+    assert pk != mldsa.derive_pubkey(FIXED_SEED, "wallet/testnet/0/ml-dsa/v1")[0]
+
+
+def test_the_library_abi_version_is_checked_at_load(monkeypatch):
+    """ H-2: a library built for another ABI (e.g. copied separately to the
+        device) refuses cleanly instead of being called with the wrong arguments. """
+    class _OldLib:
+        def mldsa7f_abi_version(self):
+            return 1
+    monkeypatch.setattr(mldsa, "_lib", None)
+    monkeypatch.setattr(mldsa, "_load_library", lambda: _OldLib())
+    with pytest.raises(mldsa.MlDsa7fError, match="ABI"):
+        mldsa._lib_handle()
+
+    class _AncientLib:
+        pass
+    monkeypatch.setattr(mldsa, "_load_library", lambda: _AncientLib())
+    with pytest.raises(mldsa.MlDsa7fError, match="ABI"):
+        mldsa._lib_handle()
 
 
 def test_derive_pubkey_rejects_an_out_of_range_written_address_length(monkeypatch):
@@ -211,6 +244,9 @@ def test_derive_pubkey_rejects_an_out_of_range_written_address_length(monkeypatc
         this file's existing _FakeLib convention (see
         test_derive_and_sign_raises_mldsa_error_on_nonzero_return above). """
     class _FakeLib:
+        def mldsa7f_path_validate(self, *args):
+            return 0
+
         def mldsa7f_derive_pubkey(self, *args):
             written_ptr = ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_size_t))
             written_ptr[0] = 9999
@@ -218,7 +254,7 @@ def test_derive_pubkey_rejects_an_out_of_range_written_address_length(monkeypatc
 
     monkeypatch.setattr(mldsa, "_lib_handle", lambda: _FakeLib())
     with pytest.raises(ValueError, match="out-of-range address length"):
-        mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1", network=1, layer=0)
+        mldsa.derive_pubkey(FIXED_SEED, "root/testnet/0/ml-dsa/v1")
 
 
 def test_derive_and_sign_raises_mldsa_error_on_nonzero_return(monkeypatch):
@@ -232,6 +268,9 @@ def test_derive_and_sign_raises_mldsa_error_on_nonzero_return(monkeypatch):
         failure, so a future reader doesn't mistake this for
         cross-verified behavior against the real library. """
     class _FakeLib:
+        def mldsa7f_path_validate(self, *args):
+            return 0
+
         def mldsa7f_derive_and_sign(self, *args):
             return -11  # ERR_SIGNING_FAILED, ffi.rs
 

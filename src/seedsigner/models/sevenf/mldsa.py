@@ -23,13 +23,13 @@
     for the decision record. "No raw-secret-key API" is now simply true of
     this module, not true-with-one-exception.
 
-    Every path this module hands to the FFI is validated against
-    `path_lexicon.validate()` first (added in the same adversarial-review
-    pass that removed the above) -- this is the actual boundary every real
-    and future Python caller on this device passes through, closing the gap
-    flagged against firmware/mldsa7f/src/derive.rs's own `derive_seed`,
-    which deliberately does not validate (see that function's doc comment
-    and 7f-signing-support-path-validation-not-enforced).
+    Paths are checked by 7fchain's own rules inside the library: derivation
+    parses the path with the verbatim port of sf-keytree's path.rs and refuses
+    an invalid one, and the network and layer of an address come from the path
+    itself. derive_pubkey/derive_and_sign call path_lexicon.validate() first
+    only so a caller gets 7fchain's message rather than a bare error code.
+    Every signature is verified under its own key before it is returned
+    (as sf-wallet-gov's sign_checked).
 
     The compiled library search order:
       1. SEEDSIGNER_MLDSA7F_LIB env var, an explicit path override (tests/dev).
@@ -109,10 +109,14 @@ _MLDSA_ARGTYPES = {
     "mldsa7f_derive_pubkey": ([
         ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
         ctypes.c_char_p, ctypes.c_size_t,   # path
-        ctypes.c_uint8, ctypes.c_uint8,      # network, layer
         ctypes.c_char_p, ctypes.c_size_t,   # pk_out
         ctypes.c_char_p, ctypes.c_size_t,   # address_out
         ctypes.POINTER(ctypes.c_size_t),     # address_written_out
+    ], ctypes.c_int32),
+    "mldsa7f_path_validate": ([
+        ctypes.c_char_p, ctypes.c_size_t,   # path
+        ctypes.c_char_p, ctypes.c_size_t,   # msg_out
+        ctypes.POINTER(ctypes.c_size_t),     # msg_written_out
     ], ctypes.c_int32),
     "mldsa7f_derive_and_sign": ([
         ctypes.c_char_p, ctypes.c_size_t,   # master_seed64
@@ -131,17 +135,62 @@ def _lib_handle() -> ctypes.CDLL:
     global _lib
     if _lib is None:
         lib = _load_library()
+        _check_abi(lib)
         register_argtypes(lib, "_sevenf_mldsa_argtypes_registered", _MLDSA_ARGTYPES)
         _lib = lib
     return _lib
 
 
-def derive_pubkey(master_seed: bytes, path: str, network: int, layer: int) -> tuple[bytes, str]:
-    """ Derive the ML-DSA-65 public key and 7fchain address for `path` on
-        the given network/layer. Raises MlDsaError on any failure, or
-        path_lexicon.PathLexiconError if `path` fails lexicon validation
-        (added 2026-10-03, adversarial review -- see this module's own
-        docstring). """
+# The C ABI this bridge is written for (firmware/mldsa7f/src/ffi.rs ABI_VERSION).
+EXPECTED_ABI_VERSION = 2
+
+
+def _check_abi(lib) -> None:
+    """ Refuse a library built for another ABI (for example one copied to the
+        device separately from this code), rather than call it with the wrong
+        arguments. """
+    try:
+        fn = lib.mldsa7f_abi_version
+    except AttributeError:
+        raise MlDsa7fError(f"the mldsa7f library predates ABI versioning; this code needs ABI {EXPECTED_ABI_VERSION}. "
+                           "Install the library built from this tree.") from None
+    try:
+        fn.argtypes = []
+        fn.restype = ctypes.c_uint32
+    except AttributeError:
+        pass
+    version = fn()
+    if version != EXPECTED_ABI_VERSION:
+        raise MlDsa7fError(f"the mldsa7f library is ABI {version}; this code needs ABI {EXPECTED_ABI_VERSION}. "
+                           "Install the library built from this tree.")
+
+
+_PATH_MESSAGE_MAX = 512
+ERR_BAD_PATH_UTF8 = -3
+ERR_BAD_PATH = -27
+
+
+def path_refusal(path: str) -> str | None:
+    """ None if 7fchain's path rules accept `path`, else 7fchain's message. """
+    lib = _lib_handle()
+    path_bytes = path.encode("utf-8")
+    msg_buf = ctypes.create_string_buffer(_PATH_MESSAGE_MAX)
+    written = ctypes.c_size_t(0)
+    rc = lib.mldsa7f_path_validate(path_bytes, len(path_bytes), msg_buf, _PATH_MESSAGE_MAX, ctypes.byref(written))
+    if rc == 0:
+        return None
+    if rc == ERR_BAD_PATH:
+        return msg_buf.raw[:min(written.value, _PATH_MESSAGE_MAX)].decode("utf-8", errors="replace")
+    if rc == ERR_BAD_PATH_UTF8:
+        return "derivation path is not valid UTF-8"
+    raise MlDsaError(rc, "path_validate")
+
+
+def derive_pubkey(master_seed: bytes, path: str) -> tuple[bytes, str]:
+    """ Derive the ML-DSA-65 public key and 7fchain address for `path`; the
+        address is on the path's own network and layer. Raises
+        path_lexicon.PathLexiconError (7fchain's message) for a path its rules
+        refuse, MlDsaError on any other failure. """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
     path_lexicon.validate(path)
@@ -156,7 +205,6 @@ def derive_pubkey(master_seed: bytes, path: str, network: int, layer: int) -> tu
     rc = lib.mldsa7f_derive_pubkey(
         master_seed, len(master_seed),
         path_bytes, len(path_bytes),
-        network, layer,
         pk_buf, ML_DSA_PK_LEN,
         addr_buf, ADDRESS_LEN,
         ctypes.byref(written),
@@ -179,11 +227,10 @@ def derive_pubkey(master_seed: bytes, path: str, network: int, layer: int) -> tu
 
 def derive_and_sign(master_seed: bytes, path: str, message: bytes) -> tuple[bytes, bytes]:
     """ Derive the ML-DSA-65 keypair for `path` and sign `message` with it
-        under the empty FIPS 204 context (the default hedged/randomized
-        path -- matches sf-root sign-genesis). Raises MlDsaError on any
-        failure, or path_lexicon.PathLexiconError if `path` fails lexicon
-        validation (added 2026-10-03, adversarial review -- see this
-        module's own docstring). """
+        under the empty FIPS 204 context, hedged, as sf-wallet-gov's
+        sign_checked does (sign_ops.rs); the signature is verified under its
+        key before it is returned. Raises path_lexicon.PathLexiconError
+        (7fchain's message) for a refused path, MlDsaError otherwise. """
     if len(master_seed) != MASTER_SEED_LEN:
         raise ValueError(f"master_seed must be {MASTER_SEED_LEN} bytes, got {len(master_seed)}")
     path_lexicon.validate(path)

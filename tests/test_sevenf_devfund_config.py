@@ -119,12 +119,13 @@ def test_review_fields_covers_every_signed_field():
     assert all(isinstance(f, ReviewField) for f in result)
     labels = [f.label for f in result]
     # + the canonical digest sf-wallet-gov prints (not a signed field itself)
-    assert labels == ["Chain", "Recipient kind", "Recipient", "Effective block", "Timestamp", "Canonical digest"]
+    assert labels == ["Chain", "Recipient kind", "Recipient", "Recipient address", "Effective block", "Timestamp", "Canonical digest"]
     values = {f.label: f.value for f in result}
     assert values["Chain"] == "testnet"
     assert values["Recipient kind"] == "Address"
     assert values["Recipient"] == "t1devfundexampleaddress"
     assert values["Effective block"] == "12345"
+    assert values["Recipient address"] == "does not decode"     # a placeholder, flagged
 
 
 def test_review_fields_shows_multisig_kind():
@@ -335,3 +336,52 @@ def test_refuses_json_serde_json_refuses(payload):
     from seedsigner.models.sevenf.devfund_config import DevFundConfigJsonError, parse_devfund_config_json
     with pytest.raises(DevFundConfigJsonError):
         parse_devfund_config_json(payload)
+
+
+# --- story 4 (K3, M-1): the recipient check is sf-core's, exactly ---------------
+
+# One address of every kind 7fchain's Address::decode accepts, made by the
+# verbatim port of sf-crypto's encoder (mldsa7f emit_recipient_addresses).
+EVERY_ADDRESS_KIND = {
+    "7flswdehurp3f3puwsuytdwcqjx6e9q0g6cktcyam8y6ueca4": "mainnet, L1, ML-DSA",
+    "7ff1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftqfxcsv": "mainnet, L1, Falcon",
+    "7fw1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftqfewda": "mainnet, L1, WOTS+",
+    "72lswdehurp3f3puwsuytdwcqjx6e9q0g6cktcyam8grh99ky": "mainnet, L2, ML-DSA",
+    "72f1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftq7d4n8": "mainnet, L2, Falcon",
+    "t1lswdehurp3f3puwsuytdwcqjx6e9q0g6cktcyam8w2rhhvf": "testnet, L1, ML-DSA",
+    "t1f1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftqq3y53": "testnet, L1, Falcon",
+    "t1w1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftqqwjfq": "testnet, L1, WOTS+",
+    "t2lswdehurp3f3puwsuytdwcqjx6e9q0g6cktcyam8kv6jxfh": "testnet, L2, ML-DSA",
+    "t2f1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftqe5430": "testnet, L2, Falcon",
+    "d1lswdehurp3f3puwsuytdwcqjx6e9q0g6cktcyam88ujr3yu": "devnet, L1, ML-DSA",
+    "d1f1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftq39zuy": "devnet, L1, Falcon",
+    "d1w1uyz4aqptz7m47ue5c5kzlu0szxz9s8f4hqt6sftq365p4": "devnet, L1, WOTS+",
+}
+
+
+@pytest.mark.parametrize("address", sorted(EVERY_ADDRESS_KIND))
+def test_every_address_kind_sf_core_accepts_is_accepted(address):
+    """ DevfundRecipient::validate is Address::decode and nothing more
+        (sf-core genesis_config.rs:461-480): no network, layer or type check. """
+    from seedsigner.models.sevenf.devfund_config import parse_devfund_config_json
+    fields = parse_devfund_config_json(_json(recipient={"kind": "address", "address": address}))
+    assert fields.recipient.payload == address
+
+
+@pytest.mark.parametrize("address,described", sorted(EVERY_ADDRESS_KIND.items()))
+def test_review_shows_what_the_address_is(address, described):
+    """ Display only: acceptance stays upstream's, but the operator sees the
+        decoded network, layer and type, flagged when the network is not the
+        dev-fund's own. """
+    from seedsigner.models.sevenf.devfund_config import parse_devfund_config_json, review_fields
+    fields = parse_devfund_config_json(_json(recipient={"kind": "address", "address": address}))
+    by_label = {f.label: f for f in review_fields(fields)}
+    shown = by_label["Recipient address"]
+    assert shown.value == described
+    assert shown.is_warning == (not described.startswith("testnet"))
+
+
+def test_a_multisig_recipient_has_no_address_line():
+    from seedsigner.models.sevenf.devfund_config import parse_devfund_config_json, review_fields
+    fields = parse_devfund_config_json(REAL_DEVFUND_UNSIGNED_JSON)
+    assert "Recipient address" not in {f.label for f in review_fields(fields)}

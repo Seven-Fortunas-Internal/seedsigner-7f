@@ -37,7 +37,7 @@
 """
 from seedsigner.chains.base import Address, ParsedRequest, ReviewField, Signature
 from seedsigner.models.sevenf import genesis_config, mldsa, root_ceremony
-from seedsigner.models.sevenf.constants import ChainKind, Layer, root_path
+from seedsigner.models.sevenf.constants import ChainKind, root_path
 
 
 def _chain_kind_from_path(path: str) -> ChainKind:
@@ -86,9 +86,7 @@ class SevenFPlugin:
             future "view Root address" screen has a working,
             already-correct entry point. """
         chain_kind = _chain_kind_from_path(path)
-        public_key, address = mldsa.derive_pubkey(
-            seed_bytes, path, int(chain_kind), int(Layer.L1),
-        )
+        public_key, address = mldsa.derive_pubkey(seed_bytes, path)
         return Address(path=path, address=address, network_name=chain_kind.name.lower())
 
 
