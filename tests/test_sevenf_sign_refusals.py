@@ -199,6 +199,10 @@ from seedsigner.views import seed_views
 from seedsigner.views.view import MainMenuView
 
 
+from sevenf_helpers import requires_mldsa7f  # noqa: E402
+
+
+@requires_mldsa7f   # the scan refuses on its own when the library is missing
 class TestLeavingARefusal(FlowTest):
     def setup_method(self):
         super().setup_method()
