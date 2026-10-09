@@ -40,6 +40,34 @@ from seedsigner.gui.keyboard import Keyboard
 from .screen import RET_CODE__BACK_BUTTON, BaseTopNavScreen, ButtonListScreen, ButtonOption, KeyboardScreen
 
 
+def break_long_words(text: str, width: int, font) -> str:
+    """ `text` with every word wider than `width` (as `font` measures it)
+        broken onto lines at characters. The screen wraps only between words,
+        so an unbroken run (a hex serial, an address, a long word in a
+        coordinator's message) otherwise runs off both edges (found on the dev
+        unit, 2026-10-08). Only line breaks are added: no character is added,
+        dropped or changed. """
+    lines = []
+    for line in text.split("\n"):
+        words = []
+        for word in line.split(" "):
+            if font.getlength(word) <= width:
+                words.append(word)
+                continue
+            chunks, current = [], ""
+            for ch in word:
+                if current and font.getlength(current + ch) > width:
+                    chunks.append(current)
+                    current = ch
+                else:
+                    current += ch
+            chunks.append(current)
+            words.append("\n".join(chunks))
+        lines.append(" ".join(words))
+    return "\n".join(lines)
+
+
+
 @dataclass
 class SevenFReviewFieldScreen(ButtonListScreen):
     """
@@ -70,11 +98,15 @@ class SevenFReviewFieldScreen(ButtonListScreen):
         icon_name = SeedSignerIconConstants.WARNING if self.is_warning else SeedSignerIconConstants.INFO
         icon_color = GUIConstants.DIRE_WARNING_COLOR if self.is_warning else GUIConstants.INFO_COLOR
 
+        # The value's text starts after the icon and its spacer.
+        value_width = (self.canvas_width - 2 * GUIConstants.EDGE_PADDING - GUIConstants.ICON_FONT_SIZE
+                       - GUIConstants.COMPONENT_PADDING)
+        value_font = Fonts.get_font(GUIConstants.get_body_font_name(), GUIConstants.get_body_font_size())
         value_display = IconTextLine(
             icon_name=icon_name,
             icon_color=icon_color,
             label_text=self.label_text,
-            value_text=self.value_text,
+            value_text=break_long_words(self.value_text or "", value_width, value_font),
             is_text_centered=True,
             auto_line_break=True,
             screen_y=self.top_nav.height + GUIConstants.COMPONENT_PADDING,

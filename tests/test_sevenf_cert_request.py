@@ -13,6 +13,7 @@ from seedsigner.chains.base import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf.constants import ML_DSA_PK_LEN, ChainKind
 from seedsigner.models.sevenf.path_lexicon import root_path
+from seedsigner.models.sevenf.review_format import group_hex_for_display
 from seedsigner.models.sevenf.cert_request import (
     DEPUTY_DAYS,
     ROOT_DAYS,
@@ -628,7 +629,7 @@ def test_deputy_cross_cert_v2_review_fields_includes_root_and_deputy_context():
     assert by_label["Chain"] == "testnet"
     assert by_label["Deputy: Valid for"] == f"{DEPUTY_DAYS} days"
     assert str(ROOT_CERT_NOT_BEFORE + DEPUTY_DAYS * 86_400) in by_label["Deputy: Valid until"]
-    assert by_label["Deputy: Serial"] == serial.hex()
+    assert by_label["Deputy: Serial"] == group_hex_for_display(serial.hex())   # grouped to fit the screen
     assert str(ROOT_CERT_NOT_BEFORE) in by_label["Issuing Root: Valid from"]
 
 
@@ -787,7 +788,7 @@ def test_root_self_cert_review_fields_includes_subject_chain_dates_and_serial():
     assert [f.label for f in fields] == ["Subject key id", "Chain", "Valid from", "Valid until", "Serial"]
     by_label = {f.label: f.value for f in fields}
     assert by_label["Chain"] == "testnet"
-    assert by_label["Serial"] == serial.hex()
+    assert by_label["Serial"] == group_hex_for_display(serial.hex())   # grouped to fit the screen
     assert str(not_before) in by_label["Valid from"]
     assert str(not_after) in by_label["Valid until"]
 

@@ -457,7 +457,7 @@ def deputy_cross_cert_v2_review_fields(
         ReviewField(label="Deputy: Valid from", value=_validity_date(now)),
         ReviewField(label="Deputy: Valid for", value=f"{days} days"),
         ReviewField(label="Deputy: Valid until", value=_validity_date(not_after)),
-        ReviewField(label="Deputy: Serial", value=serial.hex()),
+        ReviewField(label="Deputy: Serial", value=group_hex_for_display(serial.hex())),   # 32 hex do not fit one line
     ]
 
 
@@ -543,7 +543,7 @@ def root_self_cert_review_fields(subject_vk: bytes, chain_kind: ChainKind, not_b
         ReviewField(label="Chain", value=chain_kind.name.lower()),
         ReviewField(label="Valid from", value=_validity_date(not_before)),
         ReviewField(label="Valid until", value=_validity_date(not_after)),
-        ReviewField(label="Serial", value=serial.hex()),
+        ReviewField(label="Serial", value=group_hex_for_display(serial.hex())),   # 32 hex do not fit one line
     ]
 
 

@@ -87,3 +87,35 @@ def test_the_root_certificate_view_refuses_a_date_it_cannot_show(monkeypatch):
     destination = view.run()
     assert destination.View_cls is sevenf_views.SevenFUnsupportedArtefactView
     assert "calendar date" in destination.view_args["reason"]
+
+
+def test_the_serial_is_shown_in_groups_so_it_fits_the_screen():
+    """ Found on the dev unit (Jorge, 2026-10-08): the Root certificate's
+        32-hex serial ran off both sides of the 240px screen. Grouped in
+        fours, like the subject key id; the groups joined are the serial. """
+    serial = bytes.fromhex("4a3f9a3f9a3f9a3f9a3f9a3f9a3f9c1e")
+    fields = {f.label: f.value for f in cert_request.root_self_cert_review_fields(
+        b"\x01" * 1952, ChainKind.TESTNET, NOT_BEFORE, NOT_AFTER, serial)}
+    assert fields["Serial"] == "4a3f 9a3f 9a3f 9a3f 9a3f 9a3f 9a3f 9c1e"
+    assert fields["Serial"].replace(" ", "") == serial.hex()
+
+
+def test_a_word_wider_than_the_screen_is_broken_onto_lines():
+    """ Found on the dev unit (2026-10-08): an unbroken run (a 32-hex serial,
+        a 49-character address, a long word in a genesis message) ran off
+        both sides of the screen. A word wider than the line is broken at
+        characters; nothing is added or lost (a line break is not a
+        character), and words that fit are left alone. """
+    from base import FlowTest  # noqa: F401
+    from seedsigner.gui.screens.sevenf_screens import break_long_words
+
+    class TenPxFont:
+        def getlength(self, text):
+            return 10 * len(text)
+
+    text = "launch 7Fchain-testnet-genesis-2026\nshort line"
+    out = break_long_words(text, width=100, font=TenPxFont())
+    assert out.replace("\n", "") == text.replace("\n", "")
+    assert all(len(word) <= 10 for line in out.split("\n") for word in line.split(" "))
+    assert out.startswith("launch 7Fchain-te\nstnet-gene\nsis-2026")
+    assert break_long_words("fits here", width=100, font=TenPxFont()) == "fits here"
