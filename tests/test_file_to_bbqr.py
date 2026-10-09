@@ -12,6 +12,7 @@ import pytest
 
 from seedsigner.models.decode_qr import DecodeQR, DecodeQRStatus
 from seedsigner.models.encode_qr import BBQrEncoder
+from sevenf_helpers import requires_mldsa7f
 
 FIXTURES = Path(__file__).parent / "fixtures"
 spec = importlib.util.spec_from_file_location("file_to_bbqr", Path(__file__).parent.parent / "tools" / "file_to_bbqr.py")
@@ -48,6 +49,7 @@ def test_devfund_json_goes_as_json(tmp_path):
     parse_devfund_config_json(_round_trip(payload, file_type))
 
 
+@requires_mldsa7f
 def test_root_cert_pem_goes_as_der():
     from seedsigner.models.sevenf.cert_request import parse_root_certificate_der
     payload, file_type = tool.payload_for(FIXTURES / "sf_wallet_gov_root_cert_abandon_art_testnet.pem")
@@ -55,6 +57,7 @@ def test_root_cert_pem_goes_as_der():
     parse_root_certificate_der(_round_trip(payload, file_type))
 
 
+@requires_mldsa7f
 def test_deputy_csr_pem_goes_as_der():
     from seedsigner.models.sevenf.cert_request import verify_and_parse_csr_der
     payload, file_type = tool.payload_for(FIXTURES / "sf_wallet_gov_deputy_csr.pem")

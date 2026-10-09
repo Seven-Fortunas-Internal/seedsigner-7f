@@ -21,6 +21,7 @@ from seedsigner.models.sevenf.genesis_config import parse_genesis_config_json
 from test_file_to_bbqr import tool as file_to_bbqr
 from test_sevenf_devfund_config import REAL_DEVFUND_UNSIGNED_JSON
 from tools_helpers import REAL_GENESIS_JSON
+from sevenf_helpers import requires_mldsa7f
 
 TOOL_DIR = Path("tools/bbqr_web_scanner")
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -84,6 +85,7 @@ def test_devfund_config_matches_the_python_tool_and_the_device_parses_it(devfund
     assert fields["Recipient (receives the ENTIRE genesis reward)"].replace(" ", "") == parsed.recipient.payload
 
 
+@requires_mldsa7f
 def test_root_cert_goes_as_der_and_shows_its_ski():
     out = _encode(ROOT_CERT)
     assert out["kind"] == "root-cert" and out["fileType"] == "B"
@@ -93,6 +95,7 @@ def test_root_cert_goes_as_der_and_shows_its_ski():
     assert shown == review_format.ski(parsed.subject_vk.hex())
 
 
+@requires_mldsa7f
 def test_deputy_csr_goes_as_der_and_shows_the_deputy_ski():
     out = _encode(DEPUTY_CSR)
     assert out["kind"] == "deputy-csr" and out["fileType"] == "B"
