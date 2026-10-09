@@ -1,6 +1,6 @@
 # 7F Signer web page
 
-Operator-side page that moves ceremony files between a host and the device by animated BBQr QR codes, in both directions. It runs entirely in the browser and never ships on the device.
+Operator-side page that moves ceremony files between a host and the device by animated BBQr QR codes, in both directions, and between two computers running the page (CentCom and registrar files, while those sign with `sf-wallet-gov` on a laptop). It runs entirely in the browser and never ships on the device.
 
 - **Start** (`#start`, and the bare URL): the operator guide. When to use each tab and what to do there, which device menu goes with which file, how the root pin and subject key id are derived (with a command to recompute them), the key index, and how files travel as QR. The camera is off on this tab.
 - **From device** (`#from-device`): scans the device's exports, checks them, and saves the files.
@@ -22,7 +22,7 @@ Why a web page: no phone or wallet app handles multi-part BBQr with the 7F file 
 
 ## To device
 
-Accepts exactly what `tools/file_to_bbqr.py` accepts, and produces the same QR parts (`bbqr-encode.js`, tested part-for-part against it):
+With **Send to: A SeedSigner** (the default) it accepts exactly what `tools/file_to_bbqr.py` accepts, and produces the same QR parts (`bbqr-encode.js`, tested part-for-part against it):
 
 | File | Sent as | Device menu |
 |---|---|---|
@@ -31,7 +31,20 @@ Accepts exactly what `tools/file_to_bbqr.py` accepts, and produces the same QR p
 | `root-<ski>.pem` (a Root self-certificate) | DER, BBQr `B` | 7F: Cross-Certify Deputy, first scan |
 | Deputy CSR `.pem` | DER, BBQr `B` | 7F: Cross-Certify Deputy, second scan |
 
-Anything else is refused, including a Deputy certificate offered as a Root certificate. Before playing, the page shows the fields to expect on the device (the dev-fund recipient, the Root or Deputy ski). The device remains the authority: check every field and the canonical digest on its screen.
+Anything else is refused, including a Deputy certificate offered as a Root certificate.
+
+### To another computer
+
+**Send to: Another computer** sends a certificate or request `.pem` to this page on another computer, wrapped in the device's export envelope (`J`) under its 7fchain name, so **From device** there checks and saves it like a device export:
+
+| File | Kind | Checked against |
+|---|---|---|
+| `root-<ski>.pem`, `deputy-<issuer ski>.pem` | as the device exports them | as above |
+| `centcom-<Deputy ski>.pem` (`sign-centcom-cert`) | `centcom-cert` | subject `Seven Fortunas CentCom CA`; the name's ski is the issuer's (AuthorityKeyIdentifier) |
+| `x509-<purpose>-issuing-ca.pem` (`sign-issuer-cert`) | `issuing-ca-cert` | subject `Seven Fortunas <Purpose> Issuing CA <tag>`: the purpose in the name, the tag the key's |
+| `<role>-<ski>-csr.pem` (`create-csr`), `registrar-csr.pem` (`sf-registrar csr`) | `csr` | ends in `-csr.pem`; a ski in the name is the request's |
+
+A certificate goes under 7fchain's name even if the local copy was renamed (the page shows that). A config is for the SeedSigner only. The page verifies no signature: `sf-wallet-gov` and `sf-registrar` do when they use the file. Tests: `tests/test_bbqr_web_centcom.py`, on a real chain in `tests/fixtures/sf_wallet_gov_chain/`. Before playing, the page shows the fields to expect on the device (the dev-fund recipient, the Root or Deputy ski). The device remains the authority: check every field and the canonical digest on its screen.
 
 **Show QR to the device** opens a full-screen player (1.2 s per part by default; pause, step, slower, faster). It keeps the screen awake where the browser allows.
 

@@ -3,7 +3,7 @@
   CLI wrapper around bbqr-encode.js, for automated testing (see
   tests/test_bbqr_web_encoder.py).
 
-  Usage: node encode_cli.js <file> [--matrix]
+  Usage: node encode_cli.js <file> [--matrix] [--to device|computer]
   Prints JSON: {error} for a refused file, else {kind, label, fileType,
   payloadHex, parts, fields} and, with --matrix, each part's QR module rows.
 */
@@ -17,7 +17,10 @@ if (!file) {
   process.exit(2);
 }
 
-prepareFile(path.basename(file), new Uint8Array(fs.readFileSync(file))).then((r) => {
+const toAt = process.argv.indexOf("--to");
+const target = toAt > 0 ? process.argv[toAt + 1] : "device";
+
+prepareFile(path.basename(file), new Uint8Array(fs.readFileSync(file)), target).then((r) => {
   if (r.error) {
     process.stdout.write(JSON.stringify({ error: r.error }));
     return;
