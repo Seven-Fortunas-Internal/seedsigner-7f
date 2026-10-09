@@ -39,6 +39,18 @@ regexes = [
   # pinned KAT address again -- see test_sevenf_mldsa.py/
   # test_sevenf_root_ceremony.py's own doc comments.
   '''t136pq48mt9f3ym9dn3k3nh6f8dkpw6uje40rjx9djfnqg28v''',
+
+  # A dummy "-----BEGIN PRIVATE KEY-----" PEM whose body is the four
+  # characters AAAA (three zero bytes, no key at all), in tests that check
+  # the device and the web page REFUSE private-key text:
+  # tests/test_bbqr_web_encoder.py, tests/test_file_to_bbqr.py,
+  # tests/test_sevenf_export_envelope.py. Verified 2026-10-08.
+  '''BEGIN PRIVATE KEY-----\\nAAAA\\n-----END PRIVATE KEY''',
+
+  # The subject key id (SHA-256 of a PUBLIC key, first 20 bytes) of the
+  # "abandon x 23 art" testnet Root key, as sf-wallet-gov prints it, in
+  # tests/test_sevenf_root_ceremony.py. Public by design. Verified 2026-10-08.
+  '''591c511984a2d73c6bee1f4dc149d48f7f97fc55''',
 ]
 
 # Path-excluded, not regex-allowlisted: these are official NIST ACVP test
