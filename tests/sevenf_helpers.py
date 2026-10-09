@@ -22,9 +22,11 @@ def _mldsa7f_available() -> bool:
 
 # For a test that calls the Rust library: in this repo's own CI the library
 # (built in the parent repo, firmware/mldsa7f) is absent, so it is skipped.
+import os  # noqa: E402
+
 import pytest  # noqa: E402
 
 requires_mldsa7f = pytest.mark.skipif(
-    not _mldsa7f_available(),
+    os.environ.get("SEVENF_REQUIRE_MLDSA7F") != "1" and not _mldsa7f_available(),
     reason="firmware/mldsa7f not built -- run `cargo build --release` in firmware/mldsa7f/ first",
 )
