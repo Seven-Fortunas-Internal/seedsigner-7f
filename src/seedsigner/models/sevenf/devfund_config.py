@@ -23,7 +23,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import ErrCode, FfiCallFailed, MlDsa7fError, call_into_buffer, err_code_name, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display, strict_json_loads, visible_text
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, group_hex_for_display, refuse_duplicate_fields, strict_json_loads, visible_text
 
 # 7f-review-parse-failure-messages-not-actionable (2026-10-04): what each
 # code plausibly means for THIS artifact type, grounded directly in
@@ -218,7 +218,7 @@ def build_canonical_bytes(network: ChainKind, recipient: DevfundRecipient, effec
         raise DevFundConfigError(e.code, "build_canonical_bytes") from e
 
 
-def parse_canonical_bytes(data: bytes, max_payload_len: int = 4096) -> DevFundConfigFields:
+def parse_canonical_bytes(data: bytes, max_payload_len: int | None = None) -> DevFundConfigFields:
     """ Parse devfund-config canonical bytes into fields, for on-device
         review. Raises DevFundConfigError on any failure (including an
         unrecognized/corrupted payload or unknown recipient tag -- see
@@ -226,6 +226,10 @@ def parse_canonical_bytes(data: bytes, max_payload_len: int = 4096) -> DevFundCo
     lib = _lib()
     network_out = ctypes.c_uint8(0)
     recipient_tag_out = ctypes.c_uint8(0)
+    # The payload cannot be longer than the bytes that contain it (sf-core bounds
+    # it only by its u16 length prefix), so the buffer is sized from the input.
+    if max_payload_len is None:
+        max_payload_len = max(len(data), 1)
     payload_out = ctypes.create_string_buffer(max_payload_len)
     payload_written = ctypes.c_size_t(0)
     effective_block_out = ctypes.c_uint64(0)
@@ -287,11 +291,28 @@ def _clean_address(s: str) -> str:
     return trimmed[:idx].rstrip(_RUST_WHITESPACE) if idx >= 0 else trimmed
 
 
+# The fields of sf-core's DevFundConfig and of each DevfundRecipient variant
+# (#[serde(tag = "kind")]): serde refuses a repeat of any of them and ignores
+# repeats of other keys (tests/test_sevenf_device_limits.py).
+_DEVFUND_FIELDS = frozenset({"version", "network", "recipient", "effective_block", "timestamp", "signatures"})
+_RECIPIENT_FIELDS = {"multisig": frozenset({"kind", "commitment"}), "address": frozenset({"kind", "address"})}
+
+
+def _refuse_duplicates(obj, known: frozenset, where: str) -> None:
+    try:
+        refuse_duplicate_fields(obj, known, where)
+    except ValueError as e:
+        raise DevFundConfigJsonError(str(e)) from e
+
+
 def _parse_recipient(obj) -> DevfundRecipient:
     """ sf-core DevfundRecipient (#[serde(tag = "kind")]) plus its validate(). """
     if not isinstance(obj, dict):
         raise DevFundConfigJsonError(f"recipient must be an object, got {type(obj).__name__}")
+    _refuse_duplicates(obj, frozenset({"kind"}), "recipient")    # the tag, before the variant is known
     kind = obj.get("kind")
+    if kind in _RECIPIENT_FIELDS:
+        _refuse_duplicates(obj, _RECIPIENT_FIELDS[kind], "recipient")
     if kind == "multisig":
         commitment = obj.get("commitment")
         if not isinstance(commitment, str):
@@ -342,6 +363,7 @@ def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
         raise DevFundConfigJsonError(f"payload is not valid JSON: {e}") from e
     if not isinstance(obj, dict):
         raise DevFundConfigJsonError(f"expected a JSON object, got {type(obj).__name__}")
+    _refuse_duplicates(obj, _DEVFUND_FIELDS, "the devfund-config")
 
     if "devfund_address" in obj:
         raise DevFundConfigJsonError(
@@ -373,6 +395,7 @@ def parse_devfund_config_json(data: bytes) -> DevFundConfigFields:
     for i, entry in enumerate(signatures):
         if not isinstance(entry, dict) or not all(isinstance(entry.get(k), str) for k in ("signer_vk", "sig")):
             raise DevFundConfigJsonError(f"signatures[{i}] must be an object with string signer_vk and sig")
+        _refuse_duplicates(entry, frozenset({"signer_vk", "sig"}), f"signatures[{i}]")
 
     return DevFundConfigFields(
         network=network, recipient=recipient, effective_block=effective_block, timestamp=timestamp,

@@ -2,7 +2,7 @@
 
 Operator-side page that moves ceremony files between a host and the device by animated BBQr QR codes, in both directions. It runs entirely in the browser and never ships on the device.
 
-- **Start** (`#start`, and the bare URL): the operator guide. When to use each tab and what to do there, which device menu goes with which file, how the pin and subject key id are derived (with a command to recompute them), the key index, and how files travel as QR. The camera is off on this tab.
+- **Start** (`#start`, and the bare URL): the operator guide. When to use each tab and what to do there, which device menu goes with which file, how the root pin and subject key id are derived (with a command to recompute them), the key index, and how files travel as QR. The camera is off on this tab.
 - **From device** (`#from-device`): scans the device's exports, checks them, and saves the files.
 - **To device** (`#to-device`): checks a file the device must scan and plays it as a full-screen QR.
 
@@ -15,7 +15,8 @@ Why a web page: no phone or wallet app handles multi-part BBQr with the 7F file 
 3. Shows progress as a grid of parts.
 4. For a 7F export (a JSON envelope `{"sf7_export", "kind", "file", "body"}`):
    - Checks the file name against the content. A key's name must be `<ski>.vk`, a certificate's `root-<ski>.pem` or `deputy-<issuer ski>.pem`, a signature's `<ski>.genesis` or `<ski>.devfund`. A mismatch shows **NOT SAVED** and does not save.
-   - Shows the **subject key id** (ski), the **pin** (for keys), the role (root or dev-fund), and the folder the file belongs in. Root and dev-fund keys go to separate folders.
+   - Shows the **subject key id** (ski), the **root pin** (for a Root key only, as sf-wallet-gov prints it), the role, and the folder sf-wallet-gov uses (`~/7fchain/<network>/governance/root/outbox`, or `devfund/outbox` for a dev-fund key).
+   - A bare key QR (no role) is shown but never saved: as a `.vk` it could land in the wrong folder. The device exports keys tagged with their role.
    - **Save** writes the exact `body` under `file`. **Save summary** writes `<ski>.txt` as a record.
 5. Other payloads (not envelopes) are shown as text or hex, without saving.
 

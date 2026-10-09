@@ -398,9 +398,9 @@ class SevenFExportView(View):
 
 
 class SevenFExportPubkeyQRView(View):
-    """ Exports the Root CA public key as hex, BBQr-encoded -- the first of
-        the two export artifacts, for cross-checking against sf-wallet-side
-        output (per sf-root.rs's own root_vk_hex = hex::encode(pubkey)). """
+    """ Exports the signing Root key as a role-tagged `<ski>.vk` envelope (the
+        same export as 7F: Enroll Root), so the web page files it in the Root
+        folder: a bare key carries no role and could be saved as a dev-fund key. """
     def __init__(self, state: SevenFGenesisCeremonyState):
         super().__init__()
         self.state = state
@@ -409,11 +409,11 @@ class SevenFExportPubkeyQRView(View):
     def run(self):
         from seedsigner.gui.screens.screen import QRDisplayScreen
         from seedsigner.models.encode_qr import BBQrEncoder
-        pubkey_hex = self.state.public_key.hex().encode("utf-8")
+        from seedsigner.models.sevenf.export_envelope import vk_export
 
         self.run_screen(
             QRDisplayScreen,
-            qr_encoder=BBQrEncoder(data=pubkey_hex, file_type="U"),  # 'U': BBQr unicode/plain-text
+            qr_encoder=BBQrEncoder(data=vk_export("root", self.state.public_key), file_type="J"),
         )
         return Destination(SevenFExportView, view_args=dict(state=self.state), skip_current_view=True)
 

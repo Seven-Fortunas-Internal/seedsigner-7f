@@ -40,7 +40,7 @@ from seedsigner.models.review import ReviewField
 from seedsigner.models.sevenf import mldsa
 from seedsigner.models.sevenf._ffi import FfiCallFailed, MlDsa7fError, call_into_buffer, register_argtypes
 from seedsigner.models.sevenf.constants import ChainKind
-from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, ski, strict_json_loads, visible_text
+from seedsigner.models.sevenf.review_format import canonical_digest, format_timestamp as _format_timestamp, refuse_duplicate_fields, ski, strict_json_loads, visible_text
 
 # Must match firmware/mldsa7f/src/genesis_config.rs's DERIVATION_SCHEME_V1
 # exactly -- display-only here (parse_canonical_bytes already enforces the
@@ -162,7 +162,7 @@ def build_canonical_bytes(chain_kind: ChainKind, timestamp: int, message: str, c
         raise GenesisConfigError(e.code, "build_canonical_bytes") from e
 
 
-def parse_canonical_bytes(data: bytes, max_message_len: int = 4096) -> GenesisConfigFields:
+def parse_canonical_bytes(data: bytes, max_message_len: int | None = None) -> GenesisConfigFields:
     """ Parse genesis-config canonical bytes into fields, for on-device
         review. Raises GenesisConfigError on any failure (including an
         unrecognized/corrupted payload -- see
@@ -171,6 +171,10 @@ def parse_canonical_bytes(data: bytes, max_message_len: int = 4096) -> GenesisCo
     lib = _lib()
     chain_kind_out = ctypes.c_uint8(0)
     timestamp_out = ctypes.c_uint64(0)
+    # The message cannot be longer than the bytes that contain it (sf-core sets
+    # no other limit), so the buffer is sized from the input.
+    if max_message_len is None:
+        max_message_len = max(len(data), 1)
     message_out = ctypes.create_string_buffer(max_message_len)
     message_written = ctypes.c_size_t(0)
     t1 = ctypes.c_uint64(0)
@@ -203,6 +207,20 @@ def _require_u64(obj: dict, key: str, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not (0 <= value <= 0xFFFFFFFFFFFFFFFF):
         raise GenesisConfigJsonError(f"{where}.{key} must be a non-negative 64-bit integer, got {value!r}")
     return value
+
+
+# The fields of sf-core's GenesisConfig, ConsensusParams and RootSig: serde
+# refuses a repeat of any of them (it ignores repeats of other keys).
+_GENESIS_FIELDS = frozenset({"version", "chain_kind", "timestamp", "message", "derivation_scheme", "consensus", "signatures"})
+_CONSENSUS_FIELDS = frozenset({"target_block_time_secs", "difficulty_adjustment_interval_blocks", "blocks_per_decay_period"})
+ROOT_SIG_FIELDS = frozenset({"signer_vk", "sig"})
+
+
+def _refuse_duplicates(obj, known: frozenset, where: str) -> None:
+    try:
+        refuse_duplicate_fields(obj, known, where)
+    except ValueError as e:
+        raise GenesisConfigJsonError(str(e)) from e
 
 
 def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
@@ -251,6 +269,7 @@ def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
 
     if not isinstance(obj, dict):
         raise GenesisConfigJsonError(f"expected a JSON object, got {type(obj).__name__}")
+    _refuse_duplicates(obj, _GENESIS_FIELDS, "the genesis-config")
 
     version = obj.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
@@ -292,12 +311,11 @@ def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
         message_len = len(message.encode("utf-8"))
     except UnicodeEncodeError as e:
         raise GenesisConfigJsonError(f"message is not valid Unicode text: {e}") from e
-    if message_len > 4096:
-        raise GenesisConfigJsonError(f"message is {message_len} bytes; this device reviews at most 4096")
 
     consensus_obj = obj.get("consensus")
     if not isinstance(consensus_obj, dict):
         raise GenesisConfigJsonError(f"consensus must be an object, got {type(consensus_obj).__name__}")
+    _refuse_duplicates(consensus_obj, _CONSENSUS_FIELDS, "consensus")
     consensus = ConsensusParams(
         target_block_time_secs=_require_u64(consensus_obj, "target_block_time_secs", "consensus"),
         difficulty_adjustment_interval_blocks=_require_u64(
@@ -322,6 +340,7 @@ def parse_genesis_config_json(data: bytes) -> GenesisConfigFields:
     for i, entry in enumerate(signatures_obj):
         if not isinstance(entry, dict):
             raise GenesisConfigJsonError(f"signatures[{i}] must be an object, got {type(entry).__name__}")
+        _refuse_duplicates(entry, ROOT_SIG_FIELDS, f"signatures[{i}]")
         for key in ("signer_vk", "sig"):
             if not isinstance(entry.get(key), str):
                 raise GenesisConfigJsonError(f"signatures[{i}].{key} must be a string")

@@ -177,15 +177,17 @@ async function renderResult(bytes) {
       "genesis-sig": "Genesis signature (Root key)",
       "devfund-sig": "Dev-fund definition signature (Root key)",
     }[exportInfo.kind] || exportInfo.kind;
-    const pinLine = exportInfo.pin ? `\nPin: ${exportInfo.pin}` : "";
+    const pinLine = exportInfo.pin ? `\nRoot pin: ${exportInfo.pin}` : "";
     const keyNote = exportInfo.kind.endsWith("-sig") && !exportInfo.pin
       ? "\nKey not embedded: the coordinator pairs this with <subject key id>.vk." : "";
     const idLabel = exportInfo.kind.endsWith("-sig") ? "Signed by subject key id" : "Subject key id";
-    const folderLine = exportInfo.folder ? `\nBelongs in: ${exportInfo.folder} (not the other role's folder)` : "";
+    const folderLine = exportInfo.folder ? `\nBelongs in: ${exportInfo.folder}` : "";
     const issuerLine = exportInfo.issuer_ski ? `\nIssued by Root subject key id: ${exportInfo.issuer_ski}` : "";
     resultEl.textContent = `${label}\nFile: ${exportInfo.file}\n${idLabel}: ${exportInfo.ski}${folderLine}${issuerLine}${pinLine}${keyNote}\n\n${text}`;
   } else if (vkInfo) {
-    resultEl.textContent = `Subject key id: ${vkInfo.id}\nPin: ${vkInfo.pin}\nFile: ${vkInfo.id}.vk\n\n${text}`;
+    // A bare key carries no role, so it is shown but not saved: as a .vk it
+    // could land in the wrong role's folder. The device exports keys tagged.
+    resultEl.textContent = `Subject key id: ${vkInfo.id}\nNo role: not saved. Export it from the device's 7F: Enroll menu.\n\n${text}`;
   } else {
     resultEl.textContent = vkError ? `${vkError}\n\n${text}` : text;
   }
@@ -208,9 +210,8 @@ async function renderResult(bytes) {
     copyBtn.hidden = true;
     vkNoteEl.hidden = false;
     lastFileName = `${vkInfo.id}.vk`;
-    saveVkBtn.hidden = false;
-    saveVkBtn.textContent = `Save ${lastFileName}`;
-    saveSummaryBtn.hidden = false;
+    saveVkBtn.hidden = true;
+    saveSummaryBtn.hidden = true;
     copyAllBtn.hidden = false;
     copyAllBtn.textContent = "Copy all";
     copyVkBtn.hidden = false;

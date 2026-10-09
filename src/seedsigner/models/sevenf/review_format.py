@@ -102,16 +102,34 @@ def _refuse_constant(name: str):
     raise ValueError(f"non-standard JSON literal {name}")
 
 
-def _refuse_duplicate_keys(pairs: list) -> dict:
-    keys = [k for k, _ in pairs]
-    duplicates = sorted({k for k in keys if keys.count(k) > 1})
-    if duplicates:
-        raise ValueError(f"duplicate key(s) {duplicates}")
-    return dict(pairs)
+class JsonObject(dict):
+    """ A parsed JSON object that remembers which keys appeared more than once. """
+    duplicates: frozenset = frozenset()
+
+
+def _record_duplicate_keys(pairs: list) -> JsonObject:
+    seen, duplicates = set(), set()
+    for key, _ in pairs:
+        (duplicates if key in seen else seen).add(key)
+    obj = JsonObject(pairs)
+    obj.duplicates = frozenset(duplicates)
+    return obj
+
+
+def refuse_duplicate_fields(obj, known: frozenset, where: str) -> None:
+    """ serde_json's rule for 7fchain's types (no deny_unknown_fields): a
+        repeated KNOWN field is an error ("duplicate field `x`"), a repeated
+        unknown key is ignored. Checked against sf-core's own GenesisConfig and
+        DevFundConfig (tests/test_sevenf_device_limits.py). Raises ValueError. """
+    repeated = sorted(getattr(obj, "duplicates", frozenset()) & known)
+    if repeated:
+        raise ValueError(f"duplicate field `{repeated[0]}` in {where}")
 
 
 def strict_json_loads(text: str):
-    """ json.loads refusing what serde_json refuses: NaN/Infinity literals and
-        duplicate keys. Also raises ValueError for integers past Python's
-        digit limit. Callers catch (ValueError, RecursionError). """
-    return json.loads(text, parse_constant=_refuse_constant, object_pairs_hook=_refuse_duplicate_keys)
+    """ json.loads refusing what serde_json refuses for any type (NaN/Infinity
+        literals; integers past Python's digit limit), and recording repeated
+        keys per object for refuse_duplicate_fields(), since whether a repeat
+        is an error depends on the type reading that object. Callers catch
+        (ValueError, RecursionError). """
+    return json.loads(text, parse_constant=_refuse_constant, object_pairs_hook=_record_duplicate_keys)

@@ -83,8 +83,11 @@ def test_genesis_parser_refuses_hostile_json_cleanly(raw):
         parse_genesis_config_json(raw)
 
 
-@pytest.mark.parametrize("message", ["\ud800", "x" * 4097])
-def test_genesis_parser_refuses_unencodable_or_oversized_messages(message):
+# A lone surrogate is not valid UTF-8, so sf-core cannot carry it either. A
+# long message is NOT refused: sf-core sets no limit (story
+# port-device-limits; tests/test_sevenf_device_limits.py).
+@pytest.mark.parametrize("message", ["\ud800"])
+def test_genesis_parser_refuses_unencodable_messages(message):
     import json
     from seedsigner.models.sevenf.genesis_config import GenesisConfigJsonError, parse_genesis_config_json
     from tools_helpers import REAL_GENESIS_JSON

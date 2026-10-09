@@ -307,7 +307,7 @@ class TestSevenFGenesisReviewFlow(FlowTest):
 
     def test_export_pubkey_qr_view_encodes_the_real_root_ca_pubkey(self):
         """ Confirms the exported QR actually carries this ceremony's real
-            Root CA public key (BBQr-encoded, file_type 'U'), round-tripped
+            Root CA public key (a role-tagged root-vk envelope, BBQr 'J'), round-tripped
             through the real BBQr encoder/decoder pair -- not a placeholder
             and not merely "some bytes got passed to some encoder". """
         seed = self.seed_fixture()
@@ -329,14 +329,17 @@ class TestSevenFGenesisReviewFlow(FlowTest):
             destination = view.run()
 
         encoder = captured["qr_encoder"]
-        assert encoder.file_type == "U"
+        # Story port-web-page-pin-folders (D-F3): tagged with its role like the
+        # Enroll export, never a bare key the page could save to either folder.
+        assert encoder.file_type == "J"
 
         d = DecodeQR()
         while True:
             status = d.add_data(encoder.next_part())
             if status == DecodeQRStatus.COMPLETE:
                 break
-        assert d.decoder.get_data() == keys.root_ca.public_key.hex().encode("utf-8")
+        from seedsigner.models.sevenf.export_envelope import vk_export
+        assert d.decoder.get_data() == vk_export("root", keys.root_ca.public_key)
 
         assert destination.View_cls == sevenf_views.SevenFExportView
 

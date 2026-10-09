@@ -162,13 +162,15 @@ def test_vk_bundle_carries_ski_pin_and_vk_with_sf_wallet_gov_labels():
     vk = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0).root_ca.public_key
     import hashlib
     digest = hashlib.sha256(vk).hexdigest()
-    out = _node(f"require('./bbqr-decode.js').vkBundle('{vk.hex().upper()}').then(r => process.stdout.write(r));")
+    out = _node(f"require('./bbqr-decode.js').vkBundle('{vk.hex().upper()}', 'root').then(r => process.stdout.write(r));")
     assert out == (
         f"subject key id: {digest[:40]}\n"
-        f"pin: {digest}\n"
+        f"root pin: {digest}\n"           # sf-wallet-gov prints the root pin for a Root key only
         f"file: {digest[:40]}.vk\n"
         f"vk: {vk.hex()}\n"
     )
+    no_role = _node(f"require('./bbqr-decode.js').vkBundle('{vk.hex()}').then(r => process.stdout.write(r));")
+    assert "pin" not in no_role
 
 
 def test_vk_bundle_rejects_non_hex():
@@ -220,14 +222,14 @@ def test_summary_file_is_the_bundle_with_a_phone_check_reminder():
     import hashlib
     vk = root_ceremony.derive_root_ceremony_keys(sevenf_seed_from_bytes(b"\x2a" * 64), ChainKind.TESTNET, index=0).root_ca.public_key
     digest = hashlib.sha256(vk).hexdigest()
-    out = _node(f"require('./bbqr-decode.js').vkSummary('{vk.hex()}').then(r => process.stdout.write(JSON.stringify(r)));")
+    out = _node(f"require('./bbqr-decode.js').vkSummary('{vk.hex()}', 'root').then(r => process.stdout.write(JSON.stringify(r)));")
     import json
     summary = json.loads(out)
     assert summary["name"] == f"{digest[:40]}.txt"
     text = summary["text"]
     assert text.startswith("# ")
     assert "phone" in text.splitlines()[0]
-    assert f"subject key id: {digest[:40]}\npin: {digest}\nfile: {digest[:40]}.vk\nvk: {vk.hex()}\n" in text
+    assert f"subject key id: {digest[:40]}\nroot pin: {digest}\nfile: {digest[:40]}.vk\nvk: {vk.hex()}\n" in text
 
 
 def test_scanner_page_offers_save_summary():
@@ -436,7 +438,7 @@ def test_inspect_export_refuses_a_deputy_cert_named_for_another_root():
     assert r["error"] and "does not match" in r["error"]
 
 
-@pytest.mark.parametrize("role, folder", [("root", "governance/root/outbox"), ("devfund", "governance/devfund/outbox")])
+@pytest.mark.parametrize("role, folder", [("root", "~/7fchain/<network>/governance/root/outbox"), ("devfund", "~/7fchain/<network>/governance/devfund/outbox")])
 def test_inspect_export_accepts_role_tagged_vks_and_names_the_folder(role, folder):
     import hashlib, json
     from seedsigner.models.sevenf.export_envelope import vk_export
@@ -445,7 +447,9 @@ def test_inspect_export_accepts_role_tagged_vks_and_names_the_folder(role, folde
     assert r["error"] is None
     assert r["kind"] == f"{role}-vk"
     assert r["ski"] == hashlib.sha256(vk).hexdigest()[:40]
-    assert r["pin"] == hashlib.sha256(vk).hexdigest()
+    # sf-wallet-gov prints the "root pin" for a Root key only (sign_ops.rs:567);
+    # derive-vk prints none for a dev-fund key (main.rs).
+    assert r["pin"] == (hashlib.sha256(vk).hexdigest() if role == "root" else None)
     assert r["folder"] == folder
 
 
@@ -507,3 +511,46 @@ def test_scanner_page_locks_after_a_complete_scan():
     from pathlib import Path
     html = _page_source()
     assert "press Reset" in html and "session.isComplete" in html
+
+
+
+# --- story port-web-page-pin-folders (D-F1..F3, plan-stage L-4) -------------------
+
+def test_a_root_summary_carries_the_root_pin_and_a_devfund_summary_none():
+    import hashlib, json
+    vk = b"\x0b" * 1952
+    digest = hashlib.sha256(vk).hexdigest()
+    root = json.loads(_node(f"require('./bbqr-decode.js').vkSummary('{vk.hex()}', 'root').then(r => process.stdout.write(JSON.stringify(r)));"))["text"]
+    dev = json.loads(_node(f"require('./bbqr-decode.js').vkSummary('{vk.hex()}', 'devfund').then(r => process.stdout.write(JSON.stringify(r)));"))["text"]
+    assert f"root pin: {digest}" in root
+    assert "pin" not in dev.split("\n", 1)[1]
+
+
+@pytest.mark.parametrize("kind", ["genesis", "devfund"])
+def test_signatures_name_the_root_outbox_and_carry_no_pin(kind):
+    r = _inspect(_sig_envelope(kind))
+    assert r["error"] is None
+    assert r["folder"] == "~/7fchain/<network>/governance/root/outbox"
+    assert r["pin"] is None
+
+
+def test_a_root_certificate_has_the_root_pin_and_the_root_outbox():
+    r = _inspect(_root_cert_envelope())
+    assert r["error"] is None and r["pin"] and r["folder"] == "~/7fchain/<network>/governance/root/outbox"
+
+
+def test_a_deputy_certificate_names_the_root_outbox_and_carries_no_pin():
+    """ sign-deputy-cert writes deputy-<issuer ski>.pem into the Root's own
+        governance/root/outbox (sign_ops.rs:667). """
+    r = _inspect(_deputy_envelope())
+    assert r["error"] is None and r["pin"] is None and r["folder"] == "~/7fchain/<network>/governance/root/outbox"
+
+
+def test_the_page_labels_it_root_pin_and_never_saves_a_bare_key():
+    """ D-F2/D-F3: a bare key QR carries no role, so the page never saves it
+        as a .vk (a Root key could land in the dev-fund folder). """
+    src = (Path(TOOL_DIR) / "app-scan.js").read_text()
+    assert "Root pin: " in src and "`\\nPin: " not in src
+    vk_branch = src.split("} else if (vkInfo) {", 1)[1].split("} else {", 1)[0]
+    assert "Save" not in vk_branch or "not saved" in vk_branch.lower()
+    assert "saveVkBtn.hidden = false" not in src
