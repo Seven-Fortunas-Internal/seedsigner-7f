@@ -2,6 +2,8 @@
 
 ![7F SeedSigner logo](docs/img/seedsigner_7f_logo.svg)
 
+> **7F build.** This fork adds ML-DSA signing for the 7F chain ceremony. Images are on this repo's [Releases](https://github.com/Seven-Fortunas-Internal/seedsigner-7f/releases); check the sha256 in the release notes before flashing. The operator guide is [`docs/7f-integration/ceremony-on-seedsigner.md`](https://github.com/Seven-Fortunas-Internal/diy-seedsigner/blob/main/docs/7f-integration/ceremony-on-seedsigner.md) in `diy-seedsigner`. The SeedSigner downloads below are upstream's and have no 7F support.
+
 ---------------
 
 * [Project Summary](#project-summary)

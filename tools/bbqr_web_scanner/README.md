@@ -1,6 +1,6 @@
 # 7F Signer web page
 
-Operator-side page that moves ceremony files between a host and the device by animated BBQr QR codes, in both directions, and between two computers running the page (CentCom and registrar files, while those sign with `sf-wallet-gov` on a laptop). It runs entirely in the browser and never ships on the device.
+Operator-side page that moves ceremony files between a host and the device by animated BBQr QR codes, in both directions, and between two computers running the page (CentCom and registrar files, while those sign with `sf-wallet-gov` on a laptop). It runs entirely in the browser and never ships on the device. Live at https://seven-fortunas.github.io/7f-signer/.
 
 - **Start** (`#start`, and the bare URL): the operator guide. When to use each tab and what to do there, which device menu goes with which file, how the root pin and subject key id are derived (with a command to recompute them), the key index, and how files travel as QR. The camera is off on this tab.
 - **From device** (`#from-device`): scans the device's exports, checks them, and saves the files.
