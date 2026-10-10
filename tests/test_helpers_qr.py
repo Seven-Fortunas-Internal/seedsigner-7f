@@ -70,19 +70,82 @@ def test_qrimage_io_round_trips_various_shell_metacharacters():
 def test_qrimage_io_falls_back_to_pure_python_when_qrencode_binary_is_missing(monkeypatch):
     """ Regression test for a gap the fix itself could have introduced:
         removing shell=True means a missing `qrencode` binary now raises
-        FileNotFoundError from subprocess.call() instead of the shell
+        FileNotFoundError from subprocess.run() instead of the shell
         reporting a non-zero exit code -- confirms that's still caught and
         still falls back to the pure-Python qrimage() renderer, matching
         the pre-fix fallback behavior for this case. """
     import subprocess as subprocess_module
 
-    def fake_call(cmd):
+    def fake_run(cmd, *args, **kwargs):
         raise FileNotFoundError("qrencode: no such file or directory")
 
     qr = QR()
     with pytest.MonkeyPatch().context() as mp:
-        mp.setattr(subprocess_module, "call", fake_call)
+        mp.setattr(subprocess_module, "run", fake_run)
         image = qr.qrimage_io("some data", width=100, height=100)
 
     # The pure-Python fallback (qrimage()) must still produce a real, decodable image.
     assert _decode(image) == b"some data"
+
+
+def _record_qrencode_argv(monkeypatch):
+    """ Wraps subprocess.run so a test can see the qrencode argv while the
+        real binary still runs. """
+    import subprocess as subprocess_module
+    seen = []
+    real = subprocess_module.run
+
+    def wrapper(cmd, *args, **kwargs):
+        seen.append(list(cmd))
+        return real(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess_module, "run", wrapper)
+    return seen
+
+
+def test_qrimage_io_writes_no_file(monkeypatch):
+    """ The PNG comes back on stdout (-o -). A fixed /tmp/qrcode.png made
+        concurrent renders collide (flaky tests) and left the last QR,
+        possibly a SeedQR, on disk. """
+    seen = _record_qrencode_argv(monkeypatch)
+    image = QR().qrimage_io("no file please", width=200, height=200)
+    assert _decode(image) == b"no file please"
+    assert seen, "qrencode was not called"
+    argv = seen[0]
+    assert argv[argv.index("-o") + 1] == "-"
+
+
+def test_qrimage_io_concurrent_renders_do_not_collide():
+    """ Many renders at once each decode to their own data. """
+    from concurrent.futures import ThreadPoolExecutor
+    data = [f"render-{i}-" + "x" * i for i in range(24)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        images = list(pool.map(lambda d: QR().qrimage_io(d, width=240, height=240), data))
+    assert [_decode(img) for img in images] == [d.encode() for d in data]
+
+
+def test_qrimage_io_falls_back_when_qrencode_output_is_not_an_image(monkeypatch):
+    """ A qrencode that exits 0 but prints no PNG must not crash the
+        screen: the pure-Python renderer takes over. """
+    import subprocess as subprocess_module
+
+    def fake_run(cmd, *args, **kwargs):
+        return subprocess_module.CompletedProcess(cmd, 0, stdout=b"not a png", stderr=b"")
+
+    monkeypatch.setattr(subprocess_module, "run", fake_run)
+    image = QR().qrimage_io("fallback data", width=200, height=200)
+    assert _decode(image) == b"fallback data"
+
+
+def test_qrimage_io_falls_back_when_qrencode_hangs(monkeypatch):
+    """ A qrencode that never returns times out into the pure-Python
+        renderer instead of freezing the screen. """
+    import subprocess as subprocess_module
+
+    def fake_run(cmd, *args, **kwargs):
+        assert kwargs.get("timeout"), "qrencode must run with a timeout"
+        raise subprocess_module.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess_module, "run", fake_run)
+    image = QR().qrimage_io("hung qrencode", width=200, height=200)
+    assert _decode(image) == b"hung qrencode"

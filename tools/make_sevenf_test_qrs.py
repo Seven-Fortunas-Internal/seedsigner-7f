@@ -46,6 +46,7 @@ from seedsigner.models.settings_definition import SettingsConstants  # noqa: E40
 from seedsigner.models.sevenf.constants import ChainKind  # noqa: E402
 from seedsigner.models.sevenf import cert_request, root_ceremony  # noqa: E402
 from seedsigner.models.sevenf import genesis_config, devfund_config  # noqa: E402
+from seedsigner.models.sevenf import review_format  # noqa: E402
 
 ROOT_TEST_MNEMONIC = ["abandon"] * 23 + ["art"]
 DEPUTY_TEST_PASSPHRASE = "sevenf-deputy-test"
@@ -205,6 +206,31 @@ def write_slideshow(name: str, image_paths: list[Path], out_dir: Path, interval_
     return slideshow_path
 
 
+def build_manifest(root_keys=None, deputy_keys=None) -> dict:
+    """ The test keys as the device shows them: subject key id (ski), and
+        the root pin for the Root key. The devfund-config is signed with the
+        ROOT key (sf-wallet-gov sign-devfund), so its confirm screen shows
+        root_ca_ski; Enroll Dev-fund shows devfund_ski, which must differ. """
+    if root_keys is None:
+        root_keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(root_seed()), CHAIN_KIND, index=0)
+    if deputy_keys is None:
+        deputy_keys = root_ceremony.derive_root_ceremony_keys(root_ceremony.seed_for_7f(deputy_seed()), CHAIN_KIND, index=0)
+    devfund_key = root_ceremony.derive_devfund_key(root_ceremony.seed_for_7f(root_seed()), CHAIN_KIND, index=0)
+    root_hex = root_keys.root_ca.public_key.hex()
+    return {
+        "chain_kind": CHAIN_KIND.name.lower(),
+        "root_test_mnemonic": " ".join(ROOT_TEST_MNEMONIC),
+        "deputy_test_mnemonic": " ".join(ROOT_TEST_MNEMONIC) + f" (passphrase: {DEPUTY_TEST_PASSPHRASE})",
+        "root_ca_ski": review_format.ski(root_hex),
+        "root_ca_pin": review_format.pin(root_hex),
+        "devfund_ski": review_format.ski(devfund_key.public_key.hex()),
+        "deputy_ski": review_format.ski(deputy_keys.root_ca.public_key.hex()),
+        "root_ca_public_key_hex": root_hex,
+        "deputy_public_key_hex": deputy_keys.root_ca.public_key.hex(),
+        "artifacts": {},
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", default=str(Path(__file__).resolve().parent / "test_artifacts"))
@@ -221,7 +247,7 @@ def main():
         # the device now derives its own key and builds its own TBS with no
         # external input at all. See docs/7f-integration/
         # root-self-cert-pkcs10-rework-plan.md. Nothing replaces it here; the
-        # manifest's root_ca_address/root_ca_public_key_hex below are already
+        # manifest's root_ca_ski/root_ca_pin below are already
         # what an operator needs to cross-check against the device's own
         # review screen.
         #
@@ -239,17 +265,7 @@ def main():
         "devfund_config": build_devfund_config(),
     }
 
-    manifest = {
-        "chain_kind": CHAIN_KIND.name.lower(),
-        "root_test_mnemonic": " ".join(ROOT_TEST_MNEMONIC),
-        "deputy_test_mnemonic": " ".join(ROOT_TEST_MNEMONIC) + f" (passphrase: {DEPUTY_TEST_PASSPHRASE})",
-        "root_ca_address": root_keys.root_ca.address,
-        "root_ca_public_key_hex": root_keys.root_ca.public_key.hex(),
-        # The devfund-config is signed with the ROOT key (sf-wallet-gov
-        # sign-devfund), so its confirm screen shows root_ca_address above.
-        "deputy_public_key_hex": deputy_keys.root_ca.public_key.hex(),
-        "artifacts": {},
-    }
+    manifest = build_manifest(root_keys, deputy_keys)
 
     for name, payload in artifacts.items():
         image_paths = render_bbqr(name, payload, out_dir)

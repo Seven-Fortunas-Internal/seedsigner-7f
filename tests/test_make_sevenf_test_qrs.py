@@ -11,6 +11,7 @@
 """
 import importlib.util
 import os
+import sys
 
 import pytest
 
@@ -139,3 +140,38 @@ def test_root_and_deputy_test_seeds_are_actually_different():
     root_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.root_seed()), tool.CHAIN_KIND, index=0)
     deputy_keys = tool.root_ceremony.derive_root_ceremony_keys(seed_for_7f(tool.deputy_seed()), tool.CHAIN_KIND, index=0)
     assert root_keys.root_ca.public_key != deputy_keys.root_ca.public_key
+
+
+def test_manifest_names_keys_by_ski_and_pin_as_the_device_shows_them():
+    """ The walkthrough compares the subject key id and root pin on the
+        screen, so the manifest carries them, computed independently here
+        (SHA-256 of the raw key: first 20 bytes, and all 32). """
+    import hashlib
+    from seedsigner.models.sevenf.root_ceremony import derive_root_ceremony_keys, derive_devfund_key
+
+    root = derive_root_ceremony_keys(seed_for_7f(tool.root_seed()), tool.CHAIN_KIND, index=0).root_ca.public_key
+    deputy = derive_root_ceremony_keys(seed_for_7f(tool.deputy_seed()), tool.CHAIN_KIND, index=0).root_ca.public_key
+    devfund = derive_devfund_key(seed_for_7f(tool.root_seed()), tool.CHAIN_KIND, index=0).public_key
+
+    manifest = tool.build_manifest()
+
+    assert manifest["root_ca_ski"] == hashlib.sha256(root).digest()[:20].hex()
+    assert manifest["root_ca_pin"] == hashlib.sha256(root).hexdigest()
+    assert manifest["devfund_ski"] == hashlib.sha256(devfund).digest()[:20].hex()
+    assert manifest["deputy_ski"] == hashlib.sha256(deputy).digest()[:20].hex()
+    assert manifest["devfund_ski"] != manifest["root_ca_ski"]
+    assert manifest["deputy_ski"] != manifest["root_ca_ski"]
+    assert manifest["root_ca_public_key_hex"] == root.hex()
+
+
+def test_tool_runs_end_to_end_and_writes_the_manifest(tmp_path, monkeypatch):
+    """ main() itself, not just its builders: it once crashed on a removed
+        key attribute before writing anything. """
+    import json
+    monkeypatch.setattr(sys, "argv", ["make_sevenf_test_qrs.py", "--out-dir", str(tmp_path)])
+    tool.main()
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["root_ca_ski"] == tool.build_manifest()["root_ca_ski"]
+    assert set(manifest["artifacts"]) == {"root_cert", "deputy_csr", "genesis_config", "devfund_config"}
+    for entry in manifest["artifacts"].values():
+        assert (tmp_path / entry["slideshow"]).is_file()

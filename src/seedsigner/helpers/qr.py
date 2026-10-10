@@ -1,8 +1,14 @@
+import io
+
 import qrcode
 from qrcode.image.styledpil import StyledPilImage
 from qrcode.image.styles.moduledrawers import CircleModuleDrawer, GappedSquareModuleDrawer
 from PIL import Image, ImageDraw
 import subprocess
+
+# A hung qrencode must not freeze the screen; the pure-Python renderer takes over.
+QRENCODE_TIMEOUT_S = 10
+
 
 class QR:
     STYLE__DEFAULT = 1
@@ -118,20 +124,26 @@ class QR:
             "--foreground=000000",
             f"--background={background_color}",
             "-t", "PNG",
-            "-o", "/tmp/qrcode.png",
+            # PNG on stdout: a fixed /tmp file made concurrent renders collide
+            # and left the last QR (possibly a SeedQR) on disk.
+            "-o", "-",
             str(data),
         ]
         try:
-            rv = subprocess.call(cmd)
-        except FileNotFoundError:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=QRENCODE_TIMEOUT_S)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             # Without shell=True, a missing `qrencode` binary raises here instead
             # of the shell reporting a non-zero exit code -- preserve the
             # original fall-back-to-pure-Python behavior for that case too.
-            rv = 1
+            return self.qrimage(data,width,height,border)
 
         # if qrencode fails, fall back to only encoder
-        if rv != 0:
+        if result.returncode != 0:
             return self.qrimage(data,width,height,border)
-        img = Image.open("/tmp/qrcode.png").resize((width,height), Image.Resampling.NEAREST).convert("RGBA")
+        try:
+            img = Image.open(io.BytesIO(result.stdout))
+            img.load()
+        except (OSError, SyntaxError):
+            return self.qrimage(data,width,height,border)
 
-        return img
+        return img.resize((width,height), Image.Resampling.NEAREST).convert("RGBA")
